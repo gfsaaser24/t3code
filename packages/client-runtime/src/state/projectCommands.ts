@@ -92,6 +92,33 @@ export function createProjectEnvironmentAtoms<R, E>(
       scheduler: projectScheduler,
       concurrency: projectConcurrency,
     }),
+    deleteFile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:delete-file",
+      tag: WS_METHODS.projectsDeleteFile,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.cwd]),
+      },
+    }),
+    duplicateFile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:duplicate-file",
+      tag: WS_METHODS.projectsDuplicateFile,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.cwd]),
+      },
+    }),
+    renameFile: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:rename-file",
+      tag: WS_METHODS.projectsRenameFile,
+      scheduler: fileScheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.cwd]),
+      },
+    }),
     writeFile: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:projects:write-file",
       tag: WS_METHODS.projectsWriteFile,

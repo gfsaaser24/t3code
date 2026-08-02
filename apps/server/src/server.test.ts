@@ -4936,6 +4936,86 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("routes websocket rpc workspace file mutations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-ws-project-mutations-",
+      });
+      yield* fs.writeFileString(path.join(workspaceDir, "draft.txt"), "draft");
+
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const responses = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const renamed = yield* client[WS_METHODS.projectsRenameFile]({
+              cwd: workspaceDir,
+              relativePath: "draft.txt",
+              destinationRelativePath: "final.txt",
+            });
+            const duplicated = yield* client[WS_METHODS.projectsDuplicateFile]({
+              cwd: workspaceDir,
+              relativePath: renamed.relativePath,
+            });
+            const deleted = yield* client[WS_METHODS.projectsDeleteFile]({
+              cwd: workspaceDir,
+              relativePath: renamed.relativePath,
+            });
+            return { renamed, duplicated, deleted };
+          }),
+        ),
+      );
+
+      assert.deepEqual(responses, {
+        renamed: { relativePath: "final.txt" },
+        duplicated: { relativePath: "final copy.txt" },
+        deleted: { relativePath: "final.txt" },
+      });
+      assert.equal(yield* fs.readFileString(path.join(workspaceDir, "final copy.txt")), "draft");
+      assert.isFalse(yield* fs.exists(path.join(workspaceDir, "final.txt")));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes structured websocket rpc rename collisions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-ws-project-rename-collision-",
+      });
+      yield* fs.writeFileString(path.join(workspaceDir, "source.txt"), "source");
+      yield* fs.writeFileString(path.join(workspaceDir, "destination.txt"), "destination");
+
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsRenameFile]({
+            cwd: workspaceDir,
+            relativePath: "source.txt",
+            destinationRelativePath: "destination.txt",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      if (result._tag !== "Failure" || result.failure._tag !== "ProjectRenameFileError") {
+        assert.fail("Expected a ProjectRenameFileError");
+      }
+      assert.equal(result.failure.failure, "destination_exists");
+      assert.equal(result.failure.relativePath, "source.txt");
+      assert.equal(result.failure.destinationRelativePath, "destination.txt");
+      assert.equal(yield* fs.readFileString(path.join(workspaceDir, "source.txt")), "source");
+      assert.equal(
+        yield* fs.readFileString(path.join(workspaceDir, "destination.txt")),
+        "destination",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("creates a missing workspace root during websocket project.create dispatch", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

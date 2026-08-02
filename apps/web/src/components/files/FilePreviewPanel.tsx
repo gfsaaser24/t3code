@@ -33,6 +33,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { buildFileReviewComment } from "~/reviewCommentContext";
+import { useRightPanelStore } from "~/rightPanelStore";
 import { assetEnvironment } from "~/state/assets";
 import { useEnvironmentHttpBaseUrl, usePrimaryEnvironmentId } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
@@ -75,8 +76,11 @@ interface FilePreviewPanelProps {
   availableEditors: ReadonlyArray<EditorId>;
   revealLine: number | null;
   revealRequestId: number;
+  explorerRevealPath: string | null;
+  explorerRevealRequestId: number;
   onOpenFile: (relativePath: string) => void;
   onPendingChange: (relativePath: string, pending: boolean) => void;
+  isFileMutationPending: (relativePath: string) => boolean;
 }
 
 const FILE_EXPLORER_STORAGE_KEY = "t3code.fileExplorerOpen";
@@ -755,8 +759,11 @@ export default function FilePreviewPanel({
   availableEditors,
   revealLine,
   revealRequestId,
+  explorerRevealPath,
+  explorerRevealRequestId,
   onOpenFile,
   onPendingChange,
+  isFileMutationPending,
 }: FilePreviewPanelProps) {
   const { resolvedTheme } = useTheme();
   const wordWrap = useClientSettings((settings) => settings.wordWrap);
@@ -800,6 +807,19 @@ export default function FilePreviewPanel({
     [projectName, relativePath],
   );
   const onFilePostRender = useFileLineReveal(relativePath, revealLine, revealRequestId);
+  const revealBreadcrumbInFiles = useCallback(
+    (path: string) => useRightPanelStore.getState().revealInFiles(threadRef, path),
+    [threadRef],
+  );
+  const reconcileRenamedFile = useCallback(
+    (oldRelativePath: string, newRelativePath: string) =>
+      useRightPanelStore.getState().renameFileSurface(threadRef, oldRelativePath, newRelativePath),
+    [threadRef],
+  );
+  const reconcileDeletedFile = useCallback(
+    (path: string) => useRightPanelStore.getState().closeFileSurface(threadRef, path),
+    [threadRef],
+  );
 
   useEffect(() => {
     const currentCrumb = breadcrumbRef.current?.querySelector<HTMLElement>(
@@ -865,17 +885,24 @@ export default function FilePreviewPanel({
                   {index > 0 ? (
                     <ChevronRight className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
                   ) : null}
-                  <span
-                    className={cn(
-                      "max-w-40 truncate",
-                      crumb.kind === "file"
-                        ? "font-medium text-foreground"
-                        : "text-muted-foreground",
-                    )}
-                    title={crumb.path || projectName}
-                  >
-                    {crumb.label}
-                  </span>
+                  {crumb.kind === "file" ? (
+                    <span
+                      className="max-w-40 truncate font-medium text-foreground"
+                      title={crumb.path}
+                    >
+                      {crumb.label}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="max-w-40 truncate rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      title={crumb.path || projectName}
+                      aria-label={`Show ${crumb.label} in file explorer`}
+                      onClick={() => revealBreadcrumbInFiles(crumb.path)}
+                    >
+                      {crumb.label}
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -1055,7 +1082,12 @@ export default function FilePreviewPanel({
               projectName={projectName}
               selectedPath={relativePath}
               selectedPathRevealId={revealRequestId}
+              requestedRevealPath={explorerRevealPath}
+              requestedRevealId={explorerRevealRequestId}
               onOpenFile={onOpenFile}
+              onFileRenamed={reconcileRenamedFile}
+              onFileDeleted={reconcileDeletedFile}
+              isFileMutationPending={isFileMutationPending}
             />
           </aside>
         ) : null}
