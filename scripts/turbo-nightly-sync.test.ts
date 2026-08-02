@@ -224,8 +224,11 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.notMatch(buildWindows, /AZURE_|CLERK_|T3CODE_RELAY_URL|--signed|turbo-release/gu);
   assert.include(publish, "permissions:\n      contents: write");
   assert.include(workflow, "rebase --committer-date-is-author-date");
-  assert.include(workflow, "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage");
+  assert.include(workflow, "TURBO_OPENCLAW_ENABLED");
+  assert.include(workflow, 'channel: "telegram"');
+  assert.include(workflow, "deliver: true");
   assert.notMatch(workflow, /uses: .*telegram/giu);
+  assert.notInclude(workflow, "vp run dist:desktop:artifact --");
 });
 
 it("reports only exact paths changed by upstream and Turbo", () => {
