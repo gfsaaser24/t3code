@@ -34,15 +34,16 @@ jobs:
       candidate_sha: ${{ steps.rebase.outputs.candidate_sha }}
     steps:
       - name: Checkout Turbo source branch
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ env.TURBO_BRANCH }}
-          fetch-depth: 0
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -194,15 +195,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ env.TURBO_BRANCH }}
-          fetch-depth: 0
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
       - uses: actions/download-artifact@v8
         with:
           name: turbo-source-candidate
@@ -243,15 +246,17 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ env.TURBO_BRANCH }}
-          fetch-depth: 0
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
       - uses: actions/download-artifact@v8
         with:
           name: turbo-source-candidate
@@ -312,10 +317,17 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ env.TURBO_BRANCH }}
-          fetch-depth: 0
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
       - uses: actions/download-artifact@v8
         with:
           name: turbo-source-candidate
@@ -341,6 +353,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          gh auth setup-git
           # The tag must remain semver-valid so electron-updater recognizes
           # the nightly prerelease channel. The fork repository isolates this
           # release from the official build with the same version.
