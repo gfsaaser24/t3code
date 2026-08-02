@@ -441,6 +441,8 @@ jobs:
               --prerelease
           fi
       - name: Advance Turbo source branch after successful publication
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -451,6 +453,8 @@ jobs:
       - name: Clean up the run-specific staging branch
         if: always()
         continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: git push origin --delete "automation/turbo-nightly-${{ github.run_id }}"
 
