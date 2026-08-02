@@ -36,7 +36,7 @@ For that reason, “use official data” means attaching to the official process
 
 Turbo never installs official T3 Code binary assets. A source-sync workflow:
 
-1. fetches the latest configured upstream revision;
+1. fetches upstream `main` plus the latest Nightly tag used as its version anchor;
 2. calculates path overlap and a three-way merge report;
 3. rebases the Turbo customization commits in an isolated checkout;
 4. runs focused verification and builds Turbo-branded artifacts;

@@ -306,10 +306,10 @@ describe("DesktopUpdates", () => {
         assert.equal(harness.fullChangelog(), true);
 
         harness.emit("update-available", {
-          version: "1.2.4-nightly.20260709.766",
+          version: "1.2.4-nightly.20260709.766.turbo.1",
           releaseNotes: [
             {
-              version: "1.2.4-nightly.20260709.766",
+              version: "1.2.4-nightly.20260709.766.turbo.1",
               note: `<h2>What's Changed</h2><ul><li>feat(client): persist offline environment data by <a>@juliusmarminge</a> in <a>#3795</a></li></ul><h2>Full Changelog</h2>`,
             },
             {
@@ -322,9 +322,10 @@ describe("DesktopUpdates", () => {
 
         const state = yield* updates.getState;
         assert.equal(state.status, "available");
+        assert.equal(state.availableVersion, "1.2.4-nightly.20260709.766.turbo.1");
         assert.deepEqual(state.releaseNotes, [
           {
-            version: "1.2.4-nightly.20260709.766",
+            version: "1.2.4-nightly.20260709.766.turbo.1",
             items: ["feat(client): persist offline environment data by @juliusmarminge in #3795"],
           },
           {
