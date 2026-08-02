@@ -80,6 +80,7 @@ export class DesktopEnvironment extends Context.Service<
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
 const APP_BASE_NAME = "T3 Turbo";
+const APP_RELEASE_REPOSITORY = "gfsaaser24/t3code";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -101,6 +102,7 @@ function resolveDesktopAppBranding(input: {
     baseName: APP_BASE_NAME,
     stageLabel,
     displayName: input.isDevelopment ? `${APP_BASE_NAME} (${stageLabel})` : APP_BASE_NAME,
+    releaseRepository: APP_RELEASE_REPOSITORY,
   };
 }
 

@@ -30,8 +30,10 @@ jobs:
       old_head: ${{ steps.source.outputs.old_head }}
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
+      official_tag: ${{ steps.resolve.outputs.official_tag }}
       upstream_sha: ${{ steps.rebase.outputs.upstream_sha }}
       candidate_sha: ${{ steps.rebase.outputs.candidate_sha }}
+      issue_url: ${{ steps.review_issue.outputs.issue_url }}
     steps:
       - name: Checkout Turbo source branch
         shell: bash
@@ -55,14 +57,22 @@ jobs:
         shell: bash
         run: echo "old_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Read official release metadata
+      - name: Read official inbound metadata
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           repository="$(jq -r .repository .t3-turbo/upstream.json)"
+          branch="$(jq -r .branch .t3-turbo/upstream.json)"
           gh api "repos/$repository/releases?per_page=100" > "$RUNNER_TEMP/official-releases.json"
+          node scripts/turbo-nightly-sync.ts latest \
+            --releases "$RUNNER_TEMP/official-releases.json" \
+            > "$RUNNER_TEMP/latest-nightly.json"
+          official_tag="$(jq -r .tag "$RUNNER_TEMP/latest-nightly.json")"
+          gh api "repos/$repository/commits/$branch" > "$RUNNER_TEMP/official-main.json"
+          gh api "repos/$repository/compare/$official_tag...$branch" \
+            > "$RUNNER_TEMP/official-compare.json"
 
       - id: resolve
         name: Resolve newest official Nightly
@@ -70,43 +80,67 @@ jobs:
           node scripts/turbo-nightly-sync.ts resolve
           --releases "${{ runner.temp }}/official-releases.json"
           --state .t3-turbo/upstream.json
+          --main "${{ runner.temp }}/official-main.json"
+          --compare "${{ runner.temp }}/official-compare.json"
           --github-output
 
       - id: rebase
         name: Rebase in an isolated worktree
         if: steps.resolve.outputs.has_update == 'true'
         env:
-          NEW_TAG: ${{ steps.resolve.outputs.tag }}
+          PUBLISH_TAG: ${{ steps.resolve.outputs.tag }}
+          OFFICIAL_TAG: ${{ steps.resolve.outputs.official_tag }}
+          NIGHTLY_SHA: ${{ steps.resolve.outputs.nightly_sha }}
+          SOURCE_SHA: ${{ steps.resolve.outputs.source_sha }}
           OLD_TAG: ${{ steps.resolve.outputs.old_tag }}
-          OLD_SHA: ${{ steps.resolve.outputs.old_sha }}
+          OLD_NIGHTLY_SHA: ${{ steps.resolve.outputs.old_nightly_sha }}
+          OLD_MAIN_SHA: ${{ steps.resolve.outputs.old_main_sha }}
+          VERSION: ${{ steps.resolve.outputs.version }}
           UPSTREAM_REPOSITORY: ${{ steps.resolve.outputs.repository }}
+          UPSTREAM_BRANCH: ${{ steps.resolve.outputs.branch }}
         shell: bash
         run: |
           set -euo pipefail
           git remote add official "https://github.com/$UPSTREAM_REPOSITORY.git"
-          old_upstream_ref="refs/t3-turbo/official-tags/$OLD_TAG"
-          new_upstream_ref="refs/t3-turbo/official-tags/$NEW_TAG"
+          main_upstream_ref="refs/t3-turbo/official-heads/$UPSTREAM_BRANCH"
+          release_upstream_ref="refs/t3-turbo/official-tags/$OFFICIAL_TAG"
           git fetch --no-tags official \
-            "refs/tags/$OLD_TAG:$old_upstream_ref" \
-            "refs/tags/$NEW_TAG:$new_upstream_ref"
+            "+refs/heads/$UPSTREAM_BRANCH:$main_upstream_ref" \
+            "+refs/tags/$OFFICIAL_TAG:$release_upstream_ref"
 
-          resolved_old_sha="$(git rev-parse "$old_upstream_ref^{commit}")"
-          new_sha="$(git rev-parse "$new_upstream_ref^{commit}")"
-          if [[ "$resolved_old_sha" != "$OLD_SHA" ]]; then
-            echo "Recorded upstream SHA does not match $OLD_TAG." >&2
+          new_sha="$(git rev-parse "$main_upstream_ref^{commit}")"
+          release_sha="$(git rev-parse "$release_upstream_ref^{commit}")"
+          if [[ "$new_sha" != "$SOURCE_SHA" ]]; then
+            echo "Official $UPSTREAM_BRANCH changed while inbound metadata was being resolved; retry the run." >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$OLD_SHA" HEAD; then
-            echo "Turbo branch no longer descends from its recorded upstream SHA." >&2
+          if [[ "$release_sha" != "$NIGHTLY_SHA" ]]; then
+            echo "Official Nightly tag changed while inbound metadata was being resolved; retry the run." >&2
             exit 1
           fi
-          if ! git merge-base --is-ancestor "$OLD_SHA" "$new_sha"; then
+          if ! git merge-base --is-ancestor "$OLD_MAIN_SHA" HEAD; then
+            echo "Turbo branch no longer descends from its recorded upstream main SHA." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$OLD_NIGHTLY_SHA" "$OLD_MAIN_SHA"; then
+            echo "Recorded Nightly commit is not contained in the recorded upstream main snapshot." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$OLD_MAIN_SHA" "$new_sha"; then
             echo "Refusing to move Turbo backward or onto unrelated upstream history." >&2
             exit 1
           fi
+          if ! git merge-base --is-ancestor "$OLD_NIGHTLY_SHA" "$release_sha"; then
+            echo "Refusing a Nightly tag that does not descend from the recorded Nightly history." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$release_sha" "$new_sha"; then
+            echo "Official Nightly $OFFICIAL_TAG is not contained in upstream main; refusing a divergent update." >&2
+            exit 1
+          fi
 
-          git diff --name-only "$OLD_SHA" "$new_sha" > "$RUNNER_TEMP/upstream-paths.txt"
-          git diff --name-only "$OLD_SHA" HEAD > "$RUNNER_TEMP/customization-paths.txt"
+          git diff --name-only "$OLD_MAIN_SHA" "$new_sha" > "$RUNNER_TEMP/upstream-paths.txt"
+          git diff --name-only "$OLD_MAIN_SHA" HEAD > "$RUNNER_TEMP/customization-paths.txt"
 
           sync_worktree="$RUNNER_TEMP/turbo-sync-worktree"
           git worktree add --detach "$sync_worktree" HEAD
@@ -114,7 +148,8 @@ jobs:
           git -C "$sync_worktree" config user.name "t3-turbo-bot"
           git -C "$sync_worktree" config user.email "t3-turbo-bot@users.noreply.github.com"
           set +e
-          git -C "$sync_worktree" rebase --onto "$new_sha" "$OLD_SHA" \
+          git -C "$sync_worktree" rebase --committer-date-is-author-date \
+            --onto "$new_sha" "$OLD_MAIN_SHA" \
             > "$RUNNER_TEMP/rebase.stdout" 2> "$RUNNER_TEMP/rebase.stderr"
           rebase_status=$?
           set -e
@@ -125,8 +160,8 @@ jobs:
               > "$RUNNER_TEMP/unmerged-paths.txt"
             node scripts/turbo-nightly-sync.ts report \
               --old-tag "$OLD_TAG" \
-              --old-sha "$OLD_SHA" \
-              --new-tag "$NEW_TAG" \
+              --old-sha "$OLD_MAIN_SHA" \
+              --new-tag "$PUBLISH_TAG (official $OFFICIAL_TAG plus upstream main)" \
               --new-sha "$new_sha" \
               --upstream-paths "$RUNNER_TEMP/upstream-paths.txt" \
               --customization-paths "$RUNNER_TEMP/customization-paths.txt" \
@@ -140,16 +175,21 @@ jobs:
 
           jq \
             --arg repository "$UPSTREAM_REPOSITORY" \
-            --arg tag "$NEW_TAG" \
-            --arg sha "$new_sha" \
-            '{ repository: $repository, tag: $tag, sha: $sha }' \
+            --arg branch "$UPSTREAM_BRANCH" \
+            --arg mainSha "$new_sha" \
+            --arg nightlyTag "$OFFICIAL_TAG" \
+            --arg nightlySha "$release_sha" \
+            --arg version "$VERSION" \
+            '{ repository: $repository, branch: $branch, mainSha: $mainSha, nightlyTag: $nightlyTag, nightlySha: $nightlySha, version: $version }' \
             > "$sync_worktree/.t3-turbo/upstream.json"
           git -C "$sync_worktree" add .t3-turbo/upstream.json
-          git -C "$sync_worktree" commit -m "chore(turbo): track $NEW_TAG"
+          source_date="$(git -C "$sync_worktree" show -s --format=%aI "$new_sha")"
+          GIT_AUTHOR_DATE="$source_date" GIT_COMMITTER_DATE="$source_date" \
+            git -C "$sync_worktree" commit -m "chore(turbo): track upstream main at ${new_sha:0:12}"
           candidate_sha="$(git -C "$sync_worktree" rev-parse HEAD)"
           git -C "$sync_worktree" branch -f turbo-sync-bundle "$candidate_sha"
           git -C "$sync_worktree" bundle create "$GITHUB_WORKSPACE/turbo-candidate.bundle" \
-            refs/heads/turbo-sync-bundle "^$OLD_SHA"
+            refs/heads/turbo-sync-bundle "^$OLD_MAIN_SHA"
           echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
           echo "conflicted=false" >> "$GITHUB_OUTPUT"
 
@@ -161,14 +201,25 @@ jobs:
           path: turbo-rebase-report.md
           if-no-files-found: error
 
-      - name: Open or update review issue
+      - id: review_issue
+        name: Open or update review issue
         if: steps.rebase.outputs.conflicted == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           NEW_TAG: ${{ steps.resolve.outputs.tag }}
+          NOTIFY_USER: ${{ vars.TURBO_NOTIFY_USER }}
         shell: bash
         run: |
           set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/turbo-nightly-sync.yml"
+          {
+            echo "### Review and retry"
+            echo
+            echo "- [Open this Actions run]($run_url)"
+            echo "- [Open the manual build page]($workflow_url)"
+            echo '- CLI retry: `gh workflow run turbo-nightly-sync.yml -R '"$GITHUB_REPOSITORY"' --ref main`'
+          } >> turbo-rebase-report.md
           title="T3-Turbo rebase needs review: $NEW_TAG"
           issue_number="$(
             gh issue list --state open --limit 100 --json number,title \
@@ -176,9 +227,18 @@ jobs:
           )"
           if [[ -n "$issue_number" ]]; then
             gh issue edit "$issue_number" --body-file turbo-rebase-report.md
+            if [[ -n "$NOTIFY_USER" ]]; then
+              gh issue edit "$issue_number" --add-assignee "$NOTIFY_USER"
+            fi
+            issue_url="$(gh issue view "$issue_number" --json url --jq .url)"
           else
-            gh issue create --title "$title" --body-file turbo-rebase-report.md
+            create_args=(--title "$title" --body-file turbo-rebase-report.md)
+            if [[ -n "$NOTIFY_USER" ]]; then
+              create_args+=(--assignee "$NOTIFY_USER")
+            fi
+            issue_url="$(gh issue create "${create_args[@]}")"
           fi
+          echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
 
       - name: Upload clean source candidate
         if: steps.resolve.outputs.has_update == 'true' && steps.rebase.outputs.conflicted == 'false'
@@ -349,7 +409,9 @@ jobs:
       - name: Publish fork-only Turbo release
         env:
           GH_TOKEN: ${{ github.token }}
-          UPSTREAM_TAG: ${{ needs.sync_source.outputs.tag }}
+          TURBO_TAG: ${{ needs.sync_source.outputs.tag }}
+          OFFICIAL_TAG: ${{ needs.sync_source.outputs.official_tag }}
+          UPSTREAM_SHA: ${{ needs.sync_source.outputs.upstream_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -357,17 +419,25 @@ jobs:
           # The tag must remain semver-valid so electron-updater recognizes
           # the nightly prerelease channel. The fork repository isolates this
           # release from the official build with the same version.
-          turbo_tag="$UPSTREAM_TAG"
+          turbo_tag="$TURBO_TAG"
           staging_branch="automation/turbo-nightly-${{ github.run_id }}"
+          candidate_sha="$(git rev-parse refs/remotes/turbo/candidate)"
           git push origin \
             "refs/remotes/turbo/candidate:refs/heads/$staging_branch"
           if gh release view "$turbo_tag" >/dev/null 2>&1; then
+            retry_ref="refs/t3-turbo/retry-tags/$turbo_tag"
+            git fetch --no-tags origin "+refs/tags/$turbo_tag:$retry_ref"
+            existing_sha="$(git rev-parse "$retry_ref^{commit}")"
+            if [[ "$existing_sha" != "$candidate_sha" ]]; then
+              echo "Existing release $turbo_tag points at a different source commit." >&2
+              exit 1
+            fi
             gh release upload "$turbo_tag" release-assets/* --clobber
           else
             gh release create "$turbo_tag" release-assets/* \
               --target "$staging_branch" \
-              --title "T3-Turbo $UPSTREAM_TAG" \
-              --notes "T3-Turbo rebuilt from official source $UPSTREAM_TAG. No official binary assets were consumed." \
+              --title "T3-Turbo $TURBO_TAG" \
+              --notes "T3-Turbo rebuilt from upstream main at $UPSTREAM_SHA, anchored to official Nightly $OFFICIAL_TAG. No official binary assets were consumed." \
               --prerelease
           fi
       - name: Advance Turbo source branch after successful publication
@@ -378,4 +448,54 @@ jobs:
             --force-with-lease="refs/heads/$TURBO_BRANCH:${{ needs.sync_source.outputs.old_head }}" \
             origin \
             "refs/remotes/turbo/candidate:refs/heads/$TURBO_BRANCH"
-          git push origin --delete "automation/turbo-nightly-${{ github.run_id }}"
+      - name: Clean up the run-specific staging branch
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: git push origin --delete "automation/turbo-nightly-${{ github.run_id }}"
+
+  notify_telegram:
+    name: Notify Telegram when intervention is needed
+    needs: [sync_source, build_wsl_node_pty, build_windows, publish]
+    if: >-
+      always() &&
+      vars.TURBO_TELEGRAM_ENABLED == 'true' &&
+      (
+        needs.sync_source.outputs.conflicted == 'true' ||
+        needs.sync_source.result == 'failure' ||
+        needs.build_wsl_node_pty.result == 'failure' ||
+        needs.build_windows.result == 'failure' ||
+        needs.publish.result == 'failure'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Send actionable Telegram alert
+        continue-on-error: true
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TURBO_TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TURBO_TELEGRAM_CHAT_ID }}
+          ISSUE_URL: ${{ needs.sync_source.outputs.issue_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
+            echo "Telegram notification is enabled, but its bot token or chat ID is missing." >&2
+            exit 1
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/turbo-nightly-sync.yml"
+          printf -v message \
+            'T3 Turbo inbound needs attention.\n\nRun: %s\nManual build: %s' \
+            "$run_url" "$workflow_url"
+          if [[ -n "$ISSUE_URL" ]]; then
+            printf -v message '%s\nReview issue: %s' "$message" "$ISSUE_URL"
+          fi
+          curl --fail --silent --show-error \
+            --request POST \
+            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=$message" \
+            --data-urlencode "disable_web_page_preview=true"

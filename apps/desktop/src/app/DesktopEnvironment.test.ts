@@ -83,6 +83,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(portablePath(environment.backendEntryPath), "/repo/apps/server/dist/bin.mjs");
       assert.equal(portablePath(environment.backendCwd), "/repo");
       assert.equal(environment.displayName, "T3 Turbo (Dev)");
+      assert.equal(environment.branding.releaseRepository, "gfsaaser24/t3code");
       assert.equal(environment.appUserModelId, "com.gabef.t3turbo.dev");
       assert.equal(environment.linuxDesktopEntryName, "t3-turbo-dev.desktop");
       assert.equal(environment.linuxWmClass, "t3-turbo-dev");
@@ -136,6 +137,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(portablePath(production.baseDir), "/Users/alice/.t3-turbo");
       assert.equal(portablePath(production.stateDir), "/Users/alice/.t3-turbo/userdata");
       assert.equal(production.displayName, "T3 Turbo");
+      assert.equal(production.branding.releaseRepository, "gfsaaser24/t3code");
       assert.equal(production.appUserModelId, "com.gabef.t3turbo");
       assert.equal(production.linuxDesktopEntryName, "t3-turbo.desktop");
       assert.equal(production.linuxWmClass, "t3-turbo");

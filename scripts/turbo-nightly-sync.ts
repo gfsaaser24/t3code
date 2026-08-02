@@ -7,8 +7,11 @@ import * as NodeUtil from "node:util";
 
 export interface TurboUpstreamState {
   readonly repository: string;
-  readonly tag: string;
-  readonly sha: string;
+  readonly branch: string;
+  readonly mainSha: string;
+  readonly nightlyTag: string;
+  readonly nightlySha: string;
+  readonly version: string;
 }
 
 export interface GitHubRelease {
@@ -25,9 +28,11 @@ export interface TurboNightlyRelease {
 }
 
 const NIGHTLY_TAG_PATTERN = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+)$/u;
+const TURBO_NIGHTLY_TAG_PATTERN = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?)$/u;
+const TURBO_NIGHTLY_VERSION_PATTERN = /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?$/u;
 
 export function compareTurboNightlyTags(left: string, right: string): number {
-  if (!NIGHTLY_TAG_PATTERN.test(left) || !NIGHTLY_TAG_PATTERN.test(right)) {
+  if (!TURBO_NIGHTLY_TAG_PATTERN.test(left) || !TURBO_NIGHTLY_TAG_PATTERN.test(right)) {
     throw new Error("Cannot compare invalid Turbo nightly tags.");
   }
   const leftParts = left.match(/\d+/gu)?.map(Number) ?? [];
@@ -47,23 +52,106 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
   if (
     !isRecord(value) ||
     typeof value.repository !== "string" ||
-    typeof value.tag !== "string" ||
-    typeof value.sha !== "string"
+    typeof value.branch !== "string" ||
+    typeof value.mainSha !== "string" ||
+    typeof value.nightlyTag !== "string" ||
+    typeof value.nightlySha !== "string" ||
+    typeof value.version !== "string"
   ) {
-    throw new Error("Turbo upstream state must contain repository, tag, and sha strings.");
+    throw new Error(
+      "Turbo upstream state must contain repository, branch, mainSha, nightlyTag, nightlySha, and version strings.",
+    );
   }
   const state = {
     repository: value.repository,
-    tag: value.tag,
-    sha: value.sha,
+    branch: value.branch,
+    mainSha: value.mainSha,
+    nightlyTag: value.nightlyTag,
+    nightlySha: value.nightlySha,
+    version: value.version,
   };
-  if (!NIGHTLY_TAG_PATTERN.test(state.tag)) {
-    throw new Error(`Turbo upstream state has an invalid nightly tag: ${state.tag}`);
+  if (!state.repository.trim() || !state.branch.trim()) {
+    throw new Error("Turbo upstream repository and branch cannot be empty.");
   }
-  if (!/^[0-9a-f]{40}$/u.test(state.sha)) {
-    throw new Error(`Turbo upstream state has an invalid commit sha: ${state.sha}`);
+  if (!NIGHTLY_TAG_PATTERN.test(state.nightlyTag)) {
+    throw new Error(`Turbo upstream state has an invalid nightly tag: ${state.nightlyTag}`);
+  }
+  if (!/^[0-9a-f]{40}$/u.test(state.mainSha) || !/^[0-9a-f]{40}$/u.test(state.nightlySha)) {
+    throw new Error("Turbo upstream state has an invalid commit sha.");
+  }
+  if (!TURBO_NIGHTLY_VERSION_PATTERN.test(state.version)) {
+    throw new Error(`Turbo upstream state has an invalid published version: ${state.version}`);
+  }
+  const nightlyVersion = state.nightlyTag.slice(1);
+  const snapshotSuffix = state.version.slice(nightlyVersion.length);
+  if (
+    state.version !== nightlyVersion &&
+    (!state.version.startsWith(nightlyVersion) || !/^\.turbo\.[1-9]\d*$/u.test(snapshotSuffix))
+  ) {
+    throw new Error("Turbo published version must derive from its recorded Nightly tag.");
   }
   return state;
+}
+
+export function createTurboMainSnapshotVersion(input: {
+  readonly releaseVersion: string;
+  readonly mainDistance: number;
+}): string {
+  if (!NIGHTLY_TAG_PATTERN.test(`v${input.releaseVersion}`)) {
+    throw new Error(`Invalid official Nightly version: ${input.releaseVersion}`);
+  }
+  if (!Number.isSafeInteger(input.mainDistance) || input.mainDistance < 0) {
+    throw new Error("Upstream main distance must be a non-negative integer.");
+  }
+  return input.mainDistance === 0
+    ? input.releaseVersion
+    : `${input.releaseVersion}.turbo.${input.mainDistance}`;
+}
+
+export function resolveTurboInboundUpdate(input: {
+  readonly state: TurboUpstreamState;
+  readonly release: TurboNightlyRelease;
+  readonly mainSha: string;
+  readonly nightlySha: string;
+  readonly mainDistance: number;
+}) {
+  if (!/^[0-9a-f]{40}$/u.test(input.mainSha) || !/^[0-9a-f]{40}$/u.test(input.nightlySha)) {
+    throw new Error("Official inbound metadata has an invalid commit sha.");
+  }
+  const releaseOrder = compareTurboNightlyTags(input.release.tag, input.state.nightlyTag);
+  if (releaseOrder < 0) {
+    throw new Error("Refusing to move the recorded official Nightly release backward.");
+  }
+  if (releaseOrder === 0 && input.nightlySha !== input.state.nightlySha) {
+    throw new Error("The recorded official Nightly tag now points at a different commit.");
+  }
+
+  const hasUpdate = releaseOrder > 0 || input.mainSha !== input.state.mainSha;
+  const version = createTurboMainSnapshotVersion({
+    releaseVersion: input.release.version,
+    mainDistance: input.mainDistance,
+  });
+  const versionOrder = compareTurboNightlyTags(`v${version}`, `v${input.state.version}`);
+  if (hasUpdate && versionOrder <= 0) {
+    throw new Error("Refusing to publish an upstream main snapshot without advancing the version.");
+  }
+  if (!hasUpdate && versionOrder !== 0) {
+    throw new Error("Recorded Turbo version does not match the current upstream snapshot.");
+  }
+  return {
+    has_update: String(hasUpdate),
+    tag: `v${version}`,
+    version,
+    official_tag: input.release.tag,
+    nightly_sha: input.nightlySha,
+    source_sha: input.mainSha,
+    old_tag: input.state.nightlyTag,
+    old_nightly_sha: input.state.nightlySha,
+    old_main_sha: input.state.mainSha,
+    old_version: input.state.version,
+    repository: input.state.repository,
+    branch: input.state.branch,
+  };
 }
 
 export function selectLatestNightlyRelease(value: unknown): TurboNightlyRelease {
@@ -158,22 +246,63 @@ function appendGitHubOutput(values: Readonly<Record<string, string>>): void {
   );
 }
 
+function decodeMainSha(value: unknown): string {
+  if (!isRecord(value) || typeof value.sha !== "string" || !/^[0-9a-f]{40}$/u.test(value.sha)) {
+    throw new Error("Official main metadata must contain a valid commit sha.");
+  }
+  return value.sha;
+}
+
+function decodeMainComparison(value: unknown): {
+  readonly nightlySha: string;
+  readonly distance: number;
+} {
+  if (
+    !isRecord(value) ||
+    (value.status !== "ahead" && value.status !== "identical") ||
+    !Number.isSafeInteger(value.ahead_by) ||
+    (value.ahead_by as number) < 0 ||
+    !isRecord(value.base_commit) ||
+    typeof value.base_commit.sha !== "string" ||
+    !/^[0-9a-f]{40}$/u.test(value.base_commit.sha)
+  ) {
+    throw new Error("Official Nightly must be identical to or an ancestor of upstream main.");
+  }
+  return { nightlySha: value.base_commit.sha, distance: value.ahead_by as number };
+}
+
+function runLatest(values: Record<string, string | boolean | undefined>): void {
+  const releasesPath = values.releases;
+  if (typeof releasesPath !== "string") throw new Error("latest requires --releases.");
+  process.stdout.write(
+    `${JSON.stringify(selectLatestNightlyRelease(readJson(releasesPath)), null, 2)}\n`,
+  );
+}
+
 function runResolve(values: Record<string, string | boolean | undefined>): void {
   const releasesPath = values.releases;
   const statePath = values.state;
-  if (typeof releasesPath !== "string" || typeof statePath !== "string") {
-    throw new Error("resolve requires --releases and --state.");
+  const mainPath = values.main;
+  const comparePath = values.compare;
+  if (
+    typeof releasesPath !== "string" ||
+    typeof statePath !== "string" ||
+    typeof mainPath !== "string" ||
+    typeof comparePath !== "string"
+  ) {
+    throw new Error("resolve requires --releases, --state, --main, and --compare.");
   }
   const state = decodeTurboUpstreamState(readJson(statePath));
   const release = selectLatestNightlyRelease(readJson(releasesPath));
-  const output = {
-    has_update: String(compareTurboNightlyTags(release.tag, state.tag) > 0),
-    tag: release.tag,
-    version: release.version,
-    old_tag: state.tag,
-    old_sha: state.sha,
-    repository: state.repository,
-  };
+  const mainSha = decodeMainSha(readJson(mainPath));
+  const comparison = decodeMainComparison(readJson(comparePath));
+  const output = resolveTurboInboundUpdate({
+    state,
+    release,
+    mainSha,
+    nightlySha: comparison.nightlySha,
+    mainDistance: comparison.distance,
+  });
   if (values["github-output"] === true) appendGitHubOutput(output);
   else process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
@@ -220,6 +349,8 @@ if (isMain) {
     options: {
       releases: { type: "string" },
       state: { type: "string" },
+      main: { type: "string" },
+      compare: { type: "string" },
       "github-output": { type: "boolean" },
       output: { type: "string" },
       "old-tag": { type: "string" },
@@ -233,7 +364,8 @@ if (isMain) {
     },
     strict: true,
   });
-  if (command === "resolve") runResolve(values);
+  if (command === "latest") runLatest(values);
+  else if (command === "resolve") runResolve(values);
   else if (command === "report") runReport(values);
-  else throw new Error("Expected command 'resolve' or 'report'.");
+  else throw new Error("Expected command 'latest', 'resolve', or 'report'.");
 }
