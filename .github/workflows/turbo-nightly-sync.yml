@@ -173,7 +173,7 @@ jobs:
             exit 0
           fi
 
-          jq \
+          jq -n \
             --arg repository "$UPSTREAM_REPOSITORY" \
             --arg branch "$UPSTREAM_BRANCH" \
             --arg mainSha "$new_sha" \
