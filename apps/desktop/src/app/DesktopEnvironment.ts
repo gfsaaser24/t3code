@@ -100,7 +100,7 @@ function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: input.isDevelopment ? `${APP_BASE_NAME} (${stageLabel})` : APP_BASE_NAME,
   };
 }
 
@@ -168,8 +168,8 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
-  const legacyUserDataDirName = isDevelopment ? "T3 Turbo (Dev)" : "T3 Turbo (Alpha)";
+  const userDataDirName = isDevelopment ? "t3-turbo-dev" : "t3-turbo";
+  const legacyUserDataDirName = isDevelopment ? "T3-Turbo (Dev)" : "T3-Turbo";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
     "applications",
@@ -213,10 +213,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopment ? "com.gabef.t3turbo.dev" : "com.gabef.t3turbo",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3code-dev.desktop" : "t3code.desktop",
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxDesktopEntryName: isDevelopment ? "t3-turbo-dev.desktop" : "t3-turbo.desktop",
+    linuxWmClass: isDevelopment ? "t3-turbo-dev" : "t3-turbo",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
