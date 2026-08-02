@@ -150,25 +150,29 @@ may show SmartScreen. No Azure signing, Clerk, relay, or official T3 credentials
 - Branch advancement uses `--force-with-lease`, so an unexpected concurrent branch change stops
   the update instead of overwriting it.
 
-## Email and Telegram alerts
+## Email and OpenClaw Telegram alerts
 
 GitHub can email workflow failures without any repository secret. In the GitHub account's
 notification settings, enable Actions email for failed workflows. Conflicts are deliberately
 reported as review issues instead of failed builds, so set the repository variable
 `TURBO_NOTIFY_USER` to the GitHub username that should be assigned and emailed.
 
-Telegram is optional and intervention-only. Configure:
+If an existing OpenClaw gateway already owns the Telegram channel, it can deliver the optional
+intervention alerts. Enable OpenClaw's authenticated `/hooks/agent` endpoint and configure:
 
-| Kind     | Name                       | Value                              |
-| -------- | -------------------------- | ---------------------------------- |
-| Variable | `TURBO_TELEGRAM_ENABLED`   | `true`                             |
-| Secret   | `TURBO_TELEGRAM_BOT_TOKEN` | Token issued by Telegram BotFather |
-| Secret   | `TURBO_TELEGRAM_CHAT_ID`   | Destination user or chat ID        |
+| Kind     | Name                             | Value                                      |
+| -------- | -------------------------------- | ------------------------------------------ |
+| Variable | `TURBO_OPENCLAW_ENABLED`         | `true`                                     |
+| Secret   | `TURBO_OPENCLAW_HOOK_URL`        | Full reachable `/hooks/agent` endpoint     |
+| Secret   | `TURBO_OPENCLAW_HOOK_TOKEN`      | Dedicated OpenClaw hooks bearer token      |
+| Secret   | `TURBO_OPENCLAW_TELEGRAM_TARGET` | Existing OpenClaw Telegram user or chat ID |
 
-The final notification job calls Telegram's `sendMessage` endpoint directly. It does not import a
-third-party action, and notification failure cannot fail or roll back an update. Alerts include
-the exact Actions run, the conflict issue when one exists, and the authenticated GitHub workflow
-page where a manual run can be confirmed.
+The final notification job asks OpenClaw to run an isolated notification turn with `deliver: true`
+on its configured Telegram channel. It does not install a third-party ClawHub skill, and
+notification failure cannot fail or roll back an update. The hook must be reachable from a GitHub
+hosted runner; a loopback-only or private tailnet URL needs a trusted tunnel or self-hosted runner.
+Alerts include the exact Actions run, the conflict issue when one exists, and the authenticated
+GitHub workflow page where a manual run can be confirmed.
 
 GitHub does not provide a safe dispatch-by-GET link. The workflow page is intentionally a
 confirm-then-run link; never place a personal access token in an email or Telegram URL.

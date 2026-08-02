@@ -346,7 +346,7 @@ jobs:
         env:
           T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
         run: >-
-          vp run dist:desktop:artifact --
+          vp run dist:desktop:artifact
           --platform win
           --target nsis
           --arch x64
@@ -454,12 +454,12 @@ jobs:
         shell: bash
         run: git push origin --delete "automation/turbo-nightly-${{ github.run_id }}"
 
-  notify_telegram:
-    name: Notify Telegram when intervention is needed
+  notify_openclaw:
+    name: Ask OpenClaw to notify Telegram
     needs: [sync_source, build_wsl_node_pty, build_windows, publish]
     if: >-
       always() &&
-      vars.TURBO_TELEGRAM_ENABLED == 'true' &&
+      vars.TURBO_OPENCLAW_ENABLED == 'true' &&
       (
         needs.sync_source.outputs.conflicted == 'true' ||
         needs.sync_source.result == 'failure' ||
@@ -472,17 +472,18 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Send actionable Telegram alert
+      - name: Send an actionable alert through OpenClaw
         continue-on-error: true
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TURBO_TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TURBO_TELEGRAM_CHAT_ID }}
+          OPENCLAW_HOOK_URL: ${{ secrets.TURBO_OPENCLAW_HOOK_URL }}
+          OPENCLAW_HOOK_TOKEN: ${{ secrets.TURBO_OPENCLAW_HOOK_TOKEN }}
+          OPENCLAW_TELEGRAM_TARGET: ${{ secrets.TURBO_OPENCLAW_TELEGRAM_TARGET }}
           ISSUE_URL: ${{ needs.sync_source.outputs.issue_url }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHAT_ID" ]]; then
-            echo "Telegram notification is enabled, but its bot token or chat ID is missing." >&2
+          if [[ -z "$OPENCLAW_HOOK_URL" || -z "$OPENCLAW_HOOK_TOKEN" || -z "$OPENCLAW_TELEGRAM_TARGET" ]]; then
+            echo "OpenClaw notification is enabled, but its hook URL, token, or Telegram target is missing." >&2
             exit 1
           fi
           run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -493,9 +494,14 @@ jobs:
           if [[ -n "$ISSUE_URL" ]]; then
             printf -v message '%s\nReview issue: %s' "$message" "$ISSUE_URL"
           fi
+          jq -n \
+            --arg message "$message" \
+            --arg target "$OPENCLAW_TELEGRAM_TARGET" \
+            '{ message: $message, name: "T3 Turbo GitHub", wakeMode: "now", deliver: true, channel: "telegram", to: $target }' \
+            > "$RUNNER_TEMP/openclaw-notification.json"
           curl --fail --silent --show-error \
             --request POST \
-            "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
-            --data-urlencode "text=$message" \
-            --data-urlencode "disable_web_page_preview=true"
+            "$OPENCLAW_HOOK_URL" \
+            --header "Authorization: Bearer $OPENCLAW_HOOK_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/openclaw-notification.json"
