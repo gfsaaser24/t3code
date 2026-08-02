@@ -30,13 +30,13 @@ Directly launching two backend processes against the same `state.sqlite` is not
 a synchronization mechanism. Each process owns an in-memory read model, queues,
 reactors, providers, terminals, and live event streams. A second process can
 therefore make decisions from stale state even when SQLite accepts both writes.
-For that reason, "use official data" means attaching to the official process.
+For that reason, “use official data” means attaching to the official process.
 
 ## Upstream nightlies
 
 Turbo never installs official T3 Code binary assets. A source-sync workflow:
 
-1. fetches upstream `main` plus the latest Nightly tag used as its version anchor;
+1. fetches the latest configured upstream revision;
 2. calculates path overlap and a three-way merge report;
 3. rebases the Turbo customization commits in an isolated checkout;
 4. runs focused verification and builds Turbo-branded artifacts;
@@ -46,29 +46,6 @@ Turbo never installs official T3 Code binary assets. A source-sync workflow:
 `T3CODE_DESKTOP_UPDATE_REPOSITORY` is the only way to embed a GitHub update feed
 in a Turbo build. `GITHUB_REPOSITORY` is intentionally ignored, and
 `pingdotgg/t3code` is rejected as a Turbo feed.
-
-The complete operator procedure is documented in
-[T3 Turbo nightly inbound updates](./t3-turbo-nightly-inbound.md). It covers fork bootstrap,
-checkpoint validation, manual checks, conflict recovery, runner selection, release outputs, and
-OpenClaw/Telegram alert delivery.
-
-### Build lifecycle at a glance
-
-The scheduled workflow runs from the fork's `main` branch, while the candidate source and Turbo
-customizations live on `turbo`:
-
-1. Resolve the newest official Nightly and the current upstream `main` commit.
-2. Compare both against `.t3-turbo/upstream.json` and stop cleanly when there is no update.
-3. Rebase Turbo commits in an isolated worktree; never modify the live branch during conflict
-   detection.
-4. Build the Linux WSL `node-pty` prebuild, validate the source-aware tooling, and produce an
-   unsigned Windows NSIS installer with a fork-owned `nightly.yml` feed.
-5. Publish the installer, blockmap, and manifest only to `gfsaaser24/t3code`, then advance
-   `turbo` with a lease check.
-
-Conflict or build failure leaves the last published Turbo branch and release intact. A manual
-workflow dispatch checks for source changes; it does not force a new installer when the checkpoint
-is already current.
 
 ## Current task list
 
