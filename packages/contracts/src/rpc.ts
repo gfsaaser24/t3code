@@ -70,12 +70,21 @@ import {
   RelayClientStatusSchema,
 } from "./relayClient.ts";
 import {
+  ProjectDeleteFileError,
+  ProjectDeleteFileInput,
+  ProjectDeleteFileResult,
+  ProjectDuplicateFileError,
+  ProjectDuplicateFileInput,
+  ProjectDuplicateFileResult,
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectReadFileError,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenameFileError,
+  ProjectRenameFileInput,
+  ProjectRenameFileResult,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
   ProjectSearchContentsResult,
@@ -168,7 +177,10 @@ export const WS_METHODS = {
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
   projectsListEntries: "projects.listEntries",
+  projectsDeleteFile: "projects.deleteFile",
+  projectsDuplicateFile: "projects.duplicateFile",
   projectsReadFile: "projects.readFile",
+  projectsRenameFile: "projects.renameFile",
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
@@ -458,6 +470,24 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
   error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectsRenameFileRpc = Rpc.make(WS_METHODS.projectsRenameFile, {
+  payload: ProjectRenameFileInput,
+  success: ProjectRenameFileResult,
+  error: Schema.Union([ProjectRenameFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectsDuplicateFileRpc = Rpc.make(WS_METHODS.projectsDuplicateFile, {
+  payload: ProjectDuplicateFileInput,
+  success: ProjectDuplicateFileResult,
+  error: Schema.Union([ProjectDuplicateFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectsDeleteFileRpc = Rpc.make(WS_METHODS.projectsDeleteFile, {
+  payload: ProjectDeleteFileInput,
+  success: ProjectDeleteFileResult,
+  error: Schema.Union([ProjectDeleteFileError, EnvironmentAuthorizationError]),
 });
 
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
@@ -810,7 +840,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectsListEntriesRpc,
+  WsProjectsDeleteFileRpc,
+  WsProjectsDuplicateFileRpc,
   WsProjectsReadFileRpc,
+  WsProjectsRenameFileRpc,
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,

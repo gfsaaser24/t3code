@@ -1654,6 +1654,10 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeProjectKey],
   );
+  const isFileMutationPending = useCallback(
+    (relativePath: string) => pendingFileSurfaceIds.has(`file:${relativePath}`),
+    [pendingFileSurfaceIds],
+  );
   const configuredPreviewUrls = useMemo(
     () => getConfiguredPreviewUrls(activeProject?.scripts),
     [activeProject?.scripts],
@@ -5721,8 +5725,15 @@ function ChatViewContent(props: ChatViewProps) {
           }
           revealLine={activeFileSurface?.revealLine ?? null}
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}
+          explorerRevealPath={
+            activeRightPanelSurface.kind === "files" ? activeRightPanelSurface.revealPath : null
+          }
+          explorerRevealRequestId={
+            activeRightPanelSurface.kind === "files" ? activeRightPanelSurface.revealRequestId : 0
+          }
           onOpenFile={openFileSurface}
           onPendingChange={handleFilePendingChange}
+          isFileMutationPending={isFileMutationPending}
         />
       </Suspense>
     ) : null
