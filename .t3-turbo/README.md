@@ -1,5 +1,8 @@
 # T3-Turbo nightly source sync
 
+For a plain-English walkthrough of the complete inbound update flow, see
+[`docs/internals/t3-turbo-nightly-inbound.md`](../docs/internals/t3-turbo-nightly-inbound.md).
+
 `turbo-nightly-sync.yml` rebases the commits on the fork's `turbo` branch onto the newest
 published Nightly source tag from `pingdotgg/t3code`. It never downloads or republishes an
 official installer.
