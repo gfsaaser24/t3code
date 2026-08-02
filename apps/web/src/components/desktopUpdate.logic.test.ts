@@ -169,6 +169,11 @@ describe("desktop update UI helpers", () => {
     expect(getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931")).toBe(
       "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30-nightly.20260728.931",
     );
+    expect(
+      getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931.turbo.1", "gfsaaser24/t3code"),
+    ).toBe(
+      "https://github.com/gfsaaser24/t3code/releases/tag/v0.0.30-nightly.20260728.931.turbo.1",
+    );
   });
 
   it("omits the release URL when the updater does not report a version", () => {

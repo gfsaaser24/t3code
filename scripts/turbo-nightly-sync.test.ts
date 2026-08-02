@@ -9,9 +9,11 @@ import { assert, it } from "@effect/vitest";
 
 import {
   compareTurboNightlyTags,
+  createTurboMainSnapshotVersion,
   decodeTurboUpstreamState,
   findPathCollisions,
   renderTurboCollisionReport,
+  resolveTurboInboundUpdate,
   selectLatestNightlyRelease,
 } from "./turbo-nightly-sync.ts";
 
@@ -88,31 +90,123 @@ it("validates the durable upstream state", () => {
   assert.deepStrictEqual(
     decodeTurboUpstreamState({
       repository: "pingdotgg/t3code",
-      tag: "v0.0.32-nightly.20260802.980",
-      sha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      branch: "main",
+      mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      nightlyTag: "v0.0.32-nightly.20260802.980",
+      nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      version: "0.0.32-nightly.20260802.980",
     }),
     {
       repository: "pingdotgg/t3code",
-      tag: "v0.0.32-nightly.20260802.980",
-      sha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      branch: "main",
+      mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      nightlyTag: "v0.0.32-nightly.20260802.980",
+      nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      version: "0.0.32-nightly.20260802.980",
     },
   );
   assert.throws(() =>
     decodeTurboUpstreamState({
       repository: "pingdotgg/t3code",
-      tag: "latest",
-      sha: "not-a-sha",
+      branch: "main",
+      mainSha: "not-a-sha",
+      nightlyTag: "latest",
+      nightlySha: "not-a-sha",
+      version: "latest",
     }),
+  );
+  assert.throws(() =>
+    decodeTurboUpstreamState({
+      repository: "pingdotgg/t3code",
+      branch: "main",
+      mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      nightlyTag: "v0.0.32-nightly.20260802.980",
+      nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      version: "0.0.32-nightly.20260802.980.turbo.0",
+    }),
+  );
+});
+
+it("generates deterministic Turbo versions for upstream main snapshots", () => {
+  assert.strictEqual(
+    createTurboMainSnapshotVersion({
+      releaseVersion: "0.0.32-nightly.20260802.980",
+      mainDistance: 0,
+    }),
+    "0.0.32-nightly.20260802.980",
+  );
+  assert.strictEqual(
+    createTurboMainSnapshotVersion({
+      releaseVersion: "0.0.32-nightly.20260802.980",
+      mainDistance: 3,
+    }),
+    "0.0.32-nightly.20260802.980.turbo.3",
+  );
+  assert.isAbove(
+    compareTurboNightlyTags(
+      "v0.0.32-nightly.20260802.980.turbo.3",
+      "v0.0.32-nightly.20260802.980.turbo.2",
+    ),
+    0,
+  );
+});
+
+it("tracks upstream main commits even when the official release tag is unchanged", () => {
+  const state = {
+    repository: "pingdotgg/t3code",
+    branch: "main",
+    mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+    nightlyTag: "v0.0.32-nightly.20260802.980",
+    nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+    version: "0.0.32-nightly.20260802.980",
+  };
+  const release = {
+    tag: state.nightlyTag,
+    version: state.version,
+    publishedAt: "2026-08-02T09:56:51Z",
+  };
+
+  assert.deepStrictEqual(
+    resolveTurboInboundUpdate({
+      state,
+      release,
+      mainSha: "ffffffffffffffffffffffffffffffffffffffff",
+      nightlySha: state.nightlySha,
+      mainDistance: 1,
+    }),
+    {
+      has_update: "true",
+      tag: "v0.0.32-nightly.20260802.980.turbo.1",
+      version: "0.0.32-nightly.20260802.980.turbo.1",
+      official_tag: state.nightlyTag,
+      nightly_sha: state.nightlySha,
+      source_sha: "ffffffffffffffffffffffffffffffffffffffff",
+      old_tag: state.nightlyTag,
+      old_nightly_sha: state.nightlySha,
+      old_main_sha: state.mainSha,
+      old_version: state.version,
+      repository: state.repository,
+      branch: state.branch,
+    },
+  );
+  assert.strictEqual(
+    resolveTurboInboundUpdate({
+      state,
+      release,
+      mainSha: state.mainSha,
+      nightlySha: state.nightlySha,
+      mainDistance: 0,
+    }).has_update,
+    "false",
   );
 });
 
 it("keeps official source tags separate from fork release tags", () => {
   const workflow = readTurboWorkflow();
 
-  assert.include(workflow, 'old_upstream_ref="refs/t3-turbo/official-tags/$OLD_TAG"');
-  assert.include(workflow, 'new_upstream_ref="refs/t3-turbo/official-tags/$NEW_TAG"');
-  assert.notInclude(workflow, '"refs/tags/$OLD_TAG:refs/tags/$OLD_TAG"');
-  assert.notInclude(workflow, '"refs/tags/$NEW_TAG:refs/tags/$NEW_TAG"');
+  assert.include(workflow, 'main_upstream_ref="refs/t3-turbo/official-heads/$UPSTREAM_BRANCH"');
+  assert.include(workflow, 'release_upstream_ref="refs/t3-turbo/official-tags/$OFFICIAL_TAG"');
+  assert.notInclude(workflow, '"refs/tags/$OFFICIAL_TAG:refs/tags/$OFFICIAL_TAG"');
 });
 
 it("uses only fork-owned GitHub credentials for an unsigned release", () => {
@@ -129,6 +223,9 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.include(buildWindows, "T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}");
   assert.notMatch(buildWindows, /AZURE_|CLERK_|T3CODE_RELAY_URL|--signed|turbo-release/gu);
   assert.include(publish, "permissions:\n      contents: write");
+  assert.include(workflow, "rebase --committer-date-is-author-date");
+  assert.include(workflow, "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage");
+  assert.notMatch(workflow, /uses: .*telegram/giu);
 });
 
 it("reports only exact paths changed by upstream and Turbo", () => {
@@ -163,12 +260,17 @@ it("resolves update metadata through the CLI", () => {
   try {
     const statePath = NodePath.join(directory, "upstream.json");
     const releasesPath = NodePath.join(directory, "releases.json");
+    const mainPath = NodePath.join(directory, "main.json");
+    const comparePath = NodePath.join(directory, "compare.json");
     NodeFS.writeFileSync(
       statePath,
       JSON.stringify({
         repository: "pingdotgg/t3code",
-        tag: "v0.0.32-nightly.20260802.980",
-        sha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+        branch: "main",
+        mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+        nightlyTag: "v0.0.32-nightly.20260802.980",
+        nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+        version: "0.0.32-nightly.20260802.980",
       }),
     );
     NodeFS.writeFileSync(
@@ -182,6 +284,18 @@ it("resolves update metadata through the CLI", () => {
         },
       ]),
     );
+    NodeFS.writeFileSync(
+      mainPath,
+      JSON.stringify({ sha: "ffffffffffffffffffffffffffffffffffffffff" }),
+    );
+    NodeFS.writeFileSync(
+      comparePath,
+      JSON.stringify({
+        status: "ahead",
+        ahead_by: 2,
+        base_commit: { sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" },
+      }),
+    );
 
     const stdout = NodeChildProcess.execFileSync(
       process.execPath,
@@ -192,16 +306,26 @@ it("resolves update metadata through the CLI", () => {
         releasesPath,
         "--state",
         statePath,
+        "--main",
+        mainPath,
+        "--compare",
+        comparePath,
       ],
       { encoding: "utf8" },
     );
     assert.deepStrictEqual(JSON.parse(stdout), {
       has_update: "true",
-      tag: "v0.0.33-nightly.20260803.1",
-      version: "0.0.33-nightly.20260803.1",
+      tag: "v0.0.33-nightly.20260803.1.turbo.2",
+      version: "0.0.33-nightly.20260803.1.turbo.2",
+      official_tag: "v0.0.33-nightly.20260803.1",
+      nightly_sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      source_sha: "ffffffffffffffffffffffffffffffffffffffff",
       old_tag: "v0.0.32-nightly.20260802.980",
-      old_sha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      old_nightly_sha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      old_main_sha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      old_version: "0.0.32-nightly.20260802.980",
       repository: "pingdotgg/t3code",
+      branch: "main",
     });
   } finally {
     NodeFS.rmSync(directory, { recursive: true, force: true });
