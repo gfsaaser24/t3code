@@ -22,10 +22,16 @@ import type { ReviewDiffPreviewInput, ReviewDiffPreviewResult } from "./review.t
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type { AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
 import type {
+  ProjectDeleteFileInput,
+  ProjectDeleteFileResult,
+  ProjectDuplicateFileInput,
+  ProjectDuplicateFileResult,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenameFileInput,
+  ProjectRenameFileResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -283,6 +289,13 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   wsBaseUrl: Schema.NullOr(Schema.String),
   bootstrapToken: Schema.optionalKey(Schema.String),
 });
+
+export const DesktopOfficialT3EnvironmentSchema = Schema.Struct({
+  descriptor: ExecutionEnvironmentDescriptor,
+  httpBaseUrl: Schema.String,
+  wsBaseUrl: Schema.String,
+});
+export type DesktopOfficialT3Environment = typeof DesktopOfficialT3EnvironmentSchema.Type;
 
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   alias: Schema.String,
@@ -964,6 +977,7 @@ export interface DesktopBridge {
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  discoverOfficialT3Environment?: () => Promise<DesktopOfficialT3Environment | null>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
@@ -1156,8 +1170,11 @@ export interface EnvironmentApi {
     ) => () => void;
   };
   projects: {
+    deleteFile: (input: ProjectDeleteFileInput) => Promise<ProjectDeleteFileResult>;
+    duplicateFile: (input: ProjectDuplicateFileInput) => Promise<ProjectDuplicateFileResult>;
     listEntries: (input: ProjectListEntriesInput) => Promise<ProjectListEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    renameFile: (input: ProjectRenameFileInput) => Promise<ProjectRenameFileResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
   };
