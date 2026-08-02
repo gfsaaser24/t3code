@@ -30,6 +30,7 @@ import {
   installUpdate,
   setUpdateChannel,
 } from "./methods/updates.ts";
+import { discoverOfficialT3 } from "./methods/officialT3Environment.ts";
 import {
   confirm,
   getAppBranding,
@@ -52,6 +53,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handleSync(getWindowFullscreenState);
   yield* ipc.handleSync(getLocalEnvironmentBootstraps);
   yield* ipc.handle(getLocalEnvironmentBearerToken);
+  yield* ipc.handle(discoverOfficialT3);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);

@@ -4,17 +4,19 @@ import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
-import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
+  useActiveEnvironmentId,
   useAllEnvironmentShellsBootstrapped,
   useProjects,
   useThreadShells,
 } from "../state/entities";
-import { useEnvironments } from "../state/environments";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { DesktopEnvironmentSwitcher } from "../components/desktop/DesktopEnvironmentSwitcher";
+import { selectLandingProject } from "./-_chat.index.logic";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
@@ -39,17 +41,15 @@ function ChatIndexRouteView() {
 function IndexDraftLanding() {
   const projects = useProjects();
   const threads = useThreadShells();
+  const activeEnvironmentId = useActiveEnvironmentId();
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);
   const [startState, setStartState] = useState({ failed: false, retryRequest: 0 });
 
   const mostRecentProject = useMemo(
-    () =>
-      bootstrapped
-        ? (sortScopedProjectsForSidebar(projects, threads, "updated_at")[0] ?? null)
-        : null,
-    [bootstrapped, projects, threads],
+    () => (bootstrapped ? selectLandingProject({ projects, threads, activeEnvironmentId }) : null),
+    [activeEnvironmentId, bootstrapped, projects, threads],
   );
 
   useEffect(() => {
@@ -106,9 +106,17 @@ function DraftStartError({ onRetry }: { readonly onRetry: () => void }) {
 
 function NoProjectsHero() {
   const openAddProject = useCallback(() => openCommandPalette({ open: "add-project" }), []);
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const switcherEnvironmentId = activeEnvironmentId ?? primaryEnvironmentId;
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+    <SidebarInset className="relative h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
+      {switcherEnvironmentId ? (
+        <div className="absolute top-3 right-4 z-10">
+          <DesktopEnvironmentSwitcher activeEnvironmentId={switcherEnvironmentId} />
+        </div>
+      ) : null}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
         <Empty className="flex-1">
           <div className="w-full max-w-lg px-8 py-12">
