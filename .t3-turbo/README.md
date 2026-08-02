@@ -27,7 +27,8 @@ and opens or updates an issue. A maintainer must reproduce the rebase, resolve a
 conflict, update `upstream.json`, and push the resulting stack to `turbo`. The workflow never
 chooses a conflict resolution.
 
-GitHub failure email works through normal account notification settings. Optional Telegram
-alerts use the `TURBO_TELEGRAM_ENABLED` variable plus the `TURBO_TELEGRAM_BOT_TOKEN` and
-`TURBO_TELEGRAM_CHAT_ID` secrets; the direct API notification is non-blocking and sends links to
-the failed run, review issue, and manual workflow page.
+GitHub failure email works through normal account notification settings. Optional alerts can use
+an existing OpenClaw Telegram channel through `TURBO_OPENCLAW_ENABLED` plus the
+`TURBO_OPENCLAW_HOOK_URL`, `TURBO_OPENCLAW_HOOK_TOKEN`, and
+`TURBO_OPENCLAW_TELEGRAM_TARGET` secrets. The hook call is non-blocking and sends links to the
+failed run, review issue, and manual workflow page.
