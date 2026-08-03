@@ -30,6 +30,41 @@ The file `.t3-turbo/upstream.json` is the workflow's durable checkpoint:
 | `nightlySha` | The exact commit to which that official Nightly tag resolves. |
 | `version`    | The last successfully published T3 Turbo updater version.     |
 
+## Recreating the pipeline in a fork
+
+The pipeline is fork-owned. It does not require access to Theo's GitHub account, an official T3
+signing service, or official T3 runtime credentials. A new fork needs these pieces before the
+first scheduled run:
+
+1. A read-only upstream source at `pingdotgg/t3code` (the repository and branch are recorded in
+   `.t3-turbo/upstream.json`).
+2. A default `main` branch containing this workflow and a `turbo` branch containing the same
+   workflow file plus the Turbo customization stack. The workflow blobs on both branches must be
+   identical; the schedule is read from `main`, while inbound rebases carry the file forward on
+   `turbo`.
+3. GitHub Actions enabled for the fork, with the workflow allowed to write contents at the
+   publish job and issues at the conflict-report job. The workflow-scoped `GITHUB_TOKEN` supplies
+   these permissions; do not add a personal access token as an Actions secret.
+4. The repository variable `TURBO_NIGHTLY_ENABLED=true`.
+5. Optional conflict assignment with `TURBO_NOTIFY_USER=<github-login>`.
+6. Optional OpenClaw secrets described in [Email and OpenClaw Telegram alerts](#email-and-openclaw-telegram-alerts).
+
+Verify the branch and workflow wiring before enabling the schedule:
+
+```powershell
+gh repo view gfsaaser24/t3code --json defaultBranchRef,isFork,parent
+git fetch origin main turbo
+git rev-parse origin/main:.github/workflows/turbo-nightly-sync.yml
+git rev-parse origin/turbo:.github/workflows/turbo-nightly-sync.yml
+gh variable get TURBO_NIGHTLY_ENABLED --repo gfsaaser24/t3code
+```
+
+The two workflow blob hashes must match. The durable checkpoint must be committed on `turbo`; the
+workflow updates it only inside the isolated candidate and publishes it with the candidate branch.
+Never hand-edit `mainSha`, `nightlySha`, or `version` to bypass a failed rebase. If the checkpoint
+is wrong, stop the schedule, compare it with the last successful release, and repair the branch
+as a reviewed commit.
+
 ## What happens every three hours
 
 ```text
@@ -85,6 +120,36 @@ The schedule is `20 */3 * * *`, meaning minute 20 of every third UTC hour. The r
 10. The workflow requires a valid `nightly.yml` update manifest for our fork-owned build.
 11. Only after every check succeeds does the publish job create a prerelease in
     `gfsaaser24/t3code` and advance `turbo` with `--force-with-lease`.
+
+The jobs are intentionally gated in sequence:
+
+```text
+sync_source
+    |
+    +-- conflict --> report artifact + issue; stop
+    |
+    +-- no update --> green run; build and publish skipped
+    |
+    +-- clean update --> build_wsl_node_pty --> build_windows --> publish --> advance turbo
+```
+
+`workflow_dispatch` has no inputs. A manual run asks the resolver to check the current upstream
+state; it is not a force-rebuild switch. When `main` and the Nightly tag already match the
+checkpoint, a successful run is expected to produce no installer.
+
+## Validating a candidate locally
+
+The source-aware resolver and report generator have focused tests. Run those before changing the
+workflow or its checkpoint logic:
+
+```powershell
+vp test run scripts/turbo-nightly-sync.test.ts
+```
+
+The Windows build job runs the same test after it checks out the rebased candidate. A full installer
+requires the Linux `node-pty` artifact and the Windows toolchain used by Actions; the supported
+packaging path is therefore the workflow's isolated build, not a local build against the live T3
+userdata directory.
 
 ## How versions work between Nightlies
 
@@ -150,15 +215,24 @@ may show SmartScreen. No Azure signing, Clerk, relay, or official T3 credentials
 - Branch advancement uses `--force-with-lease`, so an unexpected concurrent branch change stops
   the update instead of overwriting it.
 
+The nightly workflow uses standard GitHub-hosted runners (`ubuntu-24.04` for source, native
+dependency, publish, and notification jobs; `windows-2025` for the installer). The general CI
+workflow keeps the upstream-only Blacksmith labels for `pingdotgg/t3code` and selects available
+GitHub-hosted labels in this fork. A run that is queued indefinitely should be checked for a runner
+label regression before changing the rebase logic.
+
 ## Email and OpenClaw Telegram alerts
 
-GitHub can email workflow failures without any repository secret. In the GitHub account's
-notification settings, enable Actions email for failed workflows. Conflicts are deliberately
-reported as review issues instead of failed builds, so set the repository variable
-`TURBO_NOTIFY_USER` to the GitHub username that should be assigned and emailed.
+GitHub Actions email and OpenClaw alerts cover different states. GitHub can email workflow
+failures without any repository secret; enable Actions email for failed workflows in the GitHub
+account notification settings. Conflicts are deliberately reported as review issues rather than
+failed jobs, so `TURBO_NOTIFY_USER` is optional and only controls the issue assignee. The assignee
+receives GitHub's normal issue notifications according to their account settings.
 
 If an existing OpenClaw gateway already owns the Telegram channel, it can deliver the optional
-intervention alerts. Enable OpenClaw's authenticated `/hooks/agent` endpoint and configure:
+intervention alerts. The workflow notification job runs only when the source rebase conflicts or a
+sync/build/publish job fails. It does not send success or no-update messages. Enable OpenClaw's
+authenticated `/hooks/agent` endpoint and configure:
 
 | Kind     | Name                             | Value                                      |
 | -------- | -------------------------------- | ------------------------------------------ |
@@ -167,12 +241,41 @@ intervention alerts. Enable OpenClaw's authenticated `/hooks/agent` endpoint and
 | Secret   | `TURBO_OPENCLAW_HOOK_TOKEN`      | Dedicated OpenClaw hooks bearer token      |
 | Secret   | `TURBO_OPENCLAW_TELEGRAM_TARGET` | Existing OpenClaw Telegram user or chat ID |
 
-The final notification job asks OpenClaw to run an isolated notification turn with `deliver: true`
-on its configured Telegram channel. It does not install a third-party ClawHub skill, and
-notification failure cannot fail or roll back an update. The hook must be reachable from a GitHub
-hosted runner; a loopback-only or private tailnet URL needs a trusted tunnel or self-hosted runner.
-Alerts include the exact Actions run, the conflict issue when one exists, and the authenticated
-GitHub workflow page where a manual run can be confirmed.
+Configure those values without printing them into chat or logs:
+
+```powershell
+gh variable set TURBO_OPENCLAW_ENABLED --body true --repo gfsaaser24/t3code
+gh secret set TURBO_OPENCLAW_HOOK_URL --repo gfsaaser24/t3code
+gh secret set TURBO_OPENCLAW_HOOK_TOKEN --repo gfsaaser24/t3code
+gh secret set TURBO_OPENCLAW_TELEGRAM_TARGET --repo gfsaaser24/t3code
+```
+
+The hook token must be dedicated to this hook; it must not be the OpenClaw gateway token or the
+Telegram bot token. The endpoint must be reachable from a GitHub-hosted runner. A loopback-only or
+private tailnet URL needs a trusted HTTPS reverse proxy/tunnel or a self-hosted runner. OpenClaw
+should keep its hook restricted to the intended agent and reject unauthenticated requests.
+
+The final notification job asks OpenClaw to run an isolated notification turn with `deliver: true`,
+`channel: telegram`, and the configured target. The message includes the exact Actions run, the
+manual workflow page, and the conflict issue when one exists. This repository does not store Slack
+credentials or a Slack token. If the OpenClaw gateway is configured to mirror that Telegram alert
+into an authenticated Slack DM/channel, the mirror is performed by OpenClaw; GitHub still sends
+only the single authenticated hook request. Notification failure is deliberately
+`continue-on-error` and cannot fail or roll back an update.
+
+Verify wiring without exposing secret values:
+
+```powershell
+gh variable list --repo gfsaaser24/t3code
+gh secret list --repo gfsaaser24/t3code
+gh run list --workflow turbo-nightly-sync.yml --repo gfsaaser24/t3code --limit 5
+gh release list --repo gfsaaser24/t3code --limit 5
+```
+
+To test the gateway itself, use OpenClaw's trusted host or its existing control channel. Do not
+paste the bearer token into a workflow log, issue, Telegram message, or URL. A missing or rejected
+alert never changes the source candidate or release outcome, so the Actions run remains the source
+of truth.
 
 GitHub does not provide a safe dispatch-by-GET link. The workflow page is intentionally a
 confirm-then-run link; never place a personal access token in an email or Telegram URL.
@@ -206,3 +309,19 @@ Routine forward updates require nothing from us. Human review is needed only whe
 - we intentionally change the workflow and must copy the same YAML to both `main` and `turbo`.
 
 Until the issue is resolved, the current branch and release remain the last known-good version.
+
+## Troubleshooting by symptom
+
+| Symptom | First checks | Expected interpretation |
+| ------- | ------------ | ----------------------- |
+| No sync job appears | `TURBO_NIGHTLY_ENABLED`, Actions enabled, schedule time in UTC | A disabled variable causes the job to be skipped. |
+| Green run, no installer | `sync_source` outputs and checkpoint | Upstream is already current; this is the normal no-update path. |
+| Conflict issue/artifact | Issue body, `turbo-rebase-report.md`, unmerged paths | Resolve the Turbo commit stack, then rerun; the prior release is safe. |
+| Build failure | `build_wsl_node_pty` and `build_windows` logs | The candidate was not published and `turbo` was not advanced. |
+| No Telegram/Slack notice | notification job, variable/secrets names, hook reachability | OpenClaw delivery is optional and non-blocking; inspect the gateway separately. |
+| Run queued indefinitely | job runner label and Actions runner availability | Check for an accidental private runner label; do not rewrite history to work around it. |
+| Publish refuses to advance `turbo` | branch history and `--force-with-lease` message | Someone changed the branch concurrently; inspect before retrying. |
+
+For any failed run, start with the run URL and job logs. Do not manually create a release from a
+partial artifact or copy an official binary into the fork feed. The safe recovery is to fix the
+candidate or workflow, rerun it, and let the publish job atomically create the fork-owned release.
