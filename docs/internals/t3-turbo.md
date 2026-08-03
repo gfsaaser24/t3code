@@ -30,7 +30,7 @@ Directly launching two backend processes against the same `state.sqlite` is not
 a synchronization mechanism. Each process owns an in-memory read model, queues,
 reactors, providers, terminals, and live event streams. A second process can
 therefore make decisions from stale state even when SQLite accepts both writes.
-For that reason, ?use official data? means attaching to the official process.
+For that reason, "use official data" means attaching to the official process.
 
 ## Upstream nightlies
 

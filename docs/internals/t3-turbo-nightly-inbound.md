@@ -269,7 +269,6 @@ Verify wiring without exposing secret values:
 gh variable list --repo gfsaaser24/t3code
 gh secret list --repo gfsaaser24/t3code
 gh run list --workflow turbo-nightly-sync.yml --repo gfsaaser24/t3code --limit 5
-gh release list --repo gfsaaser24/t3code --limit 5
 ```
 
 To test the gateway itself, use OpenClaw's trusted host or its existing control channel. Do not
@@ -293,6 +292,7 @@ git rev-parse origin/main:.github/workflows/turbo-nightly-sync.yml
 git rev-parse origin/turbo:.github/workflows/turbo-nightly-sync.yml
 gh variable get TURBO_NIGHTLY_ENABLED --repo gfsaaser24/t3code
 gh run list --workflow turbo-nightly-sync.yml --repo gfsaaser24/t3code --limit 5
+gh release list --repo gfsaaser24/t3code --limit 5
 ```
 
 The two workflow blob hashes should match. A normal no-update run is green with the rebase, build,
