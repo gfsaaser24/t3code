@@ -17,11 +17,13 @@ import {
   selectLatestNightlyRelease,
 } from "./turbo-nightly-sync.ts";
 
-const readTurboWorkflow = () =>
+const readWorkflow = (filename: string) =>
   NodeFS.readFileSync(
-    NodeURL.fileURLToPath(new URL("../.github/workflows/turbo-nightly-sync.yml", import.meta.url)),
+    NodeURL.fileURLToPath(new URL(`../.github/workflows/${filename}`, import.meta.url)),
     "utf8",
   );
+
+const readTurboWorkflow = () => readWorkflow("turbo-nightly-sync.yml");
 
 it("keeps the pre-install sync bootstrap dependency-free", () => {
   const source = NodeFS.readFileSync(
@@ -230,6 +232,18 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.include(workflow, "deliver: true");
   assert.notMatch(workflow, /uses: .*telegram/giu);
   assert.notInclude(workflow, "vp run dist:desktop:artifact --");
+});
+
+it("uses public fork runners without deploying the official relay", () => {
+  const ciWorkflow = readWorkflow("ci.yml");
+  const relayWorkflow = readWorkflow("deploy-relay.yml");
+
+  assert.notMatch(ciWorkflow, /runs-on: blacksmith-/gu);
+  assert.strictEqual(ciWorkflow.match(/\|\| 'ubuntu-24\.04'/gu)?.length, 3);
+  assert.include(ciWorkflow, "|| 'macos-26'");
+  assert.include(ciWorkflow, "group: ci-${{ github.event.pull_request.number || github.ref }}");
+  assert.include(ciWorkflow, "cancel-in-progress: true");
+  assert.include(relayWorkflow, "if: github.repository == 'pingdotgg/t3code'");
 });
 
 it("reports only exact paths changed by upstream and Turbo", () => {
