@@ -24,13 +24,20 @@ jobs:
       name: production
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      DATABASE_HOST: ${{ vars.DATABASE_HOST }}
+      DATABASE_PORT: ${{ vars.DATABASE_PORT }}
+      DATABASE_NAME: ${{ vars.DATABASE_NAME }}
+      DATABASE_USER: ${{ vars.DATABASE_USER }}
+      # Legacy managed-PlanetScale fallback; DATABASE_* takes precedence.
       PLANETSCALE_ORGANIZATION: ${{ vars.PLANETSCALE_ORGANIZATION }}
+      # Optional tracing; an incomplete Axiom pair disables export.
       AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
+      # Optional iOS push; an incomplete APNS_* set disables the APNs resources and runtime.
       APNS_ENVIRONMENT: ${{ vars.APNS_ENVIRONMENT }}
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
@@ -70,12 +77,28 @@ jobs:
             args:
               - --filter=t3code-relay...
 
+      - name: Report optional relay services
+        if: steps.cloudflare_config.outputs.enabled == 'true'
+        shell: bash
+        env:
+          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${AXIOM_TOKEN:-}" || -z "${AXIOM_ORG_ID:-}" ]]; then
+            echo "::notice::Axiom is not fully configured; hosted tracing is disabled."
+          fi
+
+          if [[ -z "${APNS_PRIVATE_KEY:-}" || -z "${APNS_ENVIRONMENT:-}" || -z "${APNS_TEAM_ID:-}" || -z "${APNS_KEY_ID:-}" || -z "${APNS_BUNDLE_ID:-}" ]]; then
+            echo "::notice::APNs is not fully configured; mobile push is disabled."
+          fi
+
       - name: Deploy production relay stage
         if: steps.cloudflare_config.outputs.enabled == 'true'
         id: deploy
         run: vp run --filter t3code-relay deploy --stage prod --yes --github-output
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
           PLANETSCALE_API_TOKEN_ID: ${{ secrets.PLANETSCALE_API_TOKEN_ID }}
           PLANETSCALE_API_TOKEN: ${{ secrets.PLANETSCALE_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
