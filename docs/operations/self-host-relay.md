@@ -18,9 +18,22 @@ the environment's managed `cloudflared` endpoint. The relay therefore does not p
 filesystem, or agent traffic.
 
 `infra/relay/alchemy.run.ts` provisions the Worker, queues, Hyperdrive connection, retained DNS
-zones, runtime-scoped Cloudflare tokens, and Alchemy's Cloudflare state store. The production stage
-also owns the relay database and tracing resources described in
+zones, runtime-scoped Cloudflare tokens, and Alchemy's Cloudflare state store. APNs queues and Axiom
+tracing resources are provisioned only when their complete optional credentials are present. The
+production stage also owns the relay resources described in
 [the relay README](../../infra/relay/README.md).
+
+## Minimum stack
+
+The recommended minimum self-hosted deployment is:
+
+- **Cloudflare** for the relay Worker, Hyperdrive, managed Tunnel endpoints, DNS, and state.
+- **Clerk** for user, client, and CLI authentication.
+- **Supabase** for a hosted Postgres database reached through Hyperdrive.
+
+Axiom is optional; omit its variables and secret to run without hosted trace export. APNs is also
+optional. Android-only operators should omit every `APNS_*` value because APNs only serves Apple
+push notifications and Live Activities.
 
 ## Prerequisites
 
@@ -32,9 +45,7 @@ Before configuring GitHub, prepare:
   zone, but the deployment still needs both `RELAY_API_ZONE_NAME` and
   `RELAY_TUNNEL_ZONE_NAME`.
 - A Clerk application for web, desktop, mobile, and CLI authentication.
-- The current upstream relay's backing services: a PlanetScale Postgres organization, an Axiom
-  organization, and APNs credentials. These are not optional in the current
-  `infra/relay` stack even if a fork does not plan to use mobile notifications.
+- A Supabase project for the relay's Postgres database.
 - A GitHub `production` Actions environment. The values in this runbook can be repository-level
   variables and secrets; avoid defining stale values with the same names on the environment because
   environment values take precedence.
@@ -92,6 +103,42 @@ These permissions map to the Cloudflare APIs used by the stack:
 [Cloudflare Tunnel](https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/),
 and [DNS records](https://developers.cloudflare.com/api/resources/dns/subresources/records/).
 
+## Prepare Supabase
+
+1. In the [Supabase dashboard](https://supabase.com/dashboard), create a project, choose the
+   appropriate region for the fork's users and data, and save the database password.
+2. Open the project and select **Connect**. Choose **Session pooler**, then expand
+   **View parameters**. Use the pooled connection on port `5432`; it is the IPv4-compatible option
+   intended for persistent clients. Do not use transaction mode on port `6543`, because it does not
+   support prepared statements.
+3. Record the five displayed connection fields and map them to GitHub as follows:
+
+   | Supabase connection field | GitHub setting             | Example                                          |
+   | ------------------------- | -------------------------- | ------------------------------------------------ |
+   | Host                      | Variable `DATABASE_HOST`   | `aws-0-us-east-1.pooler.supabase.com`            |
+   | Port                      | Variable `DATABASE_PORT`   | `5432`                                           |
+   | Database                  | Variable `DATABASE_NAME`   | `postgres`                                       |
+   | User                      | Variable `DATABASE_USER`   | `postgres.<project-ref>`                         |
+   | Password                  | Secret `DATABASE_PASSWORD` | The password chosen when the project was created |
+
+   See [Supabase's connection guide](https://supabase.com/docs/guides/database/connecting-to-postgres)
+   for the current dashboard location and pooler formats.
+
+4. Before the first relay deploy, open **SQL Editor** in Supabase and run every
+   `infra/relay/migrations/postgres/*/migration.sql` file in directory-name order. Run each file as
+   a separate query, stop on the first error, and apply future migration files before deploying
+   relay code that depends on them.
+
+`DATABASE_*` takes precedence over the upstream managed-PlanetScale deployment. The legacy
+`PLANETSCALE_ORGANIZATION`, `PLANETSCALE_API_TOKEN_ID`, and `PLANETSCALE_API_TOKEN` settings do not
+map to Supabase connection fields; they remain only as a fallback for operators who still use the
+original Alchemy-managed PlanetScale path. Leave them unset for Supabase.
+
+A local Docker Postgres was rejected for this minimum stack because Hyperdrive must be able to
+reach its database origin through a public endpoint. A private local database can be exposed with
+additional Cloudflare networking, but that adds another always-on tunnel and host; Supabase's
+hosted pooler is already publicly reachable. See [Hyperdrive networking](https://developers.cloudflare.com/hyperdrive/configuration/firewall-and-networking-configuration/).
+
 ## Prepare Clerk
 
 Use a single Clerk application for the relay and released clients.
@@ -119,62 +166,73 @@ Use `t3-relay` for `CLERK_JWT_TEMPLATE` and `t3-code-relay` for
 See [T3 Connect](../internals/t3-connect.md) for the full Clerk redirect, native-auth, and passkey
 configuration.
 
-## Configure GitHub
+## Activation checklist
 
-Set these repository variables. The first six are the public self-host/release configuration:
+Add these values as repository settings, or to the GitHub `production` environment if that is where
+the fork keeps production configuration. Environment values take precedence over repository
+values.
 
-| Variable | Value |
-| --- | --- |
-| `CLOUDFLARE_ACCOUNT_ID` | Target Cloudflare account ID. This and the API token enable Connect in Release. |
-| `RELAY_DOMAIN` | Optional explicit API hostname, for example `relay.example.com`. |
-| `RELAY_API_ZONE_NAME` | Active Cloudflare zone containing the relay API hostname. |
-| `CLERK_PUBLISHABLE_KEY` | Clerk application's public key. |
-| `CLERK_JWT_TEMPLATE` | `t3-relay`, or the matching template name chosen by the operator. |
-| `CLERK_CLI_OAUTH_CLIENT_ID` | Public client ID of the Clerk CLI OAuth application. |
+### Required variables
 
-The unmodified upstream deployment also requires these repository variables:
+| Variable                    | Where the value comes from                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `CLOUDFLARE_ACCOUNT_ID`     | Cloudflare dashboard account overview. This and the API token enable Connect in Release.                     |
+| `RELAY_API_ZONE_NAME`       | Cloudflare **Websites** / DNS: the active zone containing the relay API hostname.                            |
+| `RELAY_TUNNEL_ZONE_NAME`    | Cloudflare **Websites** / DNS: the active zone for managed environment endpoints; it may equal the API zone. |
+| `CLERK_PUBLISHABLE_KEY`     | Clerk dashboard **API keys**.                                                                                |
+| `CLERK_JWT_AUDIENCE`        | The `aud` claim in the Clerk JWT template, normally `t3-code-relay`.                                         |
+| `CLERK_JWT_TEMPLATE`        | The Clerk JWT template name, normally `t3-relay`.                                                            |
+| `CLERK_CLI_OAUTH_CLIENT_ID` | Clerk dashboard public OAuth application client ID.                                                          |
+| `DATABASE_HOST`             | Supabase **Connect > Session pooler > View parameters** host.                                                |
+| `DATABASE_PORT`             | Supabase Session pooler port, normally `5432`.                                                               |
+| `DATABASE_NAME`             | Supabase Session pooler database, normally `postgres`.                                                       |
+| `DATABASE_USER`             | Supabase Session pooler user, normally `postgres.<project-ref>`.                                             |
 
-| Variable | Value |
-| --- | --- |
-| `RELAY_TUNNEL_ZONE_NAME` | Active zone used for managed environment endpoints; it may equal `RELAY_API_ZONE_NAME`. |
-| `CLERK_JWT_AUDIENCE` | Audience from the JWT template, normally `t3-code-relay`. |
-| `PLANETSCALE_ORGANIZATION` | PlanetScale organization containing the production relay database. |
-| `AXIOM_ORG_ID` | Axiom organization for relay/client tracing. |
-| `APNS_ENVIRONMENT` | `sandbox` or `production`. |
-| `APNS_TEAM_ID` | Apple Developer team ID. |
-| `APNS_KEY_ID` | APNs key ID. |
-| `APNS_BUNDLE_ID` | App bundle ID used for notifications. |
+### Required secrets
 
-Set `CLOUDFLARE_API_TOKEN` as a repository secret. It is the only secret used as the
-Release enablement gate. The deployment additionally requires these repository secrets:
+| Secret                 | Where the value comes from                                                                          |
+| ---------------------- | --------------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard **My Profile > API Tokens**, using the permissions above.                      |
+| `CLERK_SECRET_KEY`     | Clerk dashboard **API keys**.                                                                       |
+| `DATABASE_PASSWORD`    | Supabase project database password chosen during project creation or reset under database settings. |
 
-- `PLANETSCALE_API_TOKEN_ID`
-- `PLANETSCALE_API_TOKEN`
-- `AXIOM_TOKEN`
-- `CLERK_SECRET_KEY`
-- `APNS_PRIVATE_KEY`
+### Optional variables and secrets
 
-Example commands for the public release inputs:
+- `RELAY_DOMAIN` optionally overrides the derived `relay.<RELAY_API_ZONE_NAME>` hostname.
+- Axiom tracing requires both variable `AXIOM_ORG_ID` and secret `AXIOM_TOKEN`. Omit both to skip
+  Axiom dataset/token provisioning and all hosted trace export.
+- APNs requires variables `APNS_ENVIRONMENT`, `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_BUNDLE_ID`, and
+  secret `APNS_PRIVATE_KEY`. Omit the entire set to disable mobile push cleanly; Android-only
+  operators should leave them unset.
+- The legacy managed-PlanetScale fallback requires variable `PLANETSCALE_ORGANIZATION` and secrets
+  `PLANETSCALE_API_TOKEN_ID` and `PLANETSCALE_API_TOKEN`. They are not used when the complete
+  `DATABASE_*` set is present.
+
+Example commands for the required minimum stack:
 
 ```sh
 gh variable set CLOUDFLARE_ACCOUNT_ID --repo OWNER/REPO --body "<account-id>"
 gh variable set RELAY_API_ZONE_NAME --repo OWNER/REPO --body "example.com"
-gh variable set RELAY_DOMAIN --repo OWNER/REPO --body "relay.example.com"
+gh variable set RELAY_TUNNEL_ZONE_NAME --repo OWNER/REPO --body "tunnels.example.com"
 gh variable set CLERK_PUBLISHABLE_KEY --repo OWNER/REPO --body "pk_live_..."
+gh variable set CLERK_JWT_AUDIENCE --repo OWNER/REPO --body "t3-code-relay"
 gh variable set CLERK_JWT_TEMPLATE --repo OWNER/REPO --body "t3-relay"
 gh variable set CLERK_CLI_OAUTH_CLIENT_ID --repo OWNER/REPO --body "<oauth-client-id>"
+gh variable set DATABASE_HOST --repo OWNER/REPO --body "<session-pooler-host>"
+gh variable set DATABASE_PORT --repo OWNER/REPO --body "5432"
+gh variable set DATABASE_NAME --repo OWNER/REPO --body "postgres"
+gh variable set DATABASE_USER --repo OWNER/REPO --body "postgres.<project-ref>"
 gh secret set CLOUDFLARE_API_TOKEN --repo OWNER/REPO
+gh secret set CLERK_SECRET_KEY --repo OWNER/REPO
+gh secret set DATABASE_PASSWORD --repo OWNER/REPO
 ```
-
-Omit the `RELAY_DOMAIN` command when using the derived hostname. Set the deploy-only values
-the same way before running the production deployment.
 
 ## First deploy and later deploys
 
 The workflow [`deploy-relay.yml`](../../.github/workflows/deploy-relay.yml) supports both pushes
 to `main` and manual dispatch:
 
-1. Merge the workflow to the default branch and add all variables and secrets above.
+1. Apply the relay SQL migrations and add all **Required** variables and secrets above.
 2. Open **Actions > Deploy T3 Connect relay > Run workflow** and select `main`.
 3. Confirm **Detect Cloudflare configuration** reports enabled.
 4. Confirm **Deploy production relay stage** completes and reports an HTTPS `relay_url`.
@@ -199,7 +257,8 @@ has enabled Connect.
   jobs receive empty Connect build variables and skip the relay tracing artifact, so installers can
   still be built without Connect.
 - If both are present, Release reads the deployed `prod` Alchemy state, uploads the
-  short-lived relay client tracing configuration, derives the public relay URL, and injects
+  relay client tracing configuration (empty when Axiom is disabled), derives the public relay URL,
+  and injects
   `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
   `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`, and `T3CODE_RELAY_URL` into desktop, CLI, and
   hosted-web builds.
@@ -220,14 +279,16 @@ Deploy the relay successfully before the first Connect-enabled release.
    Expected response:
 
    ```json
-   {"ok":true,"service":"relay"}
+   { "ok": true, "service": "relay" }
    ```
 
-2. In Cloudflare, confirm the relay Worker has its custom domain, two relay queues exist,
-   Hyperdrive points to the production database, and the Alchemy state-store Worker exists.
+2. In Cloudflare, confirm the relay Worker has its custom domain, Hyperdrive points to the Supabase
+   session-pooler host, and the Alchemy state-store Worker exists. Two relay queues should exist
+   only when APNs is configured.
 3. Inspect the next Release run:
    - **Resolve T3 Connect public config** succeeds rather than skips.
-   - Desktop, CLI, and hosted-web jobs download the relay tracing artifact.
+   - Desktop, CLI, and hosted-web jobs download the relay tracing artifact; without Axiom, it
+     contains empty tracing values and clients do not export traces.
 4. Install a resulting build, sign in under **Settings > Connections**, and link an environment.
    `t3 connect status --json` should report the link and managed endpoint.
 5. Connect from another client, then confirm ordinary API/WebSocket requests reach the managed

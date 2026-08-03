@@ -59,7 +59,7 @@ const apnsSigningKeyPair = NodeCrypto.generateKeyPairSync("ec", {
 const signingConfig = RelayConfiguration.RelayConfiguration.of({
   ...config,
   apns: {
-    ...config.apns,
+    ...config.apns!,
     privateKey: Redacted.make(apnsSigningKeyPair.privateKey),
   },
 });
