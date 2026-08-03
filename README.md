@@ -55,6 +55,71 @@ brew install --cask t3-code
 yay -S t3code-bin
 ```
 
+## T3 Turbo downstream
+
+This fork also builds **T3 Turbo**, our desktop-only downstream variant. Turbo ingests official
+T3 source; it never downloads or republishes an official installer. The scheduled
+[`T3-Turbo Nightly Sync`](./.github/workflows/turbo-nightly-sync.yml) workflow:
+
+1. checks `pingdotgg/t3code:main` and the newest official Nightly tag every three hours;
+2. verifies that both refs move forward from the checkpoint in
+   [`.t3-turbo/upstream.json`](./.t3-turbo/upstream.json);
+3. rebases the small Turbo commit stack in an isolated worktree;
+4. builds the Linux WSL native dependency and an unsigned Windows x64 installer;
+5. publishes the installer, blockmap, and `nightly.yml` only in this fork; and
+6. advances the `turbo` branch only after publication succeeds.
+
+If Git reports a conflict, the workflow leaves the current branch and release untouched, uploads
+a conflict report, and opens or updates a review issue. It never guesses whether our change or
+upstream's change should win.
+
+### Configure the ingestion workflow
+
+The workflow file must be identical on both `main` and `turbo`. `main` owns the schedule, while
+`turbo` carries the workflow across upstream rebases. Enable the pipeline with the required
+repository variable:
+
+```powershell
+gh variable set TURBO_NIGHTLY_ENABLED --body true --repo gfsaaser24/t3code
+```
+
+Optionally assign conflict issues to a GitHub account:
+
+```powershell
+gh variable set TURBO_NOTIFY_USER --body gfsaaser24 --repo gfsaaser24/t3code
+```
+
+No official T3 credentials or signing secrets are required for ingestion or packaging. Do not
+store a personal access token as an Actions secret for this workflow. GitHub supplies its scoped
+`GITHUB_TOKEN` to read public upstream metadata, open conflict issues, publish fork releases, and
+advance the fork branch.
+
+OpenClaw intervention alerts are optional. When used, configure
+`TURBO_OPENCLAW_ENABLED=true` and the three repository secrets named in the
+[nightly inbound runbook](./docs/internals/t3-turbo-nightly-inbound.md#email-and-openclaw-telegram-alerts).
+
+### Run and inspect it
+
+The local commands below assume GitHub CLI is authenticated with `gh auth login`.
+
+```powershell
+# Ask the workflow to check official main and Nightly source now.
+gh workflow run turbo-nightly-sync.yml --ref main --repo gfsaaser24/t3code
+
+# Inspect runs and published installers.
+gh run list --workflow turbo-nightly-sync.yml --repo gfsaaser24/t3code --limit 5
+gh release list --repo gfsaaser24/t3code --limit 5
+```
+
+A manual dispatch is a source check, not an unconditional rebuild. When the recorded upstream
+`main` commit and Nightly tag are already current, the run succeeds without producing another
+installer; the workflow currently has no force-rebuild input. A changed upstream ref produces a
+deterministic `.turbo.N` version and a new installer on the fork's
+[Releases page](https://github.com/gfsaaser24/t3code/releases).
+
+For the complete state model, version rules, conflict recovery, updater behavior, permissions,
+and troubleshooting checks, read [T3 Turbo nightly inbound updates](./docs/internals/t3-turbo-nightly-inbound.md).
+
 ## Some notes
 
 We are very very early in this project. Expect bugs.
