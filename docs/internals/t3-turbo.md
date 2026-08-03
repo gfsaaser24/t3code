@@ -47,6 +47,29 @@ Turbo never installs official T3 Code binary assets. A source-sync workflow:
 in a Turbo build. `GITHUB_REPOSITORY` is intentionally ignored, and
 `pingdotgg/t3code` is rejected as a Turbo feed.
 
+The complete operator procedure is documented in
+[T3 Turbo nightly inbound updates](./t3-turbo-nightly-inbound.md). It covers fork bootstrap,
+checkpoint validation, manual checks, conflict recovery, runner selection, release outputs, and
+OpenClaw/Telegram alert delivery.
+
+### Build lifecycle at a glance
+
+The scheduled workflow runs from the fork's `main` branch, while the candidate source and Turbo
+customizations live on `turbo`:
+
+1. Resolve the newest official Nightly and the current upstream `main` commit.
+2. Compare both against `.t3-turbo/upstream.json` and stop cleanly when there is no update.
+3. Rebase Turbo commits in an isolated worktree; never modify the live branch during conflict
+   detection.
+4. Build the Linux WSL `node-pty` prebuild, validate the source-aware tooling, and produce an
+   unsigned Windows NSIS installer with a fork-owned `nightly.yml` feed.
+5. Publish the installer, blockmap, and manifest only to `gfsaaser24/t3code`, then advance
+   `turbo` with a lease check.
+
+Conflict or build failure leaves the last published Turbo branch and release intact. A manual
+workflow dispatch checks for source changes; it does not force a new installer when the checkpoint
+is already current.
+
 ## Current task list
 
 - [x] File preview breadcrumb navigation
