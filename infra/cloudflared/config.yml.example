@@ -1,0 +1,34 @@
+# Locally managed tunnel example. Copy to /etc/cloudflared/config.yml, replace all markers there,
+# and keep the rendered file and credential JSON out of Git.
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
+
+# QUIC is preferred; cloudflared falls back according to its supported transport behavior.
+protocol: quic
+
+ingress:
+  # Active locked-stack application route. Protect the hostname with Cloudflare Access before
+  # publishing its DNS route, and keep the T3 server on loopback.
+  - hostname: app.t3turbo.pro
+    service: http://127.0.0.1:<T3_SERVER_PORT>
+    originRequest:
+      connectTimeout: 10s
+      noHappyEyeballs: false
+
+  # MUTUALLY EXCLUSIVE FALLBACK ONLY. Do not enable while relay.t3turbo.pro is a Worker custom
+  # domain. This rule is only for a future architecture with a local relay HTTP origin.
+  # - hostname: relay.t3turbo.pro
+  #   service: http://127.0.0.1:<LOCAL_RELAY_PORT>
+
+  # Optional SSH route. Create a Cloudflare Access application/policy before adding its DNS route.
+  # Clients must use a supported Access/cloudflared SSH flow.
+  # - hostname: ssh.t3turbo.pro
+  #   service: ssh://127.0.0.1:22
+
+  # Optional private PostgreSQL route. This is not the locked public-TLS path. For Hyperdrive,
+  # configure the documented private-database Tunnel integration and Access restrictions first.
+  # - hostname: db-private.t3turbo.pro
+  #   service: tcp://127.0.0.1:5432
+
+  # Required catch-all: never fall through to an unintended local service.
+  - service: http_status:404

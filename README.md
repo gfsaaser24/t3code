@@ -1,3 +1,27 @@
+# T3 Turbo — Self-Hosted Infrastructure (`infra/t3turbo-relay`)
+
+> **This branch is the T3 Turbo operator repo.** It carries the complete, versioned
+> kit for standing up the self-hosted stack: Cloudflare relay + tunnel, Clerk auth,
+> and self-hosted Supabase Postgres — no Axiom, no APNs (Android-only operator).
+
+## Start here
+
+| What                                                                           | Where                                                            |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Master runbook (bring-up order, architecture, threat model, secrets inventory) | [`infra/README.md`](infra/README.md)                             |
+| Rebase seam — upstream files we modify + conflict guidance                     | [`SEAM.md`](SEAM.md)                                             |
+| Supabase: schema, seed, RLS, setup rules                                       | [`infra/supabase/`](infra/supabase/)                             |
+| Cloudflare Tunnel configs + systemd unit                                       | [`infra/cloudflared/`](infra/cloudflared/)                       |
+| GitHub/Cloudflare vars & secrets checklist (names only)                        | [`infra/cloudflare/CHECKLIST.md`](infra/cloudflare/CHECKLIST.md) |
+| Relay deploy guide (Hyperdrive, Clerk, verification)                           | [`infra/relay/DEPLOY.md`](infra/relay/DEPLOY.md)                 |
+
+**Hard rule:** no secret values in this repository — ever. Placeholders in `<angle brackets>`
+are resolved from the operator's private vault at deploy time.
+
+---
+
+_Upstream T3 Code README follows below (kept for rebase context)._
+
 # T3 Code
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
