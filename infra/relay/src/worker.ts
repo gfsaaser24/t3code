@@ -6,6 +6,7 @@ import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
@@ -110,31 +111,32 @@ export const ApiLive = Api.make(
     // 1. Provision Infrastructure for the Worker to use
     //
     const { relayPublicOrigin, stage } = yield* RelayDeploymentConfig;
-    const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
-    const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
+    const apns = yield* RelayConfiguration.ApnsCredentialsConfig;
+    const apnsResources =
+      apns === null
+        ? null
+        : {
+            deliveryQueue: yield* RelayApnsDeliveryQueue,
+            deadLetterQueue: yield* RelayApnsDeliveryDeadLetterQueue,
+          };
+    const randomApnsDeliveryJobSigningSecret =
+      apns === null ? null : yield* ApnsDeliveryJobSigningSecret;
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
-    const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
     const observability = yield* RelayObservability;
 
     //
     // 2. Create bindings
     //
-    const environment = yield* Config.schema(
-      RelayConfiguration.ApnsEnvironment,
-      "APNS_ENVIRONMENT",
-    );
-    const apnsTeamId = yield* Config.string("APNS_TEAM_ID");
-    const apnsKeyId = yield* Config.string("APNS_KEY_ID");
-    const apnsBundleId = yield* Config.string("APNS_BUNDLE_ID");
-    const apnsPrivateKey = yield* Config.redacted("APNS_PRIVATE_KEY");
-    const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
-    const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
-
-    const axiomDatasetName = yield* observability.traces.name;
-    const axiomIngestToken = yield* observability.workerIngestToken.token;
-    const axiomTracesEndpoint = yield* observability.traces.otelTracesEndpoint;
+    const apnsDeliveryJobSigningSecret =
+      randomApnsDeliveryJobSigningSecret === null
+        ? null
+        : yield* randomApnsDeliveryJobSigningSecret;
+    const apnsDeliveryQueueSender =
+      apnsResources === null
+        ? null
+        : yield* Cloudflare.Queues.WriteQueue(apnsResources.deliveryQueue);
 
     const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
     const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
@@ -159,14 +161,11 @@ export const ApiLive = Api.make(
     const loadSettings = Effect.gen(function* () {
       return RelayConfiguration.RelayConfiguration.of({
         relayIssuer: relayPublicOrigin,
-        apns: {
-          environment,
-          teamId: apnsTeamId,
-          keyId: apnsKeyId,
-          bundleId: apnsBundleId,
-          privateKey: apnsPrivateKey,
-        },
-        apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
+        apns,
+        apnsDeliveryJobSigningSecret:
+          apnsDeliveryJobSigningSecret === null
+            ? Redacted.make("apns-disabled")
+            : yield* apnsDeliveryJobSigningSecret,
         clerkSecretKey,
         clerkPublishableKey,
         clerkJwtAudience,
@@ -177,13 +176,34 @@ export const ApiLive = Api.make(
       });
     });
 
-    const relayTraceLayer = Layer.unwrap(
-      Effect.all({
-        tracesDatasetName: axiomDatasetName,
-        tracesEndpoint: axiomTracesEndpoint,
-        ingestToken: axiomIngestToken,
-      }).pipe(Effect.map(makeRelayTraceLayer)),
-    );
+    const relayTraceLayer = yield* Effect.gen(function* () {
+      if (!observability.enabled) {
+        return Layer.empty;
+      }
+      const axiomDatasetName = yield* observability.traces.name;
+      const axiomIngestToken = yield* observability.workerIngestToken.token;
+      const axiomTracesEndpoint = yield* observability.traces.otelTracesEndpoint;
+      return Layer.unwrap(
+        Effect.all({
+          tracesDatasetName: axiomDatasetName,
+          tracesEndpoint: axiomTracesEndpoint,
+          ingestToken: axiomIngestToken,
+        }).pipe(Effect.map(makeRelayTraceLayer)),
+      );
+    });
+
+    const apnsRuntimeLayer =
+      apnsDeliveryQueueSender === null
+        ? ApnsDeliveries.layerDisabled
+        : ApnsDeliveries.layer.pipe(
+            Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
+            Layer.provideMerge(
+              ApnsDeliveryQueue.layerCloudflareQueues(
+                apnsDeliveryQueueSender,
+                alchemyRuntimeContext,
+              ),
+            ),
+          );
 
     const runtimeLayer = Layer.empty.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
@@ -199,11 +219,7 @@ export const ApiLive = Api.make(
         ),
       ),
       Layer.provideMerge(DpopProofs.layer),
-      Layer.provideMerge(ApnsDeliveries.layer),
-      Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
-      Layer.provideMerge(
-        ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
-      ),
+      Layer.provideMerge(apnsRuntimeLayer),
       Layer.provideMerge(AgentActivityRows.layer),
       Layer.provideMerge(Devices.layer),
       Layer.provideMerge(EnvironmentCredentials.layer),
@@ -233,27 +249,29 @@ export const ApiLive = Api.make(
       Layer.provide(runtimeLayer),
     );
 
-    yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
-      apnsDeliveryQueue,
-      {
-        batchSize: 10,
-        maxRetries: 5,
-        maxWaitTime: "5 seconds",
-        retryDelay: "30 seconds",
-        deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
-      },
-      (stream) =>
-        stream.pipe(
-          Stream.withSpan("relay.apn_delivery_queue.process_batch"),
-          Stream.runForEach((message) =>
-            ApnsDeliveries.ApnsDeliveries.pipe(
-              Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
-              Effect.withSpan("relay.apn_delivery_queue.process_message"),
+    if (apnsResources !== null) {
+      yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
+        apnsResources.deliveryQueue,
+        {
+          batchSize: 10,
+          maxRetries: 5,
+          maxWaitTime: "5 seconds",
+          retryDelay: "30 seconds",
+          deadLetterQueue: apnsResources.deadLetterQueue.queueName as unknown as string,
+        },
+        (stream) =>
+          stream.pipe(
+            Stream.withSpan("relay.apn_delivery_queue.process_batch"),
+            Stream.runForEach((message) =>
+              ApnsDeliveries.ApnsDeliveries.pipe(
+                Effect.flatMap((deliveries) => deliveries.processSignedJob(message.body)),
+                Effect.withSpan("relay.apn_delivery_queue.process_message"),
+              ),
             ),
+            Effect.provide(runtimeLayer),
           ),
-          Effect.provide(runtimeLayer),
-        ),
-    );
+      );
+    }
 
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
       DpopProofs.DpopProofReplay.pipe(

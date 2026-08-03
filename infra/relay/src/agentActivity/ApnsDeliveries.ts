@@ -584,9 +584,9 @@ interface LiveActivityDeliveryTarget {
 // DeviceTokenNotForTopic/BadDeviceToken, so per-device values override the
 // relay-wide defaults when present.
 function credentialsForTarget(
-  credentials: RelayConfiguration.RelayConfiguration["Service"]["apns"],
+  credentials: RelayConfiguration.ApnsCredentials,
   target: LiveActivityDeliveryTarget,
-): RelayConfiguration.RelayConfiguration["Service"]["apns"] {
+): RelayConfiguration.ApnsCredentials {
   return {
     ...credentials,
     ...(target.bundle_id ? { bundleId: target.bundle_id } : {}),
@@ -697,6 +697,10 @@ export const make = Effect.gen(function* () {
   const liveActivities = yield* LiveActivities.LiveActivities;
   const deliveryQueue = yield* ApnsDeliveryQueue.ApnsDeliveryQueue;
   const config = yield* RelayConfiguration.RelayConfiguration;
+  const apnsCredentials = config.apns;
+  if (apnsCredentials === null) {
+    return yield* Effect.die("APNs deliveries initialized without APNs configuration");
+  }
   const apns = yield* Apns.ApnsClient;
   const activityRows = yield* AgentActivityRows.AgentActivityRows;
 
@@ -907,7 +911,7 @@ export const make = Effect.gen(function* () {
     }
     const result = yield* apns
       .sendLiveActivityRequest({
-        credentials: credentialsForTarget(config.apns, input.target),
+        credentials: credentialsForTarget(apnsCredentials, input.target),
         request,
         issuedAtUnixSeconds: epochSeconds,
       })
@@ -1045,7 +1049,7 @@ export const make = Effect.gen(function* () {
     }
     const result = yield* apns
       .sendPushNotificationRequest({
-        credentials: credentialsForTarget(config.apns, input.target),
+        credentials: credentialsForTarget(apnsCredentials, input.target),
         request,
         issuedAtUnixSeconds: epochSeconds,
       })
@@ -1277,3 +1281,26 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ApnsDeliveries, make);
+
+const apnsDisabledResult = (deviceId: string, kind: RelayDeliveryKind): RelayDeliveryResult => ({
+  deviceId,
+  kind,
+  ok: true,
+  apnsStatus: null,
+  apnsReason: "APNs disabled.",
+  apnsId: null,
+});
+
+export const layerDisabled = Layer.succeed(
+  ApnsDeliveries,
+  ApnsDeliveries.of({
+    sendForTarget: () => Effect.succeed(null),
+    sendPushNotificationForTarget: () => Effect.succeed(null),
+    sendLiveActivity: (input) =>
+      Effect.succeed(apnsDisabledResult(input.target.device_id, input.kind)),
+    sendPushNotification: (input) =>
+      Effect.succeed(apnsDisabledResult(input.target.device_id, "push_notification")),
+    processSignedJob: () =>
+      Effect.succeed(apnsDisabledResult("apns-disabled", "push_notification")),
+  }),
+);
