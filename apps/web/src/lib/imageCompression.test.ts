@@ -123,7 +123,9 @@ describe("compressImageForStash", () => {
   });
 
   it("reports too-large when even the smallest encoding overflows the budget", async () => {
-    const { close } = stubCanvasPipeline(() => 8_000_000);
+    // A blob this large always expands beyond the character budget when
+    // base64-encoded, without allocating an artificial 8 MB on every pass.
+    const { close } = stubCanvasPipeline(() => MAX_STASH_IMAGE_DATA_URL_CHARS);
 
     const result = await compressImageForStash(makeFile(9_000_000));
 
