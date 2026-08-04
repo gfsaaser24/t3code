@@ -104,11 +104,14 @@ export const resolveNightlyReleaseMetadata = (
 ) => {
   const shortSha = sha.slice(0, 12);
   const version = `${baseVersion}-nightly.${date}.${runNumber}`;
+  // T3 Turbo Fork Policy: releases are named "T3 Turbo MM-DD-YY"; the date is
+  // the 11:00 PM ET upstream-ingestion cutoff.
+  const policyDate = `${date.slice(4, 6)}-${date.slice(6, 8)}-${date.slice(2, 4)}`;
   return {
     baseVersion,
     version,
     tag: `v${version}`,
-    name: `T3 Code Nightly ${version} (${shortSha})`,
+    name: `T3 Turbo ${policyDate}`,
     shortSha,
   };
 };
