@@ -1,4 +1,28 @@
-# Upstream seam
+# Fork and upstream seam
+
+## Branch preservation contract
+
+`infra/t3turbo-relay` is the durable operator branch. Sync it by merging the newest accepted
+`origin/main` into a temporary branch based on `origin/infra/t3turbo-relay`, reviewing the combined
+tree, and then advancing the relay branch with a normal fast-forward or reviewed merge. Never
+force-push, reset, or rebase the published relay branch in a way that removes its operator commits.
+
+Before updating the branch, both commands below must succeed against the reviewed candidate:
+
+```sh
+git merge-base --is-ancestor origin/main <candidate>
+git merge-base --is-ancestor origin/infra/t3turbo-relay <candidate>
+```
+
+This preserves two independent inputs: newer application/relay fixes from `main`, and the
+Cloudflare, tunnel, Supabase, and operator documentation commits owned by this branch. A clean merge
+does not make either side optional.
+
+The production relay workflow currently runs on pushes to `main`. Until that workflow is deliberately
+moved to this branch, merging here updates the operator source of truth without triggering a
+production deployment. Record that distinction in every handoff.
+
+## Relay customization seam
 
 `git show --name-status 774c53df b4904491` identifies these 16 unique upstream-owned paths. The
 label is the nature of this fork's change.
@@ -29,7 +53,7 @@ label is the nature of this fork's change.
 - **Optional** `infra/relay/src/observability.ts` — Axiom resources require the complete pair.
 - **Optional** `infra/relay/src/worker.ts` — APNs queues and tracing layers are conditional.
 
-## Nightly sync conflicts
+## Upstream and fork-main sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the
 fork's whole file over a newer upstream implementation. Drop a fork hunk when upstream now provides

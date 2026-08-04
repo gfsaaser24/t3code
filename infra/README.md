@@ -339,9 +339,12 @@ Run these checks after upgrades and at least weekly:
 - Clerk sign-in, JWT audience, and CLI OAuth callback.
 - GitHub production-environment secret review and stale credential removal.
 
-## Rebase safety and state ownership
+## Branch-sync safety and state ownership
 
-The branch is safe to rebase only when code and operator state remain separate.
+Keep code and operator state separate. Update this published operator branch by merging reviewed
+`main` commits into it; do not force-push or rewrite away the branch's runbook history. A temporary
+candidate may be rebased for conflict analysis, but the final update must preserve both the prior
+relay branch and accepted `main` as ancestors.
 
 Lives in Git:
 
@@ -365,9 +368,9 @@ Lives in GitHub secrets, the server, or the password manager:
 - API tokens, Clerk secret, database passwords, Supabase `.env`, TLS private keys, tunnel
   credentials, and backup-encryption material.
 
-Never resolve a rebase conflict by committing `.env`, Alchemy state, a Wrangler state directory,
+Never resolve a sync conflict by committing `.env`, Alchemy state, a Wrangler state directory,
 tunnel JSON, `cert.pem`, a database dump, a private key, or a rendered connection string. Recheck
-workflow input names against the workflow files after every upstream rebase. A rebase must not
+workflow input names against the workflow files after every upstream sync. A sync must not
 delete or recreate retained Cloudflare or PostgreSQL state.
 
 ## Secrets inventory

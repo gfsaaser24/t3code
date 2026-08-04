@@ -3,17 +3,22 @@
 > **This branch is the T3 Turbo operator repo.** It carries the complete, versioned
 > kit for standing up the self-hosted stack: Cloudflare relay + tunnel, Clerk auth,
 > and self-hosted Supabase Postgres — no Axiom, no APNs (Android-only operator).
+> Accepted fork changes from `main` must be merged into this branch without rebasing
+> away or replacing its operator commits. Desktop releases are built from `turbo`,
+> not from this branch.
 
 ## Start here
 
-| What                                                                           | Where                                                            |
-| ------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| Master runbook (bring-up order, architecture, threat model, secrets inventory) | [`infra/README.md`](infra/README.md)                             |
-| Rebase seam — upstream files we modify + conflict guidance                     | [`SEAM.md`](SEAM.md)                                             |
-| Supabase: schema, seed, RLS, setup rules                                       | [`infra/supabase/`](infra/supabase/)                             |
-| Cloudflare Tunnel configs + systemd unit                                       | [`infra/cloudflared/`](infra/cloudflared/)                       |
-| GitHub/Cloudflare vars & secrets checklist (names only)                        | [`infra/cloudflare/CHECKLIST.md`](infra/cloudflare/CHECKLIST.md) |
-| Relay deploy guide (Hyperdrive, Clerk, verification)                           | [`infra/relay/DEPLOY.md`](infra/relay/DEPLOY.md)                 |
+| What                                                                           | Where                                                                  |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
+| Master runbook (bring-up order, architecture, threat model, secrets inventory) | [`infra/README.md`](infra/README.md)                                   |
+| Branch/upstream seam — preserved files + conflict guidance                     | [`SEAM.md`](SEAM.md)                                                   |
+| Supabase: schema, seed, RLS, setup rules                                       | [`infra/supabase/`](infra/supabase/)                                   |
+| Cloudflare Tunnel configs + systemd unit                                       | [`infra/cloudflared/`](infra/cloudflared/)                             |
+| GitHub/Cloudflare vars & secrets checklist (names only)                        | [`infra/cloudflare/CHECKLIST.md`](infra/cloudflare/CHECKLIST.md)       |
+| Last public production-state audit                                             | [`infra/cloudflare/STATUS.md`](infra/cloudflare/STATUS.md)             |
+| Relay deploy guide (Hyperdrive, Clerk, verification)                           | [`infra/relay/DEPLOY.md`](infra/relay/DEPLOY.md)                       |
+| OpenClaw branch/build preservation rule                                        | [`OPENCLAW-T3-TURBO-FORK-POLICY.md`](OPENCLAW-T3-TURBO-FORK-POLICY.md) |
 
 **Hard rule:** no secret values in this repository — ever. Placeholders in `<angle brackets>`
 are resolved from the operator's private vault at deploy time.
@@ -86,8 +91,8 @@ T3 source; it never downloads or republishes an official installer. The schedule
 [`T3-Turbo Nightly Sync`](./.github/workflows/turbo-nightly-sync.yml) workflow:
 
 1. checks `pingdotgg/t3code:main` and the newest official Nightly tag every three hours;
-2. verifies that both refs move forward from the checkpoint in
-   [`.t3-turbo/upstream.json`](./.t3-turbo/upstream.json);
+2. verifies that both refs move forward from the `.t3-turbo/upstream.json`
+   checkpoint stored on the `turbo` branch;
 3. rebases the small Turbo commit stack in an isolated worktree;
 4. builds the Linux WSL native dependency and an unsigned Windows x64 installer;
 5. publishes the installer, blockmap, and `nightly.yml` only in this fork; and

@@ -1,5 +1,8 @@
 # Cloudflare and GitHub Actions checklist
 
+For observed production state and the remaining account-authenticated checks, see
+[`STATUS.md`](./STATUS.md). Treat that file as a dated observation, not desired-state configuration.
+
 This file is generated from the names referenced by `.github/workflows/deploy-relay.yml` and
 `.github/workflows/release.yml` at this branch point. The lists contain names only so the file can
 be shared safely. Values belong in GitHub repository settings or the `production` environment,
