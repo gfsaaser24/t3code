@@ -129,10 +129,16 @@
       "summary": "The source/rendered Markdown choice persists as a panel-independent client preference.",
       "checks": [
         {
+          "path": "apps/web/src/markdownPreviewPreference.ts",
+          "markers": [
+            "export const MARKDOWN_PREVIEW_STORAGE_KEY = \"t3code.renderMarkdown\";",
+            "export function useMarkdownPreviewMode()"
+          ]
+        },
+        {
           "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
           "markers": [
-            "const RENDER_MARKDOWN_STORAGE_KEY = \"t3code.renderMarkdown\";",
-            "const [renderMarkdownPreferred, setRenderMarkdownPreferred] = useLocalStorage(",
+            "const [markdownPreviewMode, setMarkdownPreviewMode] = useMarkdownPreviewMode();",
             "Show rendered markdown",
             "Show markdown source"
           ]
