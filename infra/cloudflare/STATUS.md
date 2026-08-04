@@ -28,6 +28,8 @@ treat this snapshot as configuration.
   policy protects non-public relay routes and whether that matches the intended client design.
 - Public checks cannot identify the Worker script name, Hyperdrive configuration, tunnel UUID,
   connector health, DNS record ownership, or active Alchemy state.
+- GitHub reports `infra/t3turbo-relay` as unprotected. Add branch protection before making it the
+  production deployment trigger or allowing automation to advance it.
 - No authenticated Cloudflare CLI session or `CLOUDFLARE_*` environment credentials were available
   in the audit workspace. Finish the account inventory from Cloudflare using a read-only token; do
   not copy credentials into this repository or command output.
