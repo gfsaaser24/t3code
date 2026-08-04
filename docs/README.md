@@ -6,6 +6,7 @@
 - [Permission modes](./user/permission-modes.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Chat panes](./user/chat-panes.md)
+- [Import official T3 Code data](./user/official-t3-import.md)
 - [Markdown files](./user/markdown-files.md)
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)

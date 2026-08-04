@@ -110,28 +110,25 @@ it("rejects ambiguous lifecycles and non-portable repository paths", () => {
   );
 });
 
-it("verifies the checked-in Turbo manifest and labels multi-chat as planned", () => {
+it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat seam", () => {
   const result = verifyTurboCustomizationManifest({ root: repositoryRoot });
-  const multiChat = result.manifest.seams.find((seam) => seam.id === "multi-chat-plan-contract");
+  const multiChat = result.manifest.seams.find((seam) => seam.id === "multi-chat-pane-workspace");
 
   assert.deepStrictEqual(result.failures, []);
   assert.deepStrictEqual(result.manifest.seams.map((seam) => seam.id).sort(), [
     "canonical-icon-pipeline",
     "file-explorer",
     "markdown-preview-preference",
-    "multi-chat-plan-contract",
+    "multi-chat-pane-workspace",
     "nightly-and-secret-policy",
     "official-data-import",
     "product-identity-and-updater",
     "relay-policy",
     "workspace-image-preview",
   ]);
-  assert.strictEqual(multiChat?.status, "planned");
-  assert.notInclude(multiChat?.summary ?? "", "implemented");
+  assert.strictEqual(multiChat?.status, "implemented");
   assert.isTrue(
-    multiChat?.checks.every(
-      (check) => check.path.startsWith(".plans/") || check.path.startsWith("docs/"),
-    ),
+    multiChat?.checks.some((check) => check.path.startsWith("apps/web/src/turbo/chatPanes/")),
   );
 });
 

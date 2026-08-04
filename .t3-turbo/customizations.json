@@ -179,6 +179,22 @@
           "markers": ["appendCanonicalEvents", "restoreImportBackup"]
         },
         {
+          "path": "apps/desktop/src/ipc/methods/officialT3Environment.ts",
+          "markers": [
+            "const executeImport = Effect.fn",
+            "export const runOfficialT3Import",
+            "Official T3 Code still has an active chat, turn, or approval"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/desktop/DesktopEnvironmentSwitcher.tsx",
+          "markers": ["bridge?.runOfficialT3Import", "Import official T3 Code"]
+        },
+        {
+          "path": "docs/user/official-t3-import.md",
+          "markers": ["t3 import official", "Keep both", "Relay and remote clients"]
+        },
+        {
           "path": ".plans/22-t3-turbo-official-data-import.md",
           "markers": [
             "# T3 Turbo One-Way Official Data Import",
@@ -189,25 +205,43 @@
       ]
     },
     {
-      "id": "multi-chat-plan-contract",
-      "status": "planned",
-      "summary": "Multi-chat panes are a reviewed design contract only; this seam does not claim a shipped implementation.",
+      "id": "multi-chat-pane-workspace",
+      "status": "implemented",
+      "summary": "Typed, persisted chat-pane layouts keep pane controls and resource ownership in a replaceable Turbo seam.",
       "checks": [
         {
-          "path": ".plans/21-t3-turbo-multi-chat-panes.md",
+          "path": "packages/contracts/src/settings.ts",
           "markers": [
-            "# T3 Turbo Multi-Chat Panes",
-            "Keep the implementation under `apps/web/src/turbo/chatPanes/`",
-            "readonly panes: readonly [ChatPane, ...ChatPane[]]",
-            "Mobile remains single-pane in this phase"
+            "export const TurboChatPaneLayout",
+            "turboChatPaneLayout: Schema.NullOr(TurboChatPaneLayout)"
           ]
         },
         {
-          "path": "docs/internals/t3-turbo.md",
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneActionsContext.tsx",
           "markers": [
-            "[ ] Multi-chat pane foundation",
-            "[ ] Persist lightweight multi-chat layouts"
+            "export function openChatPaneTarget",
+            "export function ChatPaneActionsProvider"
           ]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneWorkspace.tsx",
+          "markers": ["export function ChatPaneWorkspace", "DiffWorkerPoolProvider"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.ts",
+          "markers": ["isChatPaneFocused", "selectPaneTerminalMountKeys"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneControl.tsx",
+          "markers": [
+            "Open new chat to the right",
+            "Open new chat to the left",
+            "Close this chat pane"
+          ]
+        },
+        {
+          "path": "docs/user/chat-panes.md",
+          "markers": ["T3 Turbo can keep several chats visible", "layout record"]
         }
       ]
     },

@@ -40,9 +40,10 @@ transfer credentials, or reuse the official environment's identity.
 - Existing official-managed Git worktrees keep their absolute paths under `~/.t3/worktrees`; do not
   move them because Git worktree metadata records those paths. New worktrees use Turbo's own home.
 
-## Current Connector to Replace
+## Former Connector
 
-Remove only the special official-local discovery and pairing behavior:
+The special official-local discovery and pairing behavior was removed as part of the coordinated
+import rollout:
 
 - `apps/desktop/src/app/OfficialT3EnvironmentDiscovery.ts`
 - `apps/desktop/src/ipc/methods/officialT3Environment.ts`
@@ -57,7 +58,13 @@ remove T3 Code's remote-ready architecture.
 
 ## Replaceable Seam
 
-Keep import mechanics under `apps/desktop/src/turbo/officialImport/`:
+The dependency-light planning, storage, replay, and execution mechanics live under
+`apps/server/src/turbo/officialImport/` and are exposed through `t3 import official`. Desktop owns
+the local-only orchestration and invokes that same packaged command through
+`apps/desktop/src/ipc/methods/officialT3Environment.ts`; it does not duplicate migration logic or
+expose database paths to the renderer.
+
+The original design proposed desktop-local modules:
 
 - `OfficialImport.ts` - Effect service and typed result/errors.
 - `OfficialImportEligibility.ts` - pure source/destination/schema/transient-state decisions.
@@ -68,9 +75,10 @@ Move the dependency-light migration ID/name manifest to a shared module consumed
 server migration loader and the desktop importer. Do not duplicate the list or import server source
 files into the desktop bundle.
 
-`apps/desktop/src/app/DesktopApp.ts` should have one shallow call before `primaryBackend.start`.
-The importer must not be a server or relay RPC because only the local desktop owns both filesystem
-paths and the destination server must not be running during installation.
+The final implementation instead provides an explicit environment-menu action. Desktop stops its
+local Turbo backend, runs the packaged importer, and restarts the backend in an `ensuring` cleanup.
+The importer is not a server or relay RPC because only the local desktop owns both filesystem paths
+and the destination server must not be running during installation.
 
 Add the merge-specific mechanics to the same seam:
 
@@ -209,32 +217,33 @@ copied from T3 state.
 ## Task Breakdown
 
 - [x] Audit the real official/Turbo SQLite schemas and current identity overlaps read-only.
-- [ ] Define typed import eligibility, manifest, receipt, outcomes, and failure reasons, and expose
+- [x] Define typed import eligibility, manifest, receipt, outcomes, and failure reasons, and expose
       one dependency-light migration manifest shared by server and desktop.
-- [ ] Add pre-start detection plus project/thread matching and a native per-collision choice for
+- [x] Add pre-start detection plus project/thread matching and a native per-collision choice for
       skip, replace, or keep-both-with-new-UUID.
-- [ ] Add an exhaustive, schema-aware `OfficialImportIdMap` and event transformer with a compile-
+- [x] Add an exhaustive, schema-aware `OfficialImportIdMap` and event transformer with a compile-
       time failure when upstream adds an unhandled event variant.
-- [ ] Validate source/destination ownership, migration prefix compatibility, and official-process
+- [x] Validate source/destination ownership, migration compatibility, and official activity
       shutdown without opening source data read-write.
-- [ ] Add transient-session/turn/approval refusal checks so no imported thread is stuck running.
-- [ ] Build consistent source and target staging snapshots with SQLite `VACUUM INTO` and an
-      explicit attachment/settings/checkpoint manifest.
-- [ ] Sanitize auth tables and enforce the file/secret exclusion manifest.
-- [ ] Append transformed events with Turbo-local global sequences, replay normal projectors, and
-      run event-stream/projection/attachment/checkpoint integrity checks against staging.
-- [ ] Make projection replay explicitly paginated and assert every projector cursor equals the
+- [x] Add transient-session/turn/approval refusal checks so no imported thread is stuck running.
+- [x] Build consistent source and target staging snapshots with SQLite `VACUUM INTO`, copy only
+      selected attachments, and retain settings plus checkpoint refs outside the import boundary.
+- [x] Exclude source auth, settings, credentials, runtime files, logs, and secrets by importing only
+      canonical events plus selected attachments into the staged Turbo store.
+- [x] Append transformed events with Turbo-local global sequences, replay normal projectors, and
+      run event-stream/projection/attachment/checkpoint-diff integrity checks against staging.
+- [x] Make projection replay explicitly paginated and assert every projector cursor equals the
       staged database's maximum event sequence before cutover.
-- [ ] Recreate selected command receipts from the destination sequence map; never retain official
+- [x] Recreate selected command receipts from the destination sequence map; never retain official
       `result_sequence` values.
-- [ ] Atomically install the prepared database at Turbo's real state path or roll back, and persist
+- [x] Atomically install the prepared database at Turbo's real state path or roll back, and persist
       the idempotent import receipt.
 - [ ] Start the normal Turbo backend and verify it generates a distinct environment identity and
       fresh local authentication.
-- [ ] After the importer is verified in the same coordinated rollout, remove official-local
+- [x] After the importer is verified in the same coordinated rollout, remove official-local
       discovery, pairing, IPC, and `T3 Code` special-case options while retaining generic
       environment switching.
-- [ ] Update internal/user documentation to describe one-time import and the unchanged relay-link
+- [x] Update internal/user documentation to describe one-time import and the unchanged relay-link
       step for Turbo.
 
 ## Relay and Portal Behavior

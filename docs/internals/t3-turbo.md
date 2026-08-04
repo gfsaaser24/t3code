@@ -29,7 +29,7 @@ platform slots cannot render the full-color source artwork.
 
 ## Official T3 data cutover
 
-The special live connector to a second official T3 Code instance is being
+The former live connector to a second official T3 Code instance has been
 replaced by a desktop-side, one-time import into Turbo's own state. The source
 is opened read-only while official T3 is closed; Turbo never shares the live
 database and never imports environment identity, auth sessions, relay/cloud
@@ -50,10 +50,22 @@ Turbo remains its own relay environment and is linked normally after import.
 The full implementation plan and safety manifest are in
 [`22-t3-turbo-official-data-import.md`](../../.plans/22-t3-turbo-official-data-import.md).
 
-### Superseded live-connector design
+### Direct import behavior
 
-The following describes the currently implemented connector that the import
-plan retires. It is retained here only until the cutover lands.
+The desktop environment menu exposes **Import official T3 Code**. It inspects
+both local stores, presents any per-chat ID collisions, stops only Turbo's local
+backend during installation, invokes the same typed importer shipped by the
+server package, and restarts Turbo afterward. Official T3 must be closed and
+neither database may contain an active turn or approval.
+
+The equivalent repeatable CLI is `t3 import official`. Its `plan`, `apply`,
+`run`, and `restore` subcommands preserve reviewable plans, stable clone-ID
+mappings, and recovery receipts. The desktop UI and CLI therefore share one
+implementation instead of maintaining a second migration path.
+
+### Historical live-connector design
+
+The following describes the removed connector for historical context only.
 
 Turbo treats the running official T3 backend as an environment, not as files to
 copy. The official runtime descriptor is discovered from
@@ -97,7 +109,7 @@ The scheduled workflow runs from the fork's `main` branch, while the candidate s
 customizations live on `turbo`:
 
 1. Resolve the newest official Nightly and the current upstream `main` commit.
-2. Compare both against `.t3-turbo/upstream.json` and stop cleanly when there is no update.
+2. Compare both against `.t3-turbo/upstream.json` and record the exact 11:00 PM Eastern cutoff.
 3. Rebase Turbo commits in an isolated worktree; never modify the live branch during conflict
    detection.
 4. Build the Linux WSL `node-pty` prebuild, validate the source-aware tooling, and produce an
@@ -105,9 +117,9 @@ customizations live on `turbo`:
 5. Publish the installer, blockmap, and manifest only to `gfsaaser24/t3code`, then advance
    `turbo` with a lease check.
 
-Conflict or build failure leaves the last published Turbo branch and release intact. A manual
-workflow dispatch checks for source changes; it does not force a new installer when the checkpoint
-is already current.
+Conflict or build failure leaves the last published Turbo branch and release intact. Every daily
+cutoff and every new manual workflow run produces a fresh dated installer, even if upstream source
+is unchanged. Re-running the exact same workflow run remains idempotent.
 
 ## Replaceable file explorer seam
 
@@ -137,16 +149,17 @@ the customization stack remains easy to replay or replace.
 - [x] Isolated T3 Turbo desktop identity
 - [x] Explicit fork-only updater configuration
 - [x] T3 Turbo environment selector
-- [x] Official local environment discovery and pairing
+- [x] Direct official T3 data import with no second live connector
 - [x] Nightly source collision report and rebase workflow
 - [x] Focused verification and Windows installer rebuild
 - [x] Canonical T3 Turbo icon across web, portal, desktop, Electron, mobile, and marketing
-- [ ] Multi-chat pane foundation: ordered typed pane state, focused URL, close/focus/dedupe rules
-- [ ] Persist lightweight multi-chat layouts through existing typed client settings
-- [ ] Multi-chat entry points: header `+` menu and Sidebar V1/V2 open-left/open-right actions
-- [ ] Multi-chat hardening: pane-scoped commands, shared sockets/cache/workers/terminals, resource
-      profiling, and relay reconnect coverage
+- [x] Multi-chat pane foundation: ordered typed pane state, focused URL, close/focus/dedupe rules
+- [x] Persist lightweight multi-chat layouts through existing typed client settings
+- [x] Multi-chat entry points: header `+` menu and Sidebar V1/V2 open-left/open-right actions
+- [x] Multi-chat resource policy: focused global commands, one diff worker pool, and one terminal
+      host per pane target
+- [ ] Multi-chat integrated resource profiling and relay reconnect browser coverage
 - [x] Read-only official/Turbo SQLite schema and chat-collision audit
-- [ ] Typed per-chat import collision planner: skip, replace, or clone official under a new UUID
-- [ ] One-way official T3 import: install a verified snapshot as Turbo's actual database
-- [ ] Remove official-local live discovery/pairing after the import path is available
+- [x] Typed per-chat import collision planner: skip, replace, or clone official under a new UUID
+- [x] One-way official T3 import: install a verified snapshot as Turbo's actual database
+- [x] Remove official-local live discovery/pairing after the import path is available
