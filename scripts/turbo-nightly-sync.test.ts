@@ -226,6 +226,7 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.notMatch(buildWindows, /AZURE_|CLERK_|T3CODE_RELAY_URL|--signed|turbo-release/gu);
   assert.include(publish, "permissions:\n      contents: write");
   assert.include(workflow, "rebase --committer-date-is-author-date");
+  assert.include(workflow, "pnpm icons:turbo:check");
   assert.include(workflow, "jq -n \\");
   assert.include(workflow, "TURBO_OPENCLAW_ENABLED");
   assert.include(workflow, 'channel: "telegram"');

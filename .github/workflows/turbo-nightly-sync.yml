@@ -340,6 +340,8 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - name: Validate source-aware sync tooling
         run: vp test run scripts/turbo-nightly-sync.test.ts
+      - name: Verify T3 Turbo icon derivatives
+        run: pnpm icons:turbo:check
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "${{ needs.sync_source.outputs.version }}"
       - name: Build Turbo installer

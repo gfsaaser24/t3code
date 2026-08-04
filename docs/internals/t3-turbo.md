@@ -1,7 +1,7 @@
 # T3 Turbo
 
-T3 Turbo is a desktop-only downstream variant that keeps its custom behavior in
-small, reviewable modules on top of upstream T3 Code.
+T3 Turbo is a downstream variant that keeps its custom behavior in small,
+reviewable modules on top of upstream T3 Code.
 
 ## Product identities
 
@@ -13,6 +13,19 @@ small, reviewable modules on top of upstream T3 Code.
 
 These identities must remain separate from the official desktop app so both can
 run on the same machine.
+
+## Brand asset seam
+
+`t3turbo.png` at the repository root is the canonical T3 Turbo icon source. Run
+`pnpm icons:turbo:export` after replacing it; do not hand-edit the generated
+derivatives. `scripts/lib/turbo-brand-assets.ts` is the single path registry for
+the web, hosted/relay-facing portal, desktop packaging, Electron runtime, mobile
+launcher/splash, marketing, and widget assets.
+
+The nightly build runs `pnpm icons:turbo:check` before packaging, so a changed
+source image cannot ship with stale or upstream icons. Android notification and
+monochrome adaptive icons remain purpose-built single-color masks because those
+platform slots cannot render the full-color source artwork.
 
 ## Official environment integration
 
@@ -81,3 +94,4 @@ is already current.
 - [x] Official local environment discovery and pairing
 - [x] Nightly source collision report and rebase workflow
 - [x] Focused verification and Windows installer rebuild
+- [x] Canonical T3 Turbo icon across web, portal, desktop, Electron, mobile, and marketing

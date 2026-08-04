@@ -46,7 +46,7 @@ import {
   STAGE_INSTALL_ARGS,
   WINDOWS_ASAR_UNPACK,
 } from "./build-desktop-artifact.ts";
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { TURBO_BRAND_ASSET_PATHS } from "./lib/turbo-brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 function mockProcess(exitCode: number) {
@@ -100,17 +100,17 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(DESKTOP_STAGE_PACKAGE_DESCRIPTION, "T3-Turbo desktop build");
   });
 
-  it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
+  it("keeps every desktop release channel on the T3 Turbo artwork", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {
-      macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+      macIconPng: TURBO_BRAND_ASSET_PATHS.macIconPng,
+      linuxIconPng: TURBO_BRAND_ASSET_PATHS.universalIconPng,
+      windowsIconIco: TURBO_BRAND_ASSET_PATHS.windowsIconIco,
     });
 
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17-nightly.20260413.42"), {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+      macIconPng: TURBO_BRAND_ASSET_PATHS.macIconPng,
+      linuxIconPng: TURBO_BRAND_ASSET_PATHS.universalIconPng,
+      windowsIconIco: TURBO_BRAND_ASSET_PATHS.windowsIconIco,
     });
   });
 
