@@ -38,11 +38,13 @@ credentials, runtime files, logs, or secrets.
 The import installs the prepared snapshot as Turbo's real
 `~/.t3-turbo/userdata/state.sqlite`; the staging copy is only an atomic-safety
 measure and is never a second live database. An absent or domain-empty Turbo
-store imports directly. A populated Turbo store is never silently merged or
-overwritten: replacement requires an explicit choice and recoverable backup,
-because identical schemas do not make event IDs, stream versions, sequences,
-and projections collision-free. Existing official-managed Git worktrees keep
-their absolute paths; moving them would invalidate Git worktree metadata.
+store imports directly. For a populated Turbo store, projects are matched by
+workspace and chats by `ThreadId`. A collision can be skipped, replaced from
+official, or kept alongside Turbo by cloning the official chat under a new UUID
+and remapping its complete child identity graph. All choices are applied to a
+recoverable staged copy; nothing is silently overwritten. Existing
+official-managed Git worktrees keep their absolute paths; moving them would
+invalidate Git worktree metadata.
 
 Turbo remains its own relay environment and is linked normally after import.
 The full implementation plan and safety manifest are in
@@ -124,5 +126,7 @@ is already current.
 - [ ] Multi-chat entry points: header `+` menu and Sidebar V1/V2 open-left/open-right actions
 - [ ] Multi-chat hardening: pane-scoped commands, shared sockets/cache/workers/terminals, resource
       profiling, and relay reconnect coverage
+- [x] Read-only official/Turbo SQLite schema and chat-collision audit
+- [ ] Typed per-chat import collision planner: skip, replace, or clone official under a new UUID
 - [ ] One-way official T3 import: install a verified snapshot as Turbo's actual database
 - [ ] Remove official-local live discovery/pairing after the import path is available
