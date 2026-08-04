@@ -42,6 +42,7 @@ const clientSettings: ClientSettings = {
   sidebarV2Enabled: false,
   sidebarV2ConfiguredByUser: false,
   timestampFormat: "24-hour",
+  turboChatPaneLayout: null,
   wordWrap: true,
 };
 
