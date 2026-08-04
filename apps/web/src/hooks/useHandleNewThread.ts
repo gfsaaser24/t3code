@@ -9,6 +9,7 @@ import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
   markPromotedDraftThreadByRef,
+  type DraftId,
   type DraftThreadEnvMode,
   type DraftThreadState,
   useComposerDraftStore,
@@ -27,7 +28,19 @@ import { resolveThreadRouteTarget } from "../threadRoutes";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
 
-export function useNewThreadHandler() {
+export interface NewThreadOptions {
+  readonly branch?: string | null;
+  readonly worktreePath?: string | null;
+  readonly envMode?: DraftThreadEnvMode;
+  readonly startFromOrigin?: boolean;
+  readonly replace?: boolean;
+}
+
+export interface CreateDraftThreadOptions extends NewThreadOptions {
+  readonly navigation?: "route" | "none";
+}
+
+export function useCreateDraftThreadHandler() {
   const projects = useProjects();
   // New-thread defaults are a user preference, and the settings UI only ever
   // edits the primary environment's settings.json. Reading the target
@@ -43,16 +56,7 @@ export function useNewThreadHandler() {
   }, [router]);
 
   return useCallback(
-    (
-      projectRef: ScopedProjectRef,
-      options?: {
-        branch?: string | null;
-        worktreePath?: string | null;
-        envMode?: DraftThreadEnvMode;
-        startFromOrigin?: boolean;
-        replace?: boolean;
-      },
-    ): Promise<void> => {
+    (projectRef: ScopedProjectRef, options?: CreateDraftThreadOptions): Promise<DraftId> => {
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -199,13 +203,16 @@ export function useNewThreadHandler() {
             currentRouteTarget?.kind === "draft" &&
             currentRouteTarget.draftId === reusableStoredDraftThread.draftId
           ) {
-            return;
+            return reusableStoredDraftThread.draftId;
           }
-          await router.navigate({
-            to: "/draft/$draftId",
-            params: { draftId: reusableStoredDraftThread.draftId },
-            replace: options?.replace ?? false,
-          });
+          if (options?.navigation !== "none") {
+            await router.navigate({
+              to: "/draft/$draftId",
+              params: { draftId: reusableStoredDraftThread.draftId },
+              replace: options?.replace ?? false,
+            });
+          }
+          return reusableStoredDraftThread.draftId;
         })();
       }
 
@@ -238,7 +245,7 @@ export function useNewThreadHandler() {
           ...(hasEnvModeOption ? { envMode: options?.envMode } : {}),
           ...(hasStartFromOriginOption ? { startFromOrigin: options?.startFromOrigin } : {}),
         });
-        return Promise.resolve();
+        return Promise.resolve(currentRouteTarget.draftId);
       }
 
       const draftId = newDraftId();
@@ -271,14 +278,28 @@ export function useNewThreadHandler() {
           setModelSelection(draftId, carryModelSelection, { replaceOptions: true });
         }
 
-        await router.navigate({
-          to: "/draft/$draftId",
-          params: { draftId },
-          replace: options?.replace ?? false,
-        });
+        if (options?.navigation !== "none") {
+          await router.navigate({
+            to: "/draft/$draftId",
+            params: { draftId },
+            replace: options?.replace ?? false,
+          });
+        }
+        return draftId;
       })();
     },
     [getCurrentRouteTarget, primaryServerSettings, projectGroupingSettings, projects, router],
+  );
+}
+
+/** Existing navigation-oriented API retained for callers outside the pane seam. */
+export function useNewThreadHandler() {
+  const createDraftThread = useCreateDraftThreadHandler();
+  return useCallback(
+    async (projectRef: ScopedProjectRef, options?: NewThreadOptions): Promise<void> => {
+      await createDraftThread(projectRef, { ...options, navigation: "route" });
+    },
+    [createDraftThread],
   );
 }
 

@@ -1143,7 +1143,7 @@ function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
 
-function ChatViewContent(props: ChatViewProps) {
+export function ChatViewContent(props: ChatViewProps) {
   const {
     environmentId,
     threadId,
