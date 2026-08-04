@@ -12,6 +12,7 @@ import {
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
+const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
@@ -97,34 +98,37 @@ describe("ClientSettings T3 Turbo chat panes", () => {
   });
 
   it("decodes and patches the versioned ordered pane references", () => {
-    expect(decodeClientSettings({ turboChatPaneLayout: layout }).turboChatPaneLayout).toEqual(
-      layout,
-    );
+    const decoded = decodeClientSettings({ turboChatPaneLayout: layout });
+    expect(decoded.turboChatPaneLayout).toEqual(layout);
+    expect(encodeClientSettings(decoded).turboChatPaneLayout).toEqual(layout);
     expect(decodeClientSettingsPatch({ turboChatPaneLayout: layout }).turboChatPaneLayout).toEqual(
       layout,
     );
     expect(decodeClientSettingsPatch({ turboChatPaneLayout: null }).turboChatPaneLayout).toBeNull();
   });
 
-  it("rejects empty layouts, unsupported versions, and blank identifiers", () => {
-    expect(() =>
+  it("drops malformed or future layouts without invalidating other settings", () => {
+    expect(
       decodeClientSettings({
+        wordWrap: false,
         turboChatPaneLayout: { version: 1, panes: [], focusedPaneId: "pane-a" },
       }),
-    ).toThrow();
-    expect(() =>
+    ).toEqual(expect.objectContaining({ wordWrap: false, turboChatPaneLayout: null }));
+    expect(
       decodeClientSettings({
+        timestampFormat: "24-hour",
         turboChatPaneLayout: { ...layout, version: 2 },
       }),
-    ).toThrow();
-    expect(() =>
+    ).toEqual(expect.objectContaining({ timestampFormat: "24-hour", turboChatPaneLayout: null }));
+    expect(
       decodeClientSettingsPatch({
+        wordWrap: false,
         turboChatPaneLayout: {
           ...layout,
           panes: [{ ...layout.panes[0], id: "   " }],
         },
       }),
-    ).toThrow();
+    ).toEqual({ wordWrap: false, turboChatPaneLayout: null });
   });
 });
 

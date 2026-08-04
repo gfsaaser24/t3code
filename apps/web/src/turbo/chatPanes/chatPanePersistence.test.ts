@@ -77,4 +77,21 @@ describe("chatPanePersistence", () => {
       focusedPaneId: paneId("pane-a"),
     });
   });
+
+  it("falls back cleanly for malformed and future persisted layouts", () => {
+    expect(restoreChatPaneLayout({ version: 1, panes: [], focusedPaneId: "pane-a" })).toBeNull();
+    expect(
+      restoreChatPaneLayout({
+        version: 2,
+        panes: [
+          {
+            id: "pane-a",
+            target: { kind: "draft", draftId: "draft-a" },
+          },
+        ],
+        focusedPaneId: "pane-a",
+      }),
+    ).toBeNull();
+    expect(restoreChatPaneLayout("not-a-layout")).toBeNull();
+  });
 });

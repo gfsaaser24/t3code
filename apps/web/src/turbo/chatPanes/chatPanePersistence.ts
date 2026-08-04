@@ -2,11 +2,15 @@ import type {
   TurboChatPaneLayout as PersistedChatPaneLayout,
   TurboChatPaneTarget as PersistedChatPaneTarget,
 } from "@t3tools/contracts/settings";
-import { TurboChatPaneDraftId } from "@t3tools/contracts/settings";
+import { TurboChatPaneDraftId, TurboChatPaneLayout } from "@t3tools/contracts/settings";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { DraftId } from "../../composerDraftStore";
 import type { ThreadRouteTarget } from "../../threadRoutes";
 import { ChatPaneId, type ChatPane, type ChatPaneLayout } from "./chatPaneLayout";
+
+const decodePersistedChatPaneLayout = Schema.decodeUnknownOption(TurboChatPaneLayout);
 
 function targetKey(target: ThreadRouteTarget): string {
   return target.kind === "server"
@@ -27,21 +31,22 @@ function toPersistedTarget(target: ThreadRouteTarget): PersistedChatPaneTarget {
 }
 
 /**
- * Client settings validates field shapes. This boundary additionally repairs
- * cross-field invariants that a schema cannot express: pane ids and targets
- * are unique, and the focused pane is present.
+ * Invalid or future persisted shapes fall back to the route-derived pane.
+ * Valid layouts additionally repair cross-field invariants that a schema
+ * cannot express: pane ids and targets are unique, and the focused pane is
+ * present.
  */
-export function restoreChatPaneLayout(
-  persisted: PersistedChatPaneLayout | null,
-): ChatPaneLayout | null {
-  if (!persisted) {
+export function restoreChatPaneLayout(persisted: unknown): ChatPaneLayout | null {
+  const decoded = decodePersistedChatPaneLayout(persisted);
+  if (Option.isNone(decoded)) {
     return null;
   }
+  const layout = decoded.value;
 
   const paneIds = new Set<string>();
   const targetKeys = new Set<string>();
   const panes: ChatPane[] = [];
-  for (const persistedPane of persisted.panes) {
+  for (const persistedPane of layout.panes) {
     const target = fromPersistedTarget(persistedPane.target);
     const key = targetKey(target);
     if (paneIds.has(persistedPane.id) || targetKeys.has(key)) {
@@ -56,8 +61,8 @@ export function restoreChatPaneLayout(
   if (!firstPane) {
     return null;
   }
-  const focusedPaneId = paneIds.has(persisted.focusedPaneId)
-    ? ChatPaneId.make(persisted.focusedPaneId)
+  const focusedPaneId = paneIds.has(layout.focusedPaneId)
+    ? ChatPaneId.make(layout.focusedPaneId)
     : firstPane.id;
 
   return {

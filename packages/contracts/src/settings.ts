@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
@@ -144,6 +145,23 @@ export const TurboChatPaneLayout = Schema.Struct({
 });
 export type TurboChatPaneLayout = typeof TurboChatPaneLayout.Type;
 
+const decodeTurboChatPaneLayout = Schema.decodeUnknownOption(TurboChatPaneLayout);
+
+/**
+ * Pane persistence is intentionally forward compatible. It is UI recovery
+ * state, so an unsupported version or malformed value must not prevent the
+ * rest of the client settings document from loading.
+ */
+export const CompatibleTurboChatPaneLayout = Schema.Unknown.pipe(
+  Schema.decodeTo(
+    Schema.NullOr(TurboChatPaneLayout),
+    SchemaTransformation.transform<(typeof TurboChatPaneLayout)["Encoded"] | null, unknown>({
+      decode: (value) => Option.getOrNull(decodeTurboChatPaneLayout(value)),
+      encode: (value) => value,
+    }),
+  ),
+);
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
@@ -231,7 +249,7 @@ export const ClientSettingsSchema = Schema.Struct({
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
-  turboChatPaneLayout: Schema.NullOr(TurboChatPaneLayout).pipe(
+  turboChatPaneLayout: CompatibleTurboChatPaneLayout.pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -831,7 +849,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarV2Enabled: Schema.optionalKey(Schema.Boolean),
   sidebarV2ConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   timestampFormat: Schema.optionalKey(TimestampFormat),
-  turboChatPaneLayout: Schema.optionalKey(Schema.NullOr(TurboChatPaneLayout)),
+  turboChatPaneLayout: Schema.optionalKey(CompatibleTurboChatPaneLayout),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
