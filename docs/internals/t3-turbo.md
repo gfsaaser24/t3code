@@ -27,7 +27,31 @@ source image cannot ship with stale or upstream icons. Android notification and
 monochrome adaptive icons remain purpose-built single-color masks because those
 platform slots cannot render the full-color source artwork.
 
-## Official environment integration
+## Official T3 data cutover
+
+The special live connector to a second official T3 Code instance is being
+replaced by a desktop-side, one-time import into Turbo's own state. The source
+is opened read-only while official T3 is closed; Turbo never shares the live
+database and never imports environment identity, auth sessions, relay/cloud
+credentials, runtime files, logs, or secrets.
+
+The import installs the prepared snapshot as Turbo's real
+`~/.t3-turbo/userdata/state.sqlite`; the staging copy is only an atomic-safety
+measure and is never a second live database. An absent or domain-empty Turbo
+store imports directly. A populated Turbo store is never silently merged or
+overwritten: replacement requires an explicit choice and recoverable backup,
+because identical schemas do not make event IDs, stream versions, sequences,
+and projections collision-free. Existing official-managed Git worktrees keep
+their absolute paths; moving them would invalidate Git worktree metadata.
+
+Turbo remains its own relay environment and is linked normally after import.
+The full implementation plan and safety manifest are in
+[`22-t3-turbo-official-data-import.md`](../../.plans/22-t3-turbo-official-data-import.md).
+
+### Superseded live-connector design
+
+The following describes the currently implemented connector that the import
+plan retires. It is retained here only until the cutover lands.
 
 Turbo treats the running official T3 backend as an environment, not as files to
 copy. The official runtime descriptor is discovered from
@@ -95,3 +119,10 @@ is already current.
 - [x] Nightly source collision report and rebase workflow
 - [x] Focused verification and Windows installer rebuild
 - [x] Canonical T3 Turbo icon across web, portal, desktop, Electron, mobile, and marketing
+- [ ] Multi-chat pane foundation: ordered typed pane state, focused URL, close/focus/dedupe rules
+- [ ] Persist lightweight multi-chat layouts through existing typed client settings
+- [ ] Multi-chat entry points: header `+` menu and Sidebar V1/V2 open-left/open-right actions
+- [ ] Multi-chat hardening: pane-scoped commands, shared sockets/cache/workers/terminals, resource
+      profiling, and relay reconnect coverage
+- [ ] One-way official T3 import: install a verified snapshot as Turbo's actual database
+- [ ] Remove official-local live discovery/pairing after the import path is available
