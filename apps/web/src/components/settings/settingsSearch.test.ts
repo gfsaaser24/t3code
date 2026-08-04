@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   searchableSetting,
   searchSettings,
+  SETTINGS_SECTION_LABELS,
   SETTINGS_SEARCH_ITEMS,
   type SettingsSearchItem,
 } from "./settingsSearch";
@@ -82,6 +83,18 @@ describe("searchSettings", () => {
       id: "environment-identification",
       to: "/settings/appearance",
       targetId: "appearance",
+    });
+  });
+
+  it("exposes T3 Turbo Settings and its Markdown preference", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/t3-turbo"]).toBe("T3 Turbo Settings");
+    expect(searchSettings("markdown file preview")[0]).toMatchObject({
+      id: "markdown-file-preview",
+      to: "/settings/t3-turbo",
+    });
+    expect(searchableSetting("markdown-file-preview")).toEqual({
+      id: "markdown-file-preview",
+      title: "Markdown file preview",
     });
   });
 });

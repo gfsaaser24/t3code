@@ -12,5 +12,9 @@ export function createShellEnvironmentAtoms<R, E>(
       label: "environment-data:shell:open-in-editor",
       tag: WS_METHODS.shellOpenInEditor,
     }),
+    openPath: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:shell:open-path",
+      tag: WS_METHODS.shellOpenPath,
+    }),
   };
 }

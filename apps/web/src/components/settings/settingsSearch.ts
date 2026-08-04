@@ -5,6 +5,7 @@ export type SettingsPath =
   | "/settings/providers"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/t3-turbo"
   | "/settings/beta"
   | "/settings/archived";
 
@@ -26,6 +27,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/providers": "Providers",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
+  "/settings/t3-turbo": "T3 Turbo Settings",
   "/settings/beta": "Beta",
   "/settings/archived": "Archive",
 };
@@ -170,6 +172,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",
+  },
+  {
+    id: "markdown-file-preview",
+    title: "Markdown file preview",
+    to: "/settings/t3-turbo",
   },
   {
     id: "sidebar-v2",

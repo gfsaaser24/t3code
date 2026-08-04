@@ -45,6 +45,7 @@ import {
   resolveExternalWebLinkHost,
   showExternalLinkContextMenu,
 } from "./chat/externalLinkContextMenu";
+import { resolveMarkdownFileLinkGesture } from "./chat/markdownFileLinkGesture";
 import { hasSpecificPierreIconForFileName, syntheticFileNameForLanguageId } from "../pierre-icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Button } from "./ui/button";
@@ -78,6 +79,7 @@ import { cn } from "../lib/utils";
 import { useRightPanelStore } from "../rightPanelStore";
 import { useActiveEnvironmentId } from "../state/entities";
 import { serverEnvironment } from "../state/server";
+import { shellEnvironment } from "../state/shell";
 import { assetEnvironment } from "../state/assets";
 import { usePreparedConnection } from "../state/session";
 import { previewEnvironment } from "../state/preview";
@@ -743,6 +745,7 @@ interface MarkdownFileLinkProps {
   theme: "light" | "dark";
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  onOpenWithSystemDefault: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
 }
@@ -1026,6 +1029,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   theme,
   threadRef,
   onOpen,
+  onOpenWithSystemDefault,
   onOpenInBrowser,
   className,
 }: MarkdownFileLinkProps) {
@@ -1071,6 +1075,65 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
     }
     useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
   }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
+
+  const handleOpenWithSystemDefault = useCallback(() => {
+    void (async () => {
+      try {
+        const result = await onOpenWithSystemDefault(iconPath);
+        if (result._tag === "Success" || isAtomCommandInterrupted(result)) {
+          return;
+        }
+        reportMarkdownActionFailure(
+          { operation: "open-file-with-system-default", target: iconPath },
+          result.cause,
+        );
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
+      } catch (cause) {
+        reportMarkdownActionFailure(
+          { operation: "open-file-with-system-default", target: iconPath },
+          cause,
+        );
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Unable to open file",
+            description: cause instanceof Error ? cause.message : "An error occurred.",
+          }),
+        );
+      }
+    })();
+  }, [iconPath, onOpenWithSystemDefault]);
+
+  const handleMarkdownFileGesture = useCallback(
+    (event: ReactMouseEvent<HTMLAnchorElement>): boolean => {
+      const gesture = resolveMarkdownFileLinkGesture({
+        path: iconPath,
+        button: event.button,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      });
+      if (!gesture) return false;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (gesture === "open-system-default") {
+        handleOpenWithSystemDefault();
+      } else {
+        handleOpenInFilePreview();
+      }
+      return true;
+    },
+    [handleOpenInFilePreview, handleOpenWithSystemDefault, iconPath],
+  );
 
   const handleOpenInBrowser = useCallback(() => {
     if (!onOpenInBrowser) {
@@ -1204,6 +1267,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
             className={cn(CHAT_FILE_TAG_CHIP_CLASS_NAME, MARKDOWN_FILE_LINK_CLASS_NAME, className)}
             data-markdown-copy={copyMarkdown}
             onClick={(event) => {
+              if (handleMarkdownFileGesture(event)) return;
+
               event.preventDefault();
               event.stopPropagation();
               if (onOpenInBrowser) {
@@ -1246,6 +1311,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.theme === next.theme &&
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
+    previous.onOpenWithSystemDefault === next.onOpenWithSystemDefault &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
   );
@@ -1268,8 +1334,12 @@ function ChatMarkdown({
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
+  const openPath = useAtomCommand(shellEnvironment.openPath, {
+    reportFailure: false,
+  });
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const environmentId = useActiveEnvironmentId();
+  const fileEnvironmentId = threadRef?.environmentId ?? environmentId;
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
@@ -1363,6 +1433,20 @@ function ChatMarkdown({
     },
     [createAssetUrl, openPreview, preparedConnection, threadRef],
   );
+  const openMarkdownFileWithSystemDefault = useCallback(
+    (path: string) => {
+      if (fileEnvironmentId === null) {
+        return Promise.resolve(
+          AsyncResult.failure(Cause.fail(new Error("No environment is selected."))),
+        );
+      }
+      return openPath({
+        environmentId: fileEnvironmentId,
+        input: { path },
+      });
+    },
+    [fileEnvironmentId, openPath],
+  );
   const markdownComponents = useMemo<Components>(() => {
     const fileLinkChip = (
       fileLinkMeta: MarkdownFileLinkMeta,
@@ -1393,6 +1477,7 @@ function ChatMarkdown({
           theme={resolvedTheme}
           threadRef={threadRef}
           onOpen={openInPreferredEditor}
+          onOpenWithSystemDefault={openMarkdownFileWithSystemDefault}
           onOpenInBrowser={
             threadRef &&
             isPreviewSupportedInRuntime() &&
@@ -1588,6 +1673,7 @@ function ChatMarkdown({
     openInPreferredEditor,
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
+    openMarkdownFileWithSystemDefault,
     resolvedTheme,
     skills,
     text,
