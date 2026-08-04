@@ -689,7 +689,6 @@ jobs:
           path: resource-monitor-publish/${{ matrix.resource_key }}/*
           if-no-files-found: error
 
-
   release:
     name: Publish GitHub Release
     needs: [preflight, build]
