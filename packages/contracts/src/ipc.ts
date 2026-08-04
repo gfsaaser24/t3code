@@ -297,12 +297,51 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   bootstrapToken: Schema.optionalKey(Schema.String),
 });
 
-export const DesktopOfficialT3EnvironmentSchema = Schema.Struct({
-  descriptor: ExecutionEnvironmentDescriptor,
-  httpBaseUrl: Schema.String,
-  wsBaseUrl: Schema.String,
+export const DesktopOfficialT3ImportAvailabilitySchema = Schema.Struct({
+  sourceBaseDir: Schema.String,
+  targetBaseDir: Schema.String,
+  runCommand: Schema.String,
+  planCommand: Schema.String,
 });
-export type DesktopOfficialT3Environment = typeof DesktopOfficialT3EnvironmentSchema.Type;
+export type DesktopOfficialT3ImportAvailability =
+  typeof DesktopOfficialT3ImportAvailabilitySchema.Type;
+
+export const DesktopOfficialT3ImportCollisionChoiceSchema = Schema.Literals([
+  "skip",
+  "replace",
+  "clone",
+]);
+export type DesktopOfficialT3ImportCollisionChoice =
+  typeof DesktopOfficialT3ImportCollisionChoiceSchema.Type;
+
+export const DesktopOfficialT3ImportInputSchema = Schema.Struct({
+  collisionChoices: Schema.optionalKey(
+    Schema.Record(Schema.String, DesktopOfficialT3ImportCollisionChoiceSchema),
+  ),
+});
+export type DesktopOfficialT3ImportInput = typeof DesktopOfficialT3ImportInputSchema.Type;
+
+export const DesktopOfficialT3ImportResultSchema = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("imported"),
+    importedEventCount: Schema.Number,
+    copiedAttachmentCount: Schema.Number,
+    receiptPath: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("needs-collision-choices"),
+    threadIds: Schema.Array(Schema.String),
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("blocked"),
+    reason: Schema.Literals(["source-active", "target-active", "import-failed"]),
+    message: Schema.String,
+    runCommand: Schema.String,
+    planCommand: Schema.String,
+  }),
+]);
+export type DesktopOfficialT3ImportResult = typeof DesktopOfficialT3ImportResultSchema.Type;
 
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   alias: Schema.String,
@@ -998,7 +1037,10 @@ export interface DesktopBridge {
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
-  discoverOfficialT3Environment?: () => Promise<DesktopOfficialT3Environment | null>;
+  discoverOfficialT3Import?: () => Promise<DesktopOfficialT3ImportAvailability | null>;
+  runOfficialT3Import?: (
+    input: DesktopOfficialT3ImportInput,
+  ) => Promise<DesktopOfficialT3ImportResult>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
