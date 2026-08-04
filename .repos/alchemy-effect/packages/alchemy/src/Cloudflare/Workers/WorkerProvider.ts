@@ -583,9 +583,14 @@ export const LiveWorkerProvider = () =>
           const cached = zoneCache.get(hostname);
           if (cached) return cached;
 
-          const zoneList = yield* zones
-            .listZones({})
-            .pipe(Effect.map((response) => response.result ?? []));
+          // Paginate via the client stream: accounts with more than one page
+          // of zones overflow the default first page of 20.
+          const zoneList = Array.from(
+            yield* zones.listZones.pages({}).pipe(
+              Stream.map((page) => page.result ?? []),
+              Stream.runCollect,
+            ),
+          ).flat();
           for (const zone of zoneList) {
             zoneCache.set(zone.name, zone.id);
           }
