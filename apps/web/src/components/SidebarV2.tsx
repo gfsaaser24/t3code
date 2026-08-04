@@ -163,6 +163,11 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { openChatPaneTarget } from "~/turbo/chatPanes/ChatPaneActionsContext";
+import {
+  buildChatPaneContextMenuItems,
+  resolveChatPaneSide,
+} from "~/turbo/chatPanes/chatPaneContextMenu";
 
 // Settled-tail paging: recent history is the common lookup; the deep tail
 // stays behind an explicit Show more.
@@ -2386,6 +2391,7 @@ export default function SidebarV2() {
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             [
+              ...buildChatPaneContextMenuItems(),
               ...(thread.branch
                 ? [
                     {
@@ -2445,6 +2451,11 @@ export default function SidebarV2() {
           ),
         );
         if (clicked._tag === "Failure") return;
+        const chatPaneSide = resolveChatPaneSide(clicked.value);
+        if (chatPaneSide) {
+          openChatPaneTarget({ kind: "server", threadRef }, chatPaneSide);
+          return;
+        }
         if (clicked.value?.startsWith("snooze:")) {
           const preset = snoozePresets.find(
             (candidate) => `snooze:${candidate.id}` === clicked.value,

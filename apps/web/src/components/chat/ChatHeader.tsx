@@ -20,6 +20,7 @@ import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
 import { DesktopEnvironmentSwitcher } from "../desktop/DesktopEnvironmentSwitcher";
+import { ChatPaneControl } from "~/turbo/chatPanes/ChatPaneControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -141,6 +142,7 @@ export const ChatHeader = memo(function ChatHeader({
           rightPanelOpen ? "pr-0" : "pr-16",
         )}
       >
+        <ChatPaneControl />
         <DesktopEnvironmentSwitcher activeEnvironmentId={activeThreadEnvironmentId} />
         {activeProjectScripts && (
           <ProjectScriptsControl
