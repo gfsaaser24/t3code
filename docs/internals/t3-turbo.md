@@ -109,6 +109,26 @@ Conflict or build failure leaves the last published Turbo branch and release int
 workflow dispatch checks for source changes; it does not force a new installer when the checkpoint
 is already current.
 
+## Replaceable file explorer seam
+
+Turbo's explorer behavior stays replaceable by keeping policy and tests in small helpers, with
+`FileBrowserPanel.tsx` limited to wiring those helpers into `@pierre/trees`:
+
+- `apps/web/src/components/files/fileTreeBulkExpansion.ts` owns the Alt-chevron gesture and derives
+  every explicit or implicit repository directory used by expand-all/collapse-all.
+- `apps/web/src/components/files/fileTreeBulkExpansion.test.ts` proves the gesture boundary and
+  whole-repository recursion, including folders inferred only from deep file paths.
+- `apps/web/src/components/files/fileTreeContextMenu.ts` and its test own explorer menu policy.
+- `apps/web/src/components/files/FileBrowserPanel.tsx` should contain only the imports, model data,
+  event-listener wiring, closed model default, and calls into these helpers. The closed default is
+  required so an empty `initialExpandedPaths` list means every directory is actually closed; normal
+  refreshes explicitly reopen only repository-root directories.
+
+When upstream replaces the explorer, port the helper contracts and tests first, then reattach the
+small wiring points to the new tree. Do not preserve or take over the old `FileBrowserPanel.tsx`
+wholesale. New Turbo-only explorer behavior must follow the same helper-plus-focused-test pattern so
+the customization stack remains easy to replay or replace.
+
 ## Current task list
 
 - [x] File preview breadcrumb navigation

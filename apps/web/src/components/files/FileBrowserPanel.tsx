@@ -30,6 +30,7 @@ import { type FileTreeContextMenuAction, fileTreeContextMenuItems } from "./file
 import {
   directoryTreePaths,
   getAltChevronExpansion,
+  rootDirectoryTreePaths,
   setAllDirectoriesExpanded,
 } from "./fileTreeBulkExpansion";
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
@@ -144,6 +145,10 @@ export default function FileBrowserPanel({
   const entryKindsRef = useRef<ReadonlyMap<string, ProjectEntry["kind"]>>(entryKinds);
   const treePaths = useMemo(() => entries.map(treePath), [entries]);
   const directoryPaths = useMemo(() => directoryTreePaths(entries), [entries]);
+  const initialDirectoryPaths = useMemo(
+    () => rootDirectoryTreePaths(directoryPaths),
+    [directoryPaths],
+  );
   const previousTreePathsRef = useRef<readonly string[]>([]);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
@@ -324,7 +329,9 @@ export default function FileBrowserPanel({
     density: "compact",
     fileTreeSearchMode: "hide-non-matches",
     flattenEmptyDirectories: true,
-    initialExpansion: 1,
+    // Refreshes explicitly reopen the root directories below. Keeping the
+    // model default closed makes an empty bulk-expansion list truly collapse all.
+    initialExpansion: "closed",
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
       // The drag controller's selection cache must track every change,
@@ -369,8 +376,8 @@ export default function FileBrowserPanel({
     if (previousTreePathsRef.current === treePaths) return;
     entryKindsRef.current = entryKinds;
     previousTreePathsRef.current = treePaths;
-    model.resetPaths(treePaths);
-  }, [entryKinds, model, treePaths]);
+    model.resetPaths(treePaths, { initialExpandedPaths: initialDirectoryPaths });
+  }, [entryKinds, initialDirectoryPaths, model, treePaths]);
 
   useEffect(() => {
     const path = requestedRevealPath ?? selectedPath;

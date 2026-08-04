@@ -17,9 +17,28 @@ function attributeValue(target: EventTarget, name: string): string | null {
 }
 
 export function directoryTreePaths(entries: readonly ProjectEntry[]): string[] {
-  return entries
-    .filter((entry) => entry.kind === "directory")
-    .map((entry) => `${entry.path.replace(/\/$/, "")}/`);
+  const directories = new Set<string>();
+
+  // The tree synthesizes missing ancestors from file paths. Mirror that full
+  // directory set so a bulk reset also reaches folders with no explicit entry.
+  for (const entry of entries) {
+    const segments = entry.path.split("/").filter(Boolean);
+    const directoryDepth = entry.kind === "directory" ? segments.length : segments.length - 1;
+    let directoryPath = "";
+
+    for (let index = 0; index < directoryDepth; index += 1) {
+      const segment = segments[index];
+      if (segment === undefined) continue;
+      directoryPath = directoryPath === "" ? segment : `${directoryPath}/${segment}`;
+      directories.add(`${directoryPath}/`);
+    }
+  }
+
+  return [...directories];
+}
+
+export function rootDirectoryTreePaths(directoryPaths: readonly string[]): string[] {
+  return directoryPaths.filter((path) => !path.slice(0, -1).includes("/"));
 }
 
 export function getAltChevronExpansion(event: AltChevronClickEvent): boolean | null {
