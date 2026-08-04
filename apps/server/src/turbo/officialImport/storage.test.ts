@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -270,9 +270,12 @@ it.effect("creates a recoverable backup and restores it only with confirmation",
         sourceDatabasePath: source,
         targetDatabasePath: target,
       });
+      const installedAttachmentPath = join(dirname(target), "attachments", "imported-attachment");
+      yield* Effect.promise(() => mkdir(join(dirname(target), "attachments"), { recursive: true }));
+      yield* Effect.promise(() => writeFile(installedAttachmentPath, "imported"));
       const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
       yield* appendCanonicalEvents(workspace, events);
-      const cutover = yield* cutoverImport(workspace);
+      const cutover = yield* cutoverImport(workspace, [installedAttachmentPath]);
       assert.equal(cutover.receipt.status, "complete");
       assert.equal((yield* readOrchestrationEvents(target)).length, 2);
       assert.notEqual(yield* fingerprintDatabase(target), targetBefore);
@@ -288,6 +291,16 @@ it.effect("creates a recoverable backup and restores it only with confirmation",
         confirmation: RESTORE_CONFIRMATION,
       });
       assert.equal(restored.receipt.kind, "t3-turbo-official-import-restore");
+      assert.equal(restored.receipt.displacedAttachmentPaths.length, 1);
+      assert.isTrue(
+        yield* Effect.promise(() =>
+          access(installedAttachmentPath).then(
+            () => false,
+            () => true,
+          ),
+        ),
+      );
+      yield* Effect.promise(() => access(restored.receipt.displacedAttachmentPaths[0]!));
       assert.equal(yield* fingerprintDatabase(target), targetBefore);
       assert.equal((yield* readOrchestrationEvents(target)).length, 1);
     }),

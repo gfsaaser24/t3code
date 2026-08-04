@@ -139,6 +139,7 @@ export const ImportCutoverReceipt = Schema.Struct({
   sourceFingerprint: Schema.String,
   previousTargetFingerprint: Schema.String,
   importedTargetFingerprint: Schema.String,
+  installedAttachmentPaths: Schema.Array(Schema.String),
 });
 export type ImportCutoverReceipt = typeof ImportCutoverReceipt.Type;
 
@@ -149,6 +150,7 @@ export const ImportRestoreReceipt = Schema.Struct({
   targetDatabasePath: Schema.String,
   restoredFromDatabasePath: Schema.String,
   displacedDatabasePath: Schema.String,
+  displacedAttachmentPaths: Schema.Array(Schema.String),
   restoredFingerprint: Schema.String,
 });
 export type ImportRestoreReceipt = typeof ImportRestoreReceipt.Type;
@@ -940,6 +942,7 @@ const moveDatabaseFiles = Effect.fn("moveDatabaseFiles")(function* (
  */
 export const cutoverImport = Effect.fn("cutoverImport")(function* (
   workspace: ImportWorkspace,
+  installedAttachmentPaths: ReadonlyArray<string> = [],
 ): Effect.fn.Return<
   { readonly receipt: ImportCutoverReceipt; readonly receiptPath: string },
   OfficialImportStorageFailure,
@@ -965,6 +968,7 @@ export const cutoverImport = Effect.fn("cutoverImport")(function* (
     sourceFingerprint: workspace.sourceFingerprint,
     previousTargetFingerprint: workspace.targetFingerprint,
     importedTargetFingerprint,
+    installedAttachmentPaths,
   };
 
   return yield* Effect.gen(function* () {
@@ -1023,12 +1027,13 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
 }): Effect.fn.Return<
   { readonly receipt: ImportRestoreReceipt; readonly receiptPath: string },
   OfficialImportStorageFailure,
-  FileSystem.FileSystem
+  FileSystem.FileSystem | Path.Path
 > {
   if (input.confirmation !== RESTORE_CONFIRMATION) {
     return yield* new OfficialImportConfirmationError({ expected: RESTORE_CONFIRMATION });
   }
   const cutoverReceipt = yield* readCompleteCutoverReceipt(input.receiptPath);
+  const path = yield* Path.Path;
   yield* validateCompatibleDatabase(cutoverReceipt.backupDatabasePath);
   const currentActivity = yield* readImportActivityState(cutoverReceipt.targetDatabasePath);
   yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
@@ -1041,15 +1046,53 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
   yield* snapshotDatabase(cutoverReceipt.backupDatabasePath, restoredStagingPath);
   yield* validateCompatibleDatabase(restoredStagingPath);
   const restoredFingerprint = yield* fingerprintDatabase(restoredStagingPath);
+  const attachmentRoot = path.resolve(
+    path.dirname(cutoverReceipt.targetDatabasePath),
+    "attachments",
+  );
+  for (const attachmentPath of cutoverReceipt.installedAttachmentPaths) {
+    const relative = path.relative(attachmentRoot, path.resolve(attachmentPath));
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+      return yield* new OfficialImportStorageError({
+        operation: "validate imported attachment receipt",
+        path: attachmentPath,
+        reason: "attachment path is outside the target attachments directory",
+      });
+    }
+  }
 
   return yield* Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath);
+    const displacedAttachments: Array<readonly [string, string]> = [];
+    for (const attachmentPath of cutoverReceipt.installedAttachmentPaths) {
+      if (!(yield* fs.exists(attachmentPath))) continue;
+      const backupPath = `${attachmentPath}.restore-backup-${suffix}`;
+      const result = yield* Effect.result(fs.rename(attachmentPath, backupPath));
+      if (result._tag === "Failure") {
+        for (const [originalPath, displacedPath] of displacedAttachments.reverse()) {
+          yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
+        }
+        return yield* result.failure;
+      }
+      displacedAttachments.push([attachmentPath, backupPath]);
+    }
+    const moveTargetResult = yield* Effect.result(
+      moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath),
+    );
+    if (moveTargetResult._tag === "Failure") {
+      for (const [originalPath, displacedPath] of displacedAttachments.reverse()) {
+        yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
+      }
+      return yield* moveTargetResult.failure;
+    }
     const restoreResult = yield* Effect.result(
       fs.rename(restoredStagingPath, cutoverReceipt.targetDatabasePath),
     );
     if (restoreResult._tag === "Failure") {
       yield* moveDatabaseFiles(displacedDatabasePath, cutoverReceipt.targetDatabasePath);
+      for (const [originalPath, displacedPath] of displacedAttachments.reverse()) {
+        yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
+      }
       return yield* restoreResult.failure;
     }
     const receipt: ImportRestoreReceipt = {
@@ -1059,6 +1102,7 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
       targetDatabasePath: cutoverReceipt.targetDatabasePath,
       restoredFromDatabasePath: cutoverReceipt.backupDatabasePath,
       displacedDatabasePath,
+      displacedAttachmentPaths: displacedAttachments.map(([, backupPath]) => backupPath),
       restoredFingerprint,
     };
     yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(receipt));

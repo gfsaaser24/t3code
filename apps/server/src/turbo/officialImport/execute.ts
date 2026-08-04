@@ -461,7 +461,7 @@ export const applyPreparedOfficialImport = Effect.fn("applyPreparedOfficialImpor
   });
 
   const installedAttachments = yield* installAttachments(attachments);
-  const cutover = yield* cutoverImport(prepared.workspace).pipe(
+  const cutover = yield* cutoverImport(prepared.workspace, installedAttachments).pipe(
     Effect.tapError(() => cleanupInstalledAttachments(installedAttachments)),
   );
   yield* removeImportWorkspace(prepared.workspace).pipe(Effect.ignore);
