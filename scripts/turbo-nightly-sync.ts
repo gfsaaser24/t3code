@@ -12,6 +12,7 @@ export interface TurboUpstreamState {
   readonly nightlyTag: string;
   readonly nightlySha: string;
   readonly version: string;
+  readonly cutoffDate?: string;
 }
 
 export interface GitHubRelease {
@@ -28,8 +29,11 @@ export interface TurboNightlyRelease {
 }
 
 const NIGHTLY_TAG_PATTERN = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+)$/u;
-const TURBO_NIGHTLY_TAG_PATTERN = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?)$/u;
-const TURBO_NIGHTLY_VERSION_PATTERN = /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?$/u;
+const TURBO_NIGHTLY_TAG_PATTERN =
+  /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+(?:\.\d+)?)?)$/u;
+const TURBO_NIGHTLY_VERSION_PATTERN =
+  /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+(?:\.\d+)?)?$/u;
+const CUTOFF_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
 export function compareTurboNightlyTags(left: string, right: string): number {
   if (!TURBO_NIGHTLY_TAG_PATTERN.test(left) || !TURBO_NIGHTLY_TAG_PATTERN.test(right)) {
@@ -62,6 +66,13 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
       "Turbo upstream state must contain repository, branch, mainSha, nightlyTag, nightlySha, and version strings.",
     );
   }
+  const cutoffDate = value.cutoffDate;
+  if (
+    cutoffDate !== undefined &&
+    (typeof cutoffDate !== "string" || !CUTOFF_DATE_PATTERN.test(cutoffDate))
+  ) {
+    throw new Error("Turbo upstream cutoffDate must use YYYY-MM-DD when present.");
+  }
   const state = {
     repository: value.repository,
     branch: value.branch,
@@ -69,6 +80,7 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
     nightlyTag: value.nightlyTag,
     nightlySha: value.nightlySha,
     version: value.version,
+    ...(typeof cutoffDate === "string" ? { cutoffDate } : {}),
   };
   if (!state.repository.trim() || !state.branch.trim()) {
     throw new Error("Turbo upstream repository and branch cannot be empty.");
@@ -86,7 +98,8 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
   const snapshotSuffix = state.version.slice(nightlyVersion.length);
   if (
     state.version !== nightlyVersion &&
-    (!state.version.startsWith(nightlyVersion) || !/^\.turbo\.[1-9]\d*$/u.test(snapshotSuffix))
+    (!state.version.startsWith(nightlyVersion) ||
+      !/^\.turbo\.[1-9]\d*(?:\.[1-9]\d*)?$/u.test(snapshotSuffix))
   ) {
     throw new Error("Turbo published version must derive from its recorded Nightly tag.");
   }
@@ -108,12 +121,31 @@ export function createTurboMainSnapshotVersion(input: {
     : `${input.releaseVersion}.turbo.${input.mainDistance}`;
 }
 
+export function createTurboDailyVersion(input: {
+  readonly releaseVersion: string;
+  readonly cutoffDate: string;
+  readonly releaseSequence: number;
+}): string {
+  if (!NIGHTLY_TAG_PATTERN.test(`v${input.releaseVersion}`)) {
+    throw new Error(`Invalid official Nightly version: ${input.releaseVersion}`);
+  }
+  const cutoffMatch = CUTOFF_DATE_PATTERN.exec(input.cutoffDate);
+  if (!cutoffMatch) throw new Error("Turbo cutoff date must use YYYY-MM-DD.");
+  const cutoff = `${cutoffMatch[1]}${cutoffMatch[2]}${cutoffMatch[3]}`;
+  if (!Number.isSafeInteger(input.releaseSequence) || input.releaseSequence <= 0) {
+    throw new Error("Turbo release sequence must be a positive integer.");
+  }
+  return `${input.releaseVersion}.turbo.${cutoff}.${input.releaseSequence}`;
+}
+
 export function resolveTurboInboundUpdate(input: {
   readonly state: TurboUpstreamState;
   readonly release: TurboNightlyRelease;
   readonly mainSha: string;
   readonly nightlySha: string;
   readonly mainDistance: number;
+  readonly cutoffDate?: string;
+  readonly releaseSequence?: number;
 }) {
   if (!/^[0-9a-f]{40}$/u.test(input.mainSha) || !/^[0-9a-f]{40}$/u.test(input.nightlySha)) {
     throw new Error("Official inbound metadata has an invalid commit sha.");
@@ -126,11 +158,22 @@ export function resolveTurboInboundUpdate(input: {
     throw new Error("The recorded official Nightly tag now points at a different commit.");
   }
 
-  const hasUpdate = releaseOrder > 0 || input.mainSha !== input.state.mainSha;
-  const version = createTurboMainSnapshotVersion({
-    releaseVersion: input.release.version,
-    mainDistance: input.mainDistance,
-  });
+  if ((input.cutoffDate === undefined) !== (input.releaseSequence === undefined)) {
+    throw new Error("Turbo daily releases require both cutoffDate and releaseSequence.");
+  }
+  const version =
+    input.cutoffDate === undefined || input.releaseSequence === undefined
+      ? createTurboMainSnapshotVersion({
+          releaseVersion: input.release.version,
+          mainDistance: input.mainDistance,
+        })
+      : createTurboDailyVersion({
+          releaseVersion: input.release.version,
+          cutoffDate: input.cutoffDate,
+          releaseSequence: input.releaseSequence,
+        });
+  const hasUpdate =
+    releaseOrder > 0 || input.mainSha !== input.state.mainSha || version !== input.state.version;
   const versionOrder = compareTurboNightlyTags(`v${version}`, `v${input.state.version}`);
   if (hasUpdate && versionOrder <= 0) {
     throw new Error("Refusing to publish an upstream main snapshot without advancing the version.");
@@ -151,6 +194,12 @@ export function resolveTurboInboundUpdate(input: {
     old_version: input.state.version,
     repository: input.state.repository,
     branch: input.state.branch,
+    ...(input.cutoffDate === undefined
+      ? {}
+      : {
+          cutoff_date: input.cutoffDate,
+          cutoff_label: `${input.cutoffDate.slice(5, 7)}-${input.cutoffDate.slice(8, 10)}-${input.cutoffDate.slice(2, 4)}`,
+        }),
   };
 }
 
@@ -296,12 +345,18 @@ function runResolve(values: Record<string, string | boolean | undefined>): void 
   const release = selectLatestNightlyRelease(readJson(releasesPath));
   const mainSha = decodeMainSha(readJson(mainPath));
   const comparison = decodeMainComparison(readJson(comparePath));
+  const cutoffDate = values["cutoff-date"];
+  const releaseSequenceValue = values["release-sequence"];
+  const releaseSequence =
+    typeof releaseSequenceValue === "string" ? Number(releaseSequenceValue) : undefined;
   const output = resolveTurboInboundUpdate({
     state,
     release,
     mainSha,
     nightlySha: comparison.nightlySha,
     mainDistance: comparison.distance,
+    ...(typeof cutoffDate === "string" ? { cutoffDate } : {}),
+    ...(releaseSequence === undefined ? {} : { releaseSequence }),
   });
   if (values["github-output"] === true) appendGitHubOutput(output);
   else process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -351,6 +406,8 @@ if (isMain) {
       state: { type: "string" },
       main: { type: "string" },
       compare: { type: "string" },
+      "cutoff-date": { type: "string" },
+      "release-sequence": { type: "string" },
       "github-output": { type: "boolean" },
       output: { type: "string" },
       "old-tag": { type: "string" },

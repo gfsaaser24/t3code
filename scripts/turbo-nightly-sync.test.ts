@@ -9,6 +9,7 @@ import { assert, it } from "@effect/vitest";
 
 import {
   compareTurboNightlyTags,
+  createTurboDailyVersion,
   createTurboMainSnapshotVersion,
   decodeTurboUpstreamState,
   findPathCollisions,
@@ -24,6 +25,17 @@ const readWorkflow = (filename: string) =>
   );
 
 const readTurboWorkflow = () => readWorkflow("turbo-nightly-sync.yml");
+
+it("runs once at the 11 PM Eastern cutoff and names the dated Turbo release", () => {
+  const workflow = readTurboWorkflow();
+
+  assert.include(workflow, 'cron: "0 23 * * *"');
+  assert.include(workflow, 'timezone: "America/New_York"');
+  assert.include(workflow, '--cutoff-date "$(TZ=America/New_York date +%F)"');
+  assert.include(workflow, '--release-sequence "$GITHUB_RUN_NUMBER"');
+  assert.include(workflow, '--title "T3 Turbo $CUTOFF_LABEL.exe"');
+  assert.notInclude(workflow, 'cron: "20 */3 * * *"');
+});
 
 it("keeps the pre-install sync bootstrap dependency-free", () => {
   const source = NodeFS.readFileSync(
@@ -150,6 +162,66 @@ it("generates deterministic Turbo versions for upstream main snapshots", () => {
       "v0.0.32-nightly.20260802.980.turbo.2",
     ),
     0,
+  );
+});
+
+it("generates a unique semver release for each Eastern cutoff and workflow run", () => {
+  assert.strictEqual(
+    createTurboDailyVersion({
+      releaseVersion: "0.0.32-nightly.20260803.986",
+      cutoffDate: "2026-08-04",
+      releaseSequence: 42,
+    }),
+    "0.0.32-nightly.20260803.986.turbo.20260804.42",
+  );
+  assert.throws(() =>
+    createTurboDailyVersion({
+      releaseVersion: "0.0.32-nightly.20260803.986",
+      cutoffDate: "08-04-2026",
+      releaseSequence: 42,
+    }),
+  );
+});
+
+it("builds once per daily cutoff even when official source is unchanged", () => {
+  const state = {
+    repository: "pingdotgg/t3code",
+    branch: "main",
+    mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+    nightlyTag: "v0.0.32-nightly.20260803.986",
+    nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+    version: "0.0.32-nightly.20260803.986",
+  };
+  const release = {
+    tag: state.nightlyTag,
+    version: state.version,
+    publishedAt: "2026-08-03T02:00:00Z",
+  };
+
+  const daily = resolveTurboInboundUpdate({
+    state,
+    release,
+    mainSha: state.mainSha,
+    nightlySha: state.nightlySha,
+    mainDistance: 0,
+    cutoffDate: "2026-08-04",
+    releaseSequence: 42,
+  });
+  assert.strictEqual(daily.has_update, "true");
+  assert.strictEqual(daily.version, "0.0.32-nightly.20260803.986.turbo.20260804.42");
+  assert.strictEqual(daily.cutoff_label, "08-04-26");
+
+  assert.strictEqual(
+    resolveTurboInboundUpdate({
+      state: { ...state, version: daily.version, cutoffDate: "2026-08-04" },
+      release,
+      mainSha: state.mainSha,
+      nightlySha: state.nightlySha,
+      mainDistance: 0,
+      cutoffDate: "2026-08-04",
+      releaseSequence: 42,
+    }).has_update,
+    "false",
   );
 });
 

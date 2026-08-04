@@ -241,7 +241,7 @@
     {
       "id": "nightly-and-secret-policy",
       "status": "policy",
-      "summary": "Nightly ingestion preserves the last known-good Turbo stack, publishes only to the fork, and excludes the local secrets note.",
+      "summary": "Daily 11 PM Eastern ingestion preserves the last known-good Turbo stack, publishes only to the fork, and excludes the local secrets note.",
       "checks": [
         {
           "path": ".gitignore",
@@ -258,16 +258,20 @@
         {
           "path": ".github/workflows/turbo-nightly-sync.yml",
           "markers": [
+            "cron: \"0 23 * * *\"",
+            "timezone: \"America/New_York\"",
             "Rebase in an isolated worktree",
             "T3CODE_DESKTOP_UPDATE_REPOSITORY",
+            "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",
             "--force-with-lease"
           ]
         },
         {
           "path": "docs/internals/t3-turbo-nightly-inbound.md",
           "markers": [
-            "replays our small Turbo commit",
-            "publishes that installer only in `gfsaaser24/t3code`",
+            "replays our Turbo commit",
+            "Every day at 11:00 PM",
+            "installer only in `gfsaaser24/t3code`",
             "last known-good release"
           ]
         }

@@ -2,7 +2,8 @@ name: T3-Turbo Nightly Sync
 
 on:
   schedule:
-    - cron: "20 */3 * * *"
+    - cron: "0 23 * * *"
+      timezone: "America/New_York"
   workflow_dispatch:
 
 concurrency:
@@ -30,6 +31,8 @@ jobs:
       old_head: ${{ steps.source.outputs.old_head }}
       tag: ${{ steps.resolve.outputs.tag }}
       version: ${{ steps.resolve.outputs.version }}
+      cutoff_date: ${{ steps.resolve.outputs.cutoff_date }}
+      cutoff_label: ${{ steps.resolve.outputs.cutoff_label }}
       official_tag: ${{ steps.resolve.outputs.official_tag }}
       upstream_sha: ${{ steps.rebase.outputs.upstream_sha }}
       candidate_sha: ${{ steps.rebase.outputs.candidate_sha }}
@@ -82,6 +85,8 @@ jobs:
           --state .t3-turbo/upstream.json
           --main "${{ runner.temp }}/official-main.json"
           --compare "${{ runner.temp }}/official-compare.json"
+          --cutoff-date "$(TZ=America/New_York date +%F)"
+          --release-sequence "$GITHUB_RUN_NUMBER"
           --github-output
 
       - id: rebase
@@ -96,6 +101,7 @@ jobs:
           OLD_NIGHTLY_SHA: ${{ steps.resolve.outputs.old_nightly_sha }}
           OLD_MAIN_SHA: ${{ steps.resolve.outputs.old_main_sha }}
           VERSION: ${{ steps.resolve.outputs.version }}
+          CUTOFF_DATE: ${{ steps.resolve.outputs.cutoff_date }}
           UPSTREAM_REPOSITORY: ${{ steps.resolve.outputs.repository }}
           UPSTREAM_BRANCH: ${{ steps.resolve.outputs.branch }}
         shell: bash
@@ -182,7 +188,8 @@ jobs:
             --arg nightlyTag "$OFFICIAL_TAG" \
             --arg nightlySha "$release_sha" \
             --arg version "$VERSION" \
-            '{ repository: $repository, branch: $branch, mainSha: $mainSha, nightlyTag: $nightlyTag, nightlySha: $nightlySha, version: $version }' \
+            --arg cutoffDate "$CUTOFF_DATE" \
+            '{ repository: $repository, branch: $branch, mainSha: $mainSha, nightlyTag: $nightlyTag, nightlySha: $nightlySha, version: $version, cutoffDate: $cutoffDate }' \
             > "$sync_worktree/.t3-turbo/upstream.json"
           git -C "$sync_worktree" add .t3-turbo/upstream.json
           source_date="$(git -C "$sync_worktree" show -s --format=%aI "$new_sha")"
@@ -419,6 +426,7 @@ jobs:
           TURBO_TAG: ${{ needs.sync_source.outputs.tag }}
           OFFICIAL_TAG: ${{ needs.sync_source.outputs.official_tag }}
           UPSTREAM_SHA: ${{ needs.sync_source.outputs.upstream_sha }}
+          CUTOFF_LABEL: ${{ needs.sync_source.outputs.cutoff_label }}
         shell: bash
         run: |
           set -euo pipefail
@@ -443,7 +451,7 @@ jobs:
           else
             gh release create "$turbo_tag" release-assets/* \
               --target "$staging_branch" \
-              --title "T3-Turbo $TURBO_TAG" \
+              --title "T3 Turbo $CUTOFF_LABEL.exe" \
               --notes "T3-Turbo rebuilt from upstream main at $UPSTREAM_SHA, anchored to official Nightly $OFFICIAL_TAG. No official binary assets were consumed." \
               --prerelease
           fi

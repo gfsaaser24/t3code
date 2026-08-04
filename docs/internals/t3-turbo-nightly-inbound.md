@@ -2,10 +2,11 @@
 
 ## The short version
 
-T3 Turbo does not install Theo's official binaries. Every three hours, our GitHub workflow checks
-both upstream `main` and the newest published Nightly source tag. It replays our small Turbo commit
-stack on top of the latest `main`, verifies the result, builds a new unsigned T3 Turbo installer,
-and publishes that installer only in `gfsaaser24/t3code`.
+T3 Turbo does not install Theo's official binaries. Every day at 11:00 PM
+`America/New_York`, our GitHub workflow takes a cutoff of upstream `main` and the newest published
+Nightly source tag. It replays our Turbo commit stack on top of the latest `main`, verifies every
+registered customization seam, builds a new unsigned T3 Turbo installer, and publishes that
+installer only in `gfsaaser24/t3code`.
 
 `main` is the source we actually inherit. The Nightly tag is a trusted version anchor. This means
 we receive ordinary commits pushed between official Nightly releases as well as the releases
@@ -29,6 +30,7 @@ The file `.t3-turbo/upstream.json` is the workflow's durable checkpoint:
 | `nightlyTag` | The official Nightly release used as the version anchor.      |
 | `nightlySha` | The exact commit to which that official Nightly tag resolves. |
 | `version`    | The last successfully published T3 Turbo updater version.     |
+| `cutoffDate` | The Eastern calendar date represented by that release.        |
 
 The companion `.t3-turbo/customizations.json` file is the machine-readable preservation contract.
 It checks stable content markers at each Turbo integration seam instead of hashing whole files,
@@ -72,7 +74,7 @@ Never hand-edit `mainSha`, `nightlySha`, or `version` to bypass a failed rebase.
 is wrong, stop the schedule, compare it with the last successful release, and repair the branch
 as a reviewed commit.
 
-## What happens every three hours
+## What happens every night
 
 ```text
 Upstream pushes main commits and periodically publishes a Nightly
@@ -80,7 +82,7 @@ Upstream pushes main commits and periodically publishes a Nightly
                               v
 Compare main and the Nightly anchor with upstream.json
                  |                            |
-                 | already current            | changed
+                 | already built for this run  | new daily cutoff/source
                  v                            v
                Stop              Fetch main and Nightly refs
                                                |
@@ -104,8 +106,9 @@ Compare main and the Nightly anchor with upstream.json
                                      Advance turbo with a lease check
 ```
 
-The schedule is `20 */3 * * *`, meaning minute 20 of every third UTC hour. The repository variable
-`TURBO_NIGHTLY_ENABLED` is the master switch.
+The timezone-aware schedule is `0 23 * * *` with `America/New_York`, so daylight-saving changes do
+not move the 11:00 PM Eastern cutoff. The repository variable `TURBO_NIGHTLY_ENABLED` is the master
+switch.
 
 ## Step-by-step
 
@@ -113,7 +116,9 @@ The schedule is `20 */3 * * *`, meaning minute 20 of every third UTC hour. The r
 2. It reads public release and `main` metadata from `pingdotgg/t3code`.
 3. The dependency-free resolver selects the highest valid official Nightly and asks GitHub how
    many commits upstream `main` is ahead of it.
-4. If neither the Nightly tag nor `main` changed, the workflow succeeds and stops.
+4. The resolver assigns the cutoff date and GitHub workflow run number to a unique updater version.
+   A scheduled run therefore builds once for every nightly cutoff even when upstream has no new
+   commit. An exact rerun that was already published is idempotent and stops.
 5. Official `main` and Nightly refs are fetched into private `refs/t3-turbo/official-*` names.
    This keeps them separate from identically named T3 Turbo release tags in our fork.
 6. Git verifies that the new `main` descends from our recorded `mainSha`, that the Nightly commit
@@ -137,14 +142,14 @@ sync_source
     |
     +-- conflict --> report artifact + issue; stop
     |
-    +-- no update --> green run; build and publish skipped
+    +-- exact published rerun --> green run; build and publish skipped
     |
     +-- clean update --> build_wsl_node_pty --> build_windows --> publish --> advance turbo
 ```
 
-`workflow_dispatch` has no inputs. A manual run asks the resolver to check the current upstream
-state; it is not a force-rebuild switch. When `main` and the Nightly tag already match the
-checkpoint, a successful run is expected to produce no installer.
+`workflow_dispatch` has no inputs. Every new manual workflow run gets its own monotonic run number,
+so it can safely rebuild the current Eastern cutoff. Re-running the exact same GitHub run reuses
+the same version and source candidate.
 
 ## Validating a candidate locally
 
@@ -164,29 +169,22 @@ requires the Linux `node-pty` artifact and the Windows toolchain used by Actions
 packaging path is therefore the workflow's isolated build, not a local build against the live T3
 userdata directory.
 
-## How versions work between Nightlies
+## How daily versions work
 
-When upstream `main` exactly matches the newest Nightly tag, Turbo uses the official source
-version:
-
-```text
-0.0.32-nightly.20260802.980
-```
-
-If `main` is one commit ahead, the deterministic Turbo version is:
+The official Nightly remains the source/version anchor. T3 Turbo then appends the Eastern cutoff
+date and GitHub workflow run number. For an August 4 cutoff in workflow run 42:
 
 ```text
-0.0.32-nightly.20260802.980.turbo.1
+0.0.32-nightly.20260803.986.turbo.20260804.42
 ```
 
-Two commits ahead becomes `.turbo.2`, and so on. This is valid semver on the same Electron
-`nightly` channel. It is based on Git history instead of a clock or workflow run number, so the
-same source always resolves to the same version. The next official Nightly naturally sorts above
-the preceding `.turbo.N` snapshots.
+This remains valid semver on the Electron `nightly` channel, advances once per workflow invocation,
+and makes repeat attempts deterministic. The GitHub release title is `T3 Turbo MM-DD-YY.exe`, which
+states the 11:00 PM Eastern ingestion cutoff. The updater assets retain their version and
+architecture in their filenames because `nightly.yml` addresses them by those exact names.
 
-The three-hour poll imports the cumulative `main` tip it observes. If several commits land between
-polls, all of them arrive together in one rebased Turbo build; the workflow does not need one
-installer per individual upstream commit.
+The nightly cutoff imports the cumulative `main` tip it observes. If several commits land during
+the day, all of them arrive together in one rebased Turbo build.
 
 ## What happens when Git reports a conflict
 
@@ -308,9 +306,9 @@ gh variable get TURBO_NIGHTLY_ENABLED --repo gfsaaser24/t3code
 gh run list --workflow turbo-nightly-sync.yml --repo gfsaaser24/t3code --limit 5
 ```
 
-The two workflow blob hashes should match. A normal no-update run is green with the rebase, build,
-and publish jobs skipped. A `main` snapshot ahead of its Nightly anchor publishes with the
-`.turbo.N` suffix described above.
+The two workflow blob hashes should match. Each new scheduled or manually dispatched run publishes
+with the daily `.turbo.YYYYMMDD.RUN` suffix described above. Only an exact already-published rerun
+uses the green no-build path.
 
 ## What requires human attention
 
@@ -325,15 +323,15 @@ Until the issue is resolved, the current branch and release remain the last know
 
 ## Troubleshooting by symptom
 
-| Symptom                            | First checks                                                   | Expected interpretation                                                                 |
-| ---------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| No sync job appears                | `TURBO_NIGHTLY_ENABLED`, Actions enabled, schedule time in UTC | A disabled variable causes the job to be skipped.                                       |
-| Green run, no installer            | `sync_source` outputs and checkpoint                           | Upstream is already current; this is the normal no-update path.                         |
-| Conflict issue/artifact            | Issue body, `turbo-rebase-report.md`, unmerged paths           | Resolve the Turbo commit stack, then rerun; the prior release is safe.                  |
-| Build failure                      | `build_wsl_node_pty` and `build_windows` logs                  | The candidate was not published and `turbo` was not advanced.                           |
-| No Telegram/Slack notice           | notification job, variable/secrets names, hook reachability    | OpenClaw delivery is optional and non-blocking; inspect the gateway separately.         |
-| Run queued indefinitely            | job runner label and Actions runner availability               | Check for an accidental private runner label; do not rewrite history to work around it. |
-| Publish refuses to advance `turbo` | branch history and `--force-with-lease` message                | Someone changed the branch concurrently; inspect before retrying.                       |
+| Symptom                            | First checks                                                     | Expected interpretation                                                                 |
+| ---------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| No sync job appears                | `TURBO_NIGHTLY_ENABLED`, Actions enabled, 11 PM Eastern schedule | A disabled variable causes the job to be skipped.                                       |
+| Green run, no installer            | `sync_source` outputs and checkpoint                             | The exact workflow run/version was already published; inspect if this was not a retry.  |
+| Conflict issue/artifact            | Issue body, `turbo-rebase-report.md`, unmerged paths             | Resolve the Turbo commit stack, then rerun; the prior release is safe.                  |
+| Build failure                      | `build_wsl_node_pty` and `build_windows` logs                    | The candidate was not published and `turbo` was not advanced.                           |
+| No Telegram/Slack notice           | notification job, variable/secrets names, hook reachability      | OpenClaw delivery is optional and non-blocking; inspect the gateway separately.         |
+| Run queued indefinitely            | job runner label and Actions runner availability                 | Check for an accidental private runner label; do not rewrite history to work around it. |
+| Publish refuses to advance `turbo` | branch history and `--force-with-lease` message                  | Someone changed the branch concurrently; inspect before retrying.                       |
 
 For any failed run, start with the run URL and job logs. Do not manually create a release from a
 partial artifact or copy an official binary into the fork feed. The safe recovery is to fix the
