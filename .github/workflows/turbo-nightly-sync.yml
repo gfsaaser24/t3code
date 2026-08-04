@@ -173,6 +173,8 @@ jobs:
             exit 0
           fi
 
+          node scripts/turbo-customization-manifest.ts verify --root "$sync_worktree"
+
           jq -n \
             --arg repository "$UPSTREAM_REPOSITORY" \
             --arg branch "$UPSTREAM_BRANCH" \
@@ -339,7 +341,10 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - name: Validate source-aware sync tooling
-        run: vp test run scripts/turbo-nightly-sync.test.ts
+        run: >-
+          vp test run
+          scripts/turbo-nightly-sync.test.ts
+          scripts/turbo-customization-manifest.test.ts
       - name: Verify T3 Turbo icon derivatives
         run: pnpm icons:turbo:check
       - name: Align package versions

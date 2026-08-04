@@ -30,6 +30,13 @@ The file `.t3-turbo/upstream.json` is the workflow's durable checkpoint:
 | `nightlySha` | The exact commit to which that official Nightly tag resolves. |
 | `version`    | The last successfully published T3 Turbo updater version.     |
 
+The companion `.t3-turbo/customizations.json` file is the machine-readable preservation contract.
+It checks stable content markers at each Turbo integration seam instead of hashing whole files,
+which lets ordinary upstream changes coexist with the fork while still failing when expected
+modules, assets, behavior markers, tests, or policy text disappear. Each seam is labeled
+`implemented`, `policy`, or `planned`; a planned seam verifies its reviewed design contract and
+does not claim that the feature has shipped.
+
 ## Recreating the pipeline in a fork
 
 The pipeline is fork-owned. It does not require access to Theo's GitHub account, an official T3
@@ -114,11 +121,13 @@ The schedule is `20 */3 * * *`, meaning minute 20 of every third UTC hour. The r
    rewritten update is rejected.
 7. The workflow creates a temporary Git worktree and rebases our Turbo commits onto the new main
    commit. It never edits the live `turbo` branch during this stage.
-8. A clean candidate is bundled and handed to isolated Linux and Windows build jobs.
-9. Linux builds the WSL `node-pty` native module. Windows builds the T3 Turbo NSIS installer and
-   update blockmap without signing or official-service credentials.
-10. The workflow requires a valid `nightly.yml` update manifest for our fork-owned build.
-11. Only after every check succeeds does the publish job create a prerelease in
+8. A clean rebase must pass the dependency-free customization manifest verifier inside the
+   temporary candidate worktree. Missing seams fail the source job before a bundle is created.
+9. The verified candidate is bundled and handed to isolated Linux and Windows build jobs.
+10. Linux builds the WSL `node-pty` native module. Windows builds the T3 Turbo NSIS installer and
+    update blockmap without signing or official-service credentials.
+11. The workflow requires a valid `nightly.yml` update manifest for our fork-owned build.
+12. Only after every check succeeds does the publish job create a prerelease in
     `gfsaaser24/t3code` and advance `turbo` with `--force-with-lease`.
 
 The jobs are intentionally gated in sequence:
@@ -143,10 +152,14 @@ The source-aware resolver and report generator have focused tests. Run those bef
 workflow or its checkpoint logic:
 
 ```powershell
-vp test run scripts/turbo-nightly-sync.test.ts
+node scripts/turbo-customization-manifest.ts verify
+vp test run scripts/turbo-nightly-sync.test.ts scripts/turbo-customization-manifest.test.ts
 ```
 
-The Windows build job runs the same test after it checks out the rebased candidate. A full installer
+The source job runs the verifier before it bundles the rebased candidate. The Windows build job
+runs both focused tooling tests after installing dependencies. If upstream moves or replaces a
+seam, update the manifest only in the same reviewed change that supplies and tests the replacement;
+removing a check merely to make ingestion green violates the preservation policy. A full installer
 requires the Linux `node-pty` artifact and the Windows toolchain used by Actions; the supported
 packaging path is therefore the workflow's isolated build, not a local build against the live T3
 userdata directory.
@@ -312,15 +325,15 @@ Until the issue is resolved, the current branch and release remain the last know
 
 ## Troubleshooting by symptom
 
-| Symptom | First checks | Expected interpretation |
-| ------- | ------------ | ----------------------- |
-| No sync job appears | `TURBO_NIGHTLY_ENABLED`, Actions enabled, schedule time in UTC | A disabled variable causes the job to be skipped. |
-| Green run, no installer | `sync_source` outputs and checkpoint | Upstream is already current; this is the normal no-update path. |
-| Conflict issue/artifact | Issue body, `turbo-rebase-report.md`, unmerged paths | Resolve the Turbo commit stack, then rerun; the prior release is safe. |
-| Build failure | `build_wsl_node_pty` and `build_windows` logs | The candidate was not published and `turbo` was not advanced. |
-| No Telegram/Slack notice | notification job, variable/secrets names, hook reachability | OpenClaw delivery is optional and non-blocking; inspect the gateway separately. |
-| Run queued indefinitely | job runner label and Actions runner availability | Check for an accidental private runner label; do not rewrite history to work around it. |
-| Publish refuses to advance `turbo` | branch history and `--force-with-lease` message | Someone changed the branch concurrently; inspect before retrying. |
+| Symptom                            | First checks                                                   | Expected interpretation                                                                 |
+| ---------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| No sync job appears                | `TURBO_NIGHTLY_ENABLED`, Actions enabled, schedule time in UTC | A disabled variable causes the job to be skipped.                                       |
+| Green run, no installer            | `sync_source` outputs and checkpoint                           | Upstream is already current; this is the normal no-update path.                         |
+| Conflict issue/artifact            | Issue body, `turbo-rebase-report.md`, unmerged paths           | Resolve the Turbo commit stack, then rerun; the prior release is safe.                  |
+| Build failure                      | `build_wsl_node_pty` and `build_windows` logs                  | The candidate was not published and `turbo` was not advanced.                           |
+| No Telegram/Slack notice           | notification job, variable/secrets names, hook reachability    | OpenClaw delivery is optional and non-blocking; inspect the gateway separately.         |
+| Run queued indefinitely            | job runner label and Actions runner availability               | Check for an accidental private runner label; do not rewrite history to work around it. |
+| Publish refuses to advance `turbo` | branch history and `--force-with-lease` message                | Someone changed the branch concurrently; inspect before retrying.                       |
 
 For any failed run, start with the run URL and job logs. Do not manually create a release from a
 partial artifact or copy an official binary into the fork feed. The safe recovery is to fix the

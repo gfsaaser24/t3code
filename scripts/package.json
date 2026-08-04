@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "vp test run"
+    "test": "vp test run",
+    "turbo:customizations:verify": "node turbo-customization-manifest.ts verify --root .."
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

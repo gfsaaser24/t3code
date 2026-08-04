@@ -3,6 +3,12 @@
 For a plain-English walkthrough of the complete inbound update flow, see
 [`docs/internals/t3-turbo-nightly-inbound.md`](../docs/internals/t3-turbo-nightly-inbound.md).
 
+`customizations.json` is the machine-readable preservation contract for the current Turbo stack.
+It records stable file and content markers for implemented seams, policy seams, and explicitly
+planned work. Run `pnpm --dir scripts turbo:customizations:verify` from the repository root to
+check it. The verifier intentionally uses content markers rather than whole-file hashes so normal
+upstream edits do not invalidate an otherwise preserved integration.
+
 `turbo-nightly-sync.yml` rebases the commits on the fork's `turbo` branch onto upstream `main`,
 using the newest published Nightly source tag from `pingdotgg/t3code` as a deterministic version
 anchor. It therefore receives both normal main commits and official Nightly releases. It never
@@ -11,7 +17,8 @@ downloads or republishes an official installer.
 The branch must be bootstrapped once by creating `turbo` from the commit recorded in
 `upstream.json`, applying the Turbo customization commits, and pushing it to the fork. Keep
 Turbo-only work as a small reviewable commit stack above that recorded SHA; the workflow
-rewrites that stack during each successful rebase.
+rewrites that stack during each successful rebase. A rebased candidate must pass the customization
+manifest before it can be bundled for build jobs.
 
 The Windows build is intentionally self-contained and unsigned. It does not use official T3
 signing, Clerk, relay, or deployment credentials. Windows may show a SmartScreen warning for
