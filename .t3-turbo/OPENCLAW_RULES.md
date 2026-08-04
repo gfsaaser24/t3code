@@ -38,10 +38,12 @@ branch that lacks the prior Turbo customization stack.
 - Ingest both upstream T3 Code `main` and the newest official T3 Code Nightly source release.
 - Use the Nightly tag as a trusted release/version anchor and upstream `main` as the cumulative
   source of code changes.
-- The daily cutoff is **11:00 PM America/New_York**. Resolve the Eastern-time cutoff explicitly so
-  daylight-saving changes do not move the intended local time.
-- Anything upstream by the cutoff belongs to that day's candidate. Anything later belongs to the
-  following day's candidate.
+- The daily cutoff is **11:00 PM America/New_York**. Resolve the latest completed Eastern-time
+  cutoff to an exact UTC instant so daylight-saving changes and delayed GitHub runners do not move
+  the intended boundary. A manual run before 11:00 PM uses the prior completed cutoff.
+- Resolve upstream `main` with GitHub's commit `until` filter and accept Nightly releases only when
+  their publication timestamp is at or before that same instant. Anything later belongs to the
+  following day's candidate; the date label alone is never a valid cutoff implementation.
 - Fetch upstream into isolated refs. Never give the workflow write access to the upstream
   repository and never download or republish an official installer.
 
@@ -124,6 +126,10 @@ Every daily run reports:
 - relay/portal status and whether their branch changed;
 - artifact name, checksum, and release link, or the exact reason no artifact was published;
 - collision PR/issue link when human review is required.
+
+For a successful publish, write the report into the GitHub release notes, the Actions job summary,
+and a downloadable workflow artifact. Report relay/portal preservation honestly: validation of
+their registered seams is not a deployment and must not be described as one.
 
 The job is complete only when upstream is synchronized, our changes are demonstrably intact,
 everything is branded T3 Turbo, nothing sensitive is embedded, and the last known-good release is

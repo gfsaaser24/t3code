@@ -3,10 +3,10 @@
 ## The short version
 
 T3 Turbo does not install Theo's official binaries. Every day at 11:00 PM
-`America/New_York`, our GitHub workflow takes a cutoff of upstream `main` and the newest published
-Nightly source tag. It replays our Turbo commit stack on top of the latest `main`, verifies every
-registered customization seam, builds a new unsigned T3 Turbo installer, and publishes that
-installer only in `gfsaaser24/t3code`.
+`America/New_York`, our GitHub workflow resolves that local boundary to an exact UTC instant. It
+selects upstream `main` and the newest published Nightly source tag at or before that instant,
+replays our Turbo commit stack on top, verifies every registered customization seam, builds a new
+unsigned T3 Turbo installer, and publishes that installer only in `gfsaaser24/t3code`.
 
 `main` is the source we actually inherit. The Nightly tag is a trusted version anchor. This means
 we receive ordinary commits pushed between official Nightly releases as well as the releases
@@ -22,15 +22,16 @@ themselves. Theo's repository is always read-only from our side.
 
 The file `.t3-turbo/upstream.json` is the workflow's durable checkpoint:
 
-| Field        | Meaning                                                       |
-| ------------ | ------------------------------------------------------------- |
-| `repository` | The read-only official repository.                            |
-| `branch`     | The cumulative source branch, currently `main`.               |
-| `mainSha`    | The exact upstream main commit underneath our Turbo commits.  |
-| `nightlyTag` | The official Nightly release used as the version anchor.      |
-| `nightlySha` | The exact commit to which that official Nightly tag resolves. |
-| `version`    | The last successfully published T3 Turbo updater version.     |
-| `cutoffDate` | The Eastern calendar date represented by that release.        |
+| Field           | Meaning                                                       |
+| --------------- | ------------------------------------------------------------- |
+| `repository`    | The read-only official repository.                            |
+| `branch`        | The cumulative source branch, currently `main`.               |
+| `mainSha`       | The exact upstream main commit underneath our Turbo commits.  |
+| `nightlyTag`    | The official Nightly release used as the version anchor.      |
+| `nightlySha`    | The exact commit to which that official Nightly tag resolves. |
+| `version`       | The last successfully published T3 Turbo updater version.     |
+| `cutoffDate`    | The Eastern calendar date represented by that release.        |
+| `cutoffInstant` | The exact UTC instant for 11:00 PM Eastern on that date.      |
 
 The companion `.t3-turbo/customizations.json` file is the machine-readable preservation contract.
 It checks stable content markers at each Turbo integration seam instead of hashing whole files,
@@ -80,7 +81,10 @@ as a reviewed commit.
 Upstream pushes main commits and periodically publishes a Nightly
                               |
                               v
-Compare main and the Nightly anchor with upstream.json
+Resolve the latest completed 11 PM Eastern cutoff instant
+                              |
+                              v
+Select main and the Nightly anchor at or before that instant
                  |                            |
                  | already built for this run  | new daily cutoff/source
                  v                            v
@@ -107,15 +111,19 @@ Compare main and the Nightly anchor with upstream.json
 ```
 
 The timezone-aware schedule is `0 23 * * *` with `America/New_York`, so daylight-saving changes do
-not move the 11:00 PM Eastern cutoff. The repository variable `TURBO_NIGHTLY_ENABLED` is the master
-switch.
+not move the 11:00 PM Eastern cutoff. A delayed runner still queries the source state at the exact
+scheduled boundary. A manual run before 11:00 PM uses the prior completed cutoff instead of
+claiming a future boundary. The repository variable `TURBO_NIGHTLY_ENABLED` is the master switch.
 
 ## Step-by-step
 
 1. The workflow checks out our `turbo` branch with a sparse, read-only Git fetch.
-2. It reads public release and `main` metadata from `pingdotgg/t3code`.
-3. The dependency-free resolver selects the highest valid official Nightly and asks GitHub how
-   many commits upstream `main` is ahead of it.
+2. The dependency-free resolver turns the latest completed 11:00 PM Eastern boundary into a UTC
+   instant, including the correct daylight-saving offset.
+3. It reads public metadata from `pingdotgg/t3code`: the latest `main` commit returned by GitHub's
+   `until` filter and the highest valid Nightly whose `published_at` timestamp is no later than the
+   same cutoff. GitHub then reports how many commits that exact main snapshot is ahead of the
+   Nightly anchor.
 4. The resolver assigns the cutoff date and GitHub workflow run number to a unique updater version.
    A scheduled run therefore builds once for every nightly cutoff even when upstream has no new
    commit. An exact rerun that was already published is idempotent and stops.
@@ -131,9 +139,14 @@ switch.
 9. The verified candidate is bundled and handed to isolated Linux and Windows build jobs.
 10. Linux builds the WSL `node-pty` native module. Windows builds the T3 Turbo NSIS installer and
     update blockmap without signing or official-service credentials.
-11. The workflow requires a valid `nightly.yml` update manifest for our fork-owned build.
+11. The Windows candidate runs focused tests for the registered branding, explorer, Markdown,
+    image-preview, multi-chat, official-import, and nightly workflow seams. The workflow also
+    requires a valid `nightly.yml` update manifest for our fork-owned build.
 12. Only after every check succeeds does the publish job create a prerelease in
     `gfsaaser24/t3code` and advance `turbo` with `--force-with-lease`.
+13. The publish job records the cutoff, upstream/prior/resulting SHAs, validation status,
+    relay/portal preservation status, installer SHA-256, and release URL in the release notes,
+    Actions summary, and a downloadable completion-report artifact.
 
 The jobs are intentionally gated in sequence:
 
@@ -148,8 +161,8 @@ sync_source
 ```
 
 `workflow_dispatch` has no inputs. Every new manual workflow run gets its own monotonic run number,
-so it can safely rebuild the current Eastern cutoff. Re-running the exact same GitHub run reuses
-the same version and source candidate.
+so it can safely rebuild the latest completed Eastern cutoff. Re-running the exact same GitHub run
+reuses the same version and source candidate.
 
 ## Validating a candidate locally
 
@@ -162,8 +175,9 @@ vp test run scripts/turbo-nightly-sync.test.ts scripts/turbo-customization-manif
 ```
 
 The source job runs the verifier before it bundles the rebased candidate. The Windows build job
-runs both focused tooling tests after installing dependencies. If upstream moves or replaces a
-seam, update the manifest only in the same reviewed change that supplies and tests the replacement;
+runs the tooling tests plus the focused feature tests named directly in the workflow; marker
+presence alone is not proof that a behavior still works. If upstream moves or replaces a seam,
+update the manifest only in the same reviewed change that supplies and tests the replacement;
 removing a check merely to make ingestion green violates the preservation policy. A full installer
 requires the Linux `node-pty` artifact and the Windows toolchain used by Actions; the supported
 packaging path is therefore the workflow's isolated build, not a local build against the live T3
@@ -183,8 +197,22 @@ and makes repeat attempts deterministic. The GitHub release title is `T3 Turbo M
 states the 11:00 PM Eastern ingestion cutoff. The updater assets retain their version and
 architecture in their filenames because `nightly.yml` addresses them by those exact names.
 
-The nightly cutoff imports the cumulative `main` tip it observes. If several commits land during
-the day, all of them arrive together in one rebased Turbo build.
+The nightly cutoff imports the newest cumulative `main` commit at or before the recorded instant.
+If several commits land during the day, all of them arrive together in one rebased Turbo build.
+Commits and Nightly releases after that instant wait for the following cutoff even when the runner
+starts late.
+
+## Successful-run report
+
+The completion report is generated from validated workflow inputs rather than handwritten shell
+text. It records the exact cutoff instant, upstream main SHA, official Nightly tag/SHA, prior Turbo
+SHA, resulting Turbo SHA, manifest and focused-test results, relay/portal preservation status,
+installer name and SHA-256, and the fork release link. The same Markdown is used for the release
+notes, appended to the Actions job summary, and uploaded as `turbo-success-report-<tag>`.
+
+“Relay/portal preserved” means their registered source and policy seams passed and the product
+ingestion did not alter or deploy their infrastructure branch. It does not claim a Cloudflare or
+portal deployment occurred during the desktop build.
 
 ## What happens when Git reports a conflict
 

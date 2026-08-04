@@ -113,6 +113,9 @@ it("rejects ambiguous lifecycles and non-portable repository paths", () => {
 it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat seam", () => {
   const result = verifyTurboCustomizationManifest({ root: repositoryRoot });
   const multiChat = result.manifest.seams.find((seam) => seam.id === "multi-chat-pane-workspace");
+  const markdown = result.manifest.seams.find((seam) => seam.id === "markdown-preview-preference");
+  const nightly = result.manifest.seams.find((seam) => seam.id === "nightly-and-secret-policy");
+  const product = result.manifest.seams.find((seam) => seam.id === "product-identity-and-updater");
 
   assert.deepStrictEqual(result.failures, []);
   assert.deepStrictEqual(result.manifest.seams.map((seam) => seam.id).sort(), [
@@ -130,6 +133,42 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
   assert.isTrue(
     multiChat?.checks.some((check) => check.path.startsWith("apps/web/src/turbo/chatPanes/")),
   );
+  assert.deepStrictEqual(
+    multiChat?.checks
+      .map((check) => check.path)
+      .filter(
+        (path) =>
+          path === "apps/web/src/components/Sidebar.tsx" ||
+          path === "apps/web/src/components/SidebarV2.tsx",
+      )
+      .sort(),
+    ["apps/web/src/components/Sidebar.tsx", "apps/web/src/components/SidebarV2.tsx"],
+  );
+  assert.isTrue(
+    multiChat?.checks.some((check) => check.path.endsWith("chatPanePersistence.test.ts")),
+  );
+  assert.isTrue(
+    multiChat?.checks.some((check) => check.path.endsWith("chatPaneResourcePolicy.test.ts")),
+  );
+  assert.isTrue(
+    markdown?.checks.some(
+      (check) => check.path === "apps/web/src/components/chat/markdownFileLinkGesture.test.ts",
+    ),
+  );
+  assert.isTrue(
+    markdown?.checks.some(
+      (check) => check.path === "apps/server/src/process/externalLauncher.test.ts",
+    ),
+  );
+  assert.isTrue(
+    markdown?.checks.some(
+      (check) => check.path === "apps/web/src/components/settings/SettingsSidebarNav.tsx",
+    ),
+  );
+  assert.isTrue(
+    nightly?.checks.some((check) => check.markers.includes("Do not publish T3 Turbo to NPM")),
+  );
+  assert.isTrue(product?.checks.some((check) => check.markers.includes("--publish never")));
 });
 
 it("verifies the rebased candidate before the nightly workflow bundles it", () => {

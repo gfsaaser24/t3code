@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off - This source-sync bootstrap runs before workspace dependencies are installed.
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off - This source-sync bootstrap runs before workspace dependencies are installed.
 
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -13,6 +13,7 @@ export interface TurboUpstreamState {
   readonly nightlySha: string;
   readonly version: string;
   readonly cutoffDate?: string;
+  readonly cutoffInstant?: string;
 }
 
 export interface GitHubRelease {
@@ -34,6 +35,126 @@ const TURBO_NIGHTLY_TAG_PATTERN =
 const TURBO_NIGHTLY_VERSION_PATTERN =
   /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+(?:\.\d+)?)?$/u;
 const CUTOFF_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
+const SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const EASTERN_TIME_ZONE = "America/New_York";
+const EASTERN_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: EASTERN_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hourCycle: "h23",
+});
+
+interface ZonedDateTimeParts {
+  readonly year: number;
+  readonly month: number;
+  readonly day: number;
+  readonly hour: number;
+  readonly minute: number;
+  readonly second: number;
+}
+
+function decodeInstant(value: string, context: string): number {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) {
+    throw new Error(`${context} must be a canonical ISO-8601 UTC instant.`);
+  }
+  return timestamp;
+}
+
+function getEasternDateTimeParts(timestamp: number): ZonedDateTimeParts {
+  const values = Object.fromEntries(
+    EASTERN_DATE_TIME_FORMATTER.formatToParts(timestamp).flatMap((part) =>
+      part.type === "literal" ? [] : [[part.type, Number(part.value)]],
+    ),
+  );
+  if (
+    !Number.isSafeInteger(values.year) ||
+    !Number.isSafeInteger(values.month) ||
+    !Number.isSafeInteger(values.day) ||
+    !Number.isSafeInteger(values.hour) ||
+    !Number.isSafeInteger(values.minute) ||
+    !Number.isSafeInteger(values.second)
+  ) {
+    throw new Error("Unable to resolve the Eastern-time nightly cutoff.");
+  }
+  return values as unknown as ZonedDateTimeParts;
+}
+
+function easternLocalTimeToInstant(parts: ZonedDateTimeParts): number {
+  const desiredAsUtc = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  let candidate = desiredAsUtc;
+  for (let iteration = 0; iteration < 3; iteration += 1) {
+    const actual = getEasternDateTimeParts(candidate);
+    const actualAsUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second,
+    );
+    candidate += desiredAsUtc - actualAsUtc;
+  }
+  const resolved = getEasternDateTimeParts(candidate);
+  if (
+    Object.entries(parts).some(
+      ([key, value]) => resolved[key as keyof ZonedDateTimeParts] !== value,
+    )
+  ) {
+    throw new Error("Unable to map the Eastern-time nightly cutoff to UTC.");
+  }
+  return candidate;
+}
+
+export function resolveTurboEasternCutoff(now: string | Date = new Date()): {
+  readonly cutoffDate: string;
+  readonly cutoffLabel: string;
+  readonly cutoffInstant: string;
+} {
+  const nowTimestamp =
+    typeof now === "string" ? decodeInstant(now, "Turbo cutoff reference time") : now.getTime();
+  if (!Number.isFinite(nowTimestamp)) throw new Error("Turbo cutoff reference time is invalid.");
+
+  const easternNow = getEasternDateTimeParts(nowTimestamp);
+  const localCalendarDate = Date.UTC(easternNow.year, easternNow.month - 1, easternNow.day);
+  const cutoffCalendarDate = new Date(
+    easternNow.hour >= 23 ? localCalendarDate : localCalendarDate - 24 * 60 * 60 * 1_000,
+  );
+  const year = cutoffCalendarDate.getUTCFullYear();
+  const month = cutoffCalendarDate.getUTCMonth() + 1;
+  const day = cutoffCalendarDate.getUTCDate();
+  const cutoffInstant = new Date(
+    easternLocalTimeToInstant({ year, month, day, hour: 23, minute: 0, second: 0 }),
+  ).toISOString();
+  const cutoffDate = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return {
+    cutoffDate,
+    cutoffLabel: `${cutoffDate.slice(5, 7)}-${cutoffDate.slice(8, 10)}-${cutoffDate.slice(2, 4)}`,
+    cutoffInstant,
+  };
+}
+
+function validateCutoffDateAndInstant(cutoffDate: string, cutoffInstant: string): void {
+  if (!CUTOFF_DATE_PATTERN.test(cutoffDate)) {
+    throw new Error("Turbo cutoff date must use YYYY-MM-DD.");
+  }
+  const resolved = resolveTurboEasternCutoff(cutoffInstant);
+  if (resolved.cutoffDate !== cutoffDate || resolved.cutoffInstant !== cutoffInstant) {
+    throw new Error("Turbo cutoff date and instant must identify the same 11 PM Eastern boundary.");
+  }
+}
 
 export function compareTurboNightlyTags(left: string, right: string): number {
   if (!TURBO_NIGHTLY_TAG_PATTERN.test(left) || !TURBO_NIGHTLY_TAG_PATTERN.test(right)) {
@@ -73,6 +194,16 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
   ) {
     throw new Error("Turbo upstream cutoffDate must use YYYY-MM-DD when present.");
   }
+  const cutoffInstant = value.cutoffInstant;
+  if (cutoffInstant !== undefined && typeof cutoffInstant !== "string") {
+    throw new Error("Turbo upstream cutoffInstant must be a string when present.");
+  }
+  if (typeof cutoffInstant === "string") {
+    decodeInstant(cutoffInstant, "Turbo upstream cutoffInstant");
+  }
+  if (typeof cutoffDate === "string" && typeof cutoffInstant === "string") {
+    validateCutoffDateAndInstant(cutoffDate, cutoffInstant);
+  }
   const state = {
     repository: value.repository,
     branch: value.branch,
@@ -81,6 +212,7 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
     nightlySha: value.nightlySha,
     version: value.version,
     ...(typeof cutoffDate === "string" ? { cutoffDate } : {}),
+    ...(typeof cutoffInstant === "string" ? { cutoffInstant } : {}),
   };
   if (!state.repository.trim() || !state.branch.trim()) {
     throw new Error("Turbo upstream repository and branch cannot be empty.");
@@ -88,7 +220,7 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
   if (!NIGHTLY_TAG_PATTERN.test(state.nightlyTag)) {
     throw new Error(`Turbo upstream state has an invalid nightly tag: ${state.nightlyTag}`);
   }
-  if (!/^[0-9a-f]{40}$/u.test(state.mainSha) || !/^[0-9a-f]{40}$/u.test(state.nightlySha)) {
+  if (!SHA_PATTERN.test(state.mainSha) || !SHA_PATTERN.test(state.nightlySha)) {
     throw new Error("Turbo upstream state has an invalid commit sha.");
   }
   if (!TURBO_NIGHTLY_VERSION_PATTERN.test(state.version)) {
@@ -203,10 +335,17 @@ export function resolveTurboInboundUpdate(input: {
   };
 }
 
-export function selectLatestNightlyRelease(value: unknown): TurboNightlyRelease {
+export function selectLatestNightlyRelease(
+  value: unknown,
+  publishedAtOrBefore?: string,
+): TurboNightlyRelease {
   if (!Array.isArray(value)) {
     throw new Error("GitHub releases payload must be an array.");
   }
+  const cutoffTimestamp =
+    publishedAtOrBefore === undefined
+      ? undefined
+      : decodeInstant(publishedAtOrBefore, "Nightly publication cutoff");
 
   const releases = value.flatMap((candidate): ReadonlyArray<TurboNightlyRelease> => {
     if (!isRecord(candidate) || candidate.draft === true || candidate.prerelease !== true)
@@ -215,7 +354,14 @@ export function selectLatestNightlyRelease(value: unknown): TurboNightlyRelease 
       return [];
     }
     const match = NIGHTLY_TAG_PATTERN.exec(candidate.tag_name);
-    if (!match?.[1] || Number.isNaN(Date.parse(candidate.published_at))) return [];
+    const publishedAt = Date.parse(candidate.published_at);
+    if (
+      !match?.[1] ||
+      Number.isNaN(publishedAt) ||
+      (cutoffTimestamp !== undefined && publishedAt > cutoffTimestamp)
+    ) {
+      return [];
+    }
     return [{ tag: candidate.tag_name, version: match[1], publishedAt: candidate.published_at }];
   });
 
@@ -225,8 +371,69 @@ export function selectLatestNightlyRelease(value: unknown): TurboNightlyRelease 
       ? versionOrder
       : Date.parse(right.publishedAt) - Date.parse(left.publishedAt);
   })[0];
-  if (!latest) throw new Error("No published official nightly release was found.");
+  if (!latest) {
+    throw new Error(
+      cutoffTimestamp === undefined
+        ? "No published official nightly release was found."
+        : `No published official nightly release was found by ${publishedAtOrBefore}.`,
+    );
+  }
   return latest;
+}
+
+export function renderTurboSuccessReport(input: {
+  readonly cutoffInstant: string;
+  readonly upstreamSha: string;
+  readonly nightlyTag: string;
+  readonly nightlySha: string;
+  readonly priorTurboSha: string;
+  readonly resultingTurboSha: string;
+  readonly manifestResult: string;
+  readonly testResult: string;
+  readonly relayPortalStatus: string;
+  readonly artifactName: string;
+  readonly artifactSha256: string;
+  readonly releaseUrl: string;
+}): string {
+  decodeInstant(input.cutoffInstant, "Turbo completion cutoff");
+  for (const [label, sha] of [
+    ["upstream", input.upstreamSha],
+    ["Nightly", input.nightlySha],
+    ["prior Turbo", input.priorTurboSha],
+    ["resulting Turbo", input.resultingTurboSha],
+  ] as const) {
+    if (!SHA_PATTERN.test(sha)) throw new Error(`Turbo completion ${label} SHA is invalid.`);
+  }
+  if (!NIGHTLY_TAG_PATTERN.test(input.nightlyTag)) {
+    throw new Error("Turbo completion Nightly tag is invalid.");
+  }
+  if (!SHA256_PATTERN.test(input.artifactSha256)) {
+    throw new Error("Turbo completion artifact SHA-256 is invalid.");
+  }
+  for (const [label, value] of [
+    ["manifest result", input.manifestResult],
+    ["test result", input.testResult],
+    ["relay/portal status", input.relayPortalStatus],
+    ["artifact name", input.artifactName],
+    ["release URL", input.releaseUrl],
+  ] as const) {
+    if (!value.trim()) throw new Error(`Turbo completion ${label} cannot be empty.`);
+  }
+  return [
+    "## T3 Turbo nightly completion",
+    "",
+    `- Cutoff: \`${input.cutoffInstant}\` (11:00 PM America/New_York)`,
+    `- Upstream main: \`${input.upstreamSha}\``,
+    `- Official Nightly: \`${input.nightlyTag}\` (\`${input.nightlySha}\`)`,
+    `- Prior Turbo: \`${input.priorTurboSha}\``,
+    `- Resulting Turbo: \`${input.resultingTurboSha}\``,
+    `- Customization manifest: ${input.manifestResult}`,
+    `- Focused seam tests: ${input.testResult}`,
+    `- Relay/portal: ${input.relayPortalStatus}`,
+    `- Installer SHA-256: \`${input.artifactSha256}\` (\`${input.artifactName}\`)`,
+    `- Release: ${input.releaseUrl}`,
+    "",
+  ].join("\n");
 }
 
 export function findPathCollisions(
@@ -296,10 +503,15 @@ function appendGitHubOutput(values: Readonly<Record<string, string>>): void {
 }
 
 function decodeMainSha(value: unknown): string {
-  if (!isRecord(value) || typeof value.sha !== "string" || !/^[0-9a-f]{40}$/u.test(value.sha)) {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (
+    !isRecord(candidate) ||
+    typeof candidate.sha !== "string" ||
+    !SHA_PATTERN.test(candidate.sha)
+  ) {
     throw new Error("Official main metadata must contain a valid commit sha.");
   }
-  return value.sha;
+  return candidate.sha;
 }
 
 function decodeMainComparison(value: unknown): {
@@ -324,8 +536,28 @@ function runLatest(values: Record<string, string | boolean | undefined>): void {
   const releasesPath = values.releases;
   if (typeof releasesPath !== "string") throw new Error("latest requires --releases.");
   process.stdout.write(
-    `${JSON.stringify(selectLatestNightlyRelease(readJson(releasesPath)), null, 2)}\n`,
+    `${JSON.stringify(
+      selectLatestNightlyRelease(
+        readJson(releasesPath),
+        typeof values["cutoff-instant"] === "string" ? values["cutoff-instant"] : undefined,
+      ),
+      null,
+      2,
+    )}\n`,
   );
+}
+
+function runCutoff(values: Record<string, string | boolean | undefined>): void {
+  const cutoff = resolveTurboEasternCutoff(
+    typeof values.now === "string" ? values.now : new Date(),
+  );
+  const output = {
+    cutoff_date: cutoff.cutoffDate,
+    cutoff_label: cutoff.cutoffLabel,
+    cutoff_instant: cutoff.cutoffInstant,
+  };
+  if (values["github-output"] === true) appendGitHubOutput(output);
+  else process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
 }
 
 function runResolve(values: Record<string, string | boolean | undefined>): void {
@@ -342,10 +574,20 @@ function runResolve(values: Record<string, string | boolean | undefined>): void 
     throw new Error("resolve requires --releases, --state, --main, and --compare.");
   }
   const state = decodeTurboUpstreamState(readJson(statePath));
-  const release = selectLatestNightlyRelease(readJson(releasesPath));
+  const cutoffInstant = values["cutoff-instant"];
+  const release = selectLatestNightlyRelease(
+    readJson(releasesPath),
+    typeof cutoffInstant === "string" ? cutoffInstant : undefined,
+  );
   const mainSha = decodeMainSha(readJson(mainPath));
   const comparison = decodeMainComparison(readJson(comparePath));
   const cutoffDate = values["cutoff-date"];
+  if ((typeof cutoffDate === "string") !== (typeof cutoffInstant === "string")) {
+    throw new Error("resolve requires --cutoff-date and --cutoff-instant together.");
+  }
+  if (typeof cutoffDate === "string" && typeof cutoffInstant === "string") {
+    validateCutoffDateAndInstant(cutoffDate, cutoffInstant);
+  }
   const releaseSequenceValue = values["release-sequence"];
   const releaseSequence =
     typeof releaseSequenceValue === "string" ? Number(releaseSequenceValue) : undefined;
@@ -360,6 +602,44 @@ function runResolve(values: Record<string, string | boolean | undefined>): void 
   });
   if (values["github-output"] === true) appendGitHubOutput(output);
   else process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+}
+
+function runSuccessReport(values: Record<string, string | boolean | undefined>): void {
+  const outputPath = values.output;
+  if (typeof outputPath !== "string") throw new Error("success-report requires --output.");
+  const required = [
+    "cutoff-instant",
+    "upstream-sha",
+    "nightly-tag",
+    "nightly-sha",
+    "prior-turbo-sha",
+    "resulting-turbo-sha",
+    "manifest-result",
+    "test-result",
+    "relay-portal-status",
+    "artifact-name",
+    "artifact-sha256",
+    "release-url",
+  ] as const;
+  for (const name of required) {
+    if (typeof values[name] !== "string") throw new Error(`success-report requires --${name}.`);
+  }
+  const report = renderTurboSuccessReport({
+    cutoffInstant: values["cutoff-instant"] as string,
+    upstreamSha: values["upstream-sha"] as string,
+    nightlyTag: values["nightly-tag"] as string,
+    nightlySha: values["nightly-sha"] as string,
+    priorTurboSha: values["prior-turbo-sha"] as string,
+    resultingTurboSha: values["resulting-turbo-sha"] as string,
+    manifestResult: values["manifest-result"] as string,
+    testResult: values["test-result"] as string,
+    relayPortalStatus: values["relay-portal-status"] as string,
+    artifactName: values["artifact-name"] as string,
+    artifactSha256: values["artifact-sha256"] as string,
+    releaseUrl: values["release-url"] as string,
+  });
+  NodeFS.mkdirSync(NodePath.dirname(NodePath.resolve(outputPath)), { recursive: true });
+  NodeFS.writeFileSync(outputPath, report);
 }
 
 function runReport(values: Record<string, string | boolean | undefined>): void {
@@ -407,7 +687,9 @@ if (isMain) {
       main: { type: "string" },
       compare: { type: "string" },
       "cutoff-date": { type: "string" },
+      "cutoff-instant": { type: "string" },
       "release-sequence": { type: "string" },
+      now: { type: "string" },
       "github-output": { type: "boolean" },
       output: { type: "string" },
       "old-tag": { type: "string" },
@@ -418,11 +700,27 @@ if (isMain) {
       "customization-paths": { type: "string" },
       "unmerged-paths": { type: "string" },
       "rebase-error": { type: "string" },
+      "upstream-sha": { type: "string" },
+      "nightly-tag": { type: "string" },
+      "nightly-sha": { type: "string" },
+      "prior-turbo-sha": { type: "string" },
+      "resulting-turbo-sha": { type: "string" },
+      "manifest-result": { type: "string" },
+      "test-result": { type: "string" },
+      "relay-portal-status": { type: "string" },
+      "artifact-name": { type: "string" },
+      "artifact-sha256": { type: "string" },
+      "release-url": { type: "string" },
     },
     strict: true,
   });
-  if (command === "latest") runLatest(values);
+  if (command === "cutoff") runCutoff(values);
+  else if (command === "latest") runLatest(values);
   else if (command === "resolve") runResolve(values);
   else if (command === "report") runReport(values);
-  else throw new Error("Expected command 'latest', 'resolve', or 'report'.");
+  else if (command === "success-report") runSuccessReport(values);
+  else
+    throw new Error(
+      "Expected command 'cutoff', 'latest', 'resolve', 'report', or 'success-report'.",
+    );
 }

@@ -22,7 +22,7 @@
         },
         {
           "path": "scripts/build-desktop-artifact.ts",
-          "markers": ["T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code"]
+          "markers": ["T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code", "--publish never"]
         },
         {
           "path": "apps/desktop/src/app/DesktopEnvironment.test.ts",
@@ -142,6 +142,50 @@
             "Show rendered markdown",
             "Show markdown source"
           ]
+        },
+        {
+          "path": "apps/web/src/components/chat/markdownFileLinkGesture.ts",
+          "markers": ["export function resolveMarkdownFileLinkGesture", "open-system-default"]
+        },
+        {
+          "path": "apps/web/src/components/chat/markdownFileLinkGesture.test.ts",
+          "markers": ["opens Markdown files with the system default app on Ctrl+Shift+click"]
+        },
+        {
+          "path": "apps/web/src/components/ChatMarkdown.tsx",
+          "markers": ["resolveMarkdownFileLinkGesture", "open-file-with-system-default"]
+        },
+        {
+          "path": "packages/contracts/src/rpc.ts",
+          "markers": ["shellOpenPath: \"shell.openPath\"", "payload: OpenPathInput"]
+        },
+        {
+          "path": "apps/server/src/ws.ts",
+          "markers": ["externalLauncher.launchPath(input.path)"]
+        },
+        {
+          "path": "apps/server/src/process/externalLauncher.ts",
+          "markers": ["readonly launchPath:", "const launchPath = Effect.fn"]
+        },
+        {
+          "path": "apps/server/src/process/externalLauncher.test.ts",
+          "markers": ["opens an absolute path with the system default application without a shell"]
+        },
+        {
+          "path": "apps/web/src/components/settings/T3TurboSettings.tsx",
+          "markers": ["title=\"T3 Turbo Settings\"", "Markdown file display"]
+        },
+        {
+          "path": "apps/web/src/routes/settings.t3-turbo.tsx",
+          "markers": ["createFileRoute(\"/settings/t3-turbo\")"]
+        },
+        {
+          "path": "apps/web/src/components/settings/SettingsSidebarNav.tsx",
+          "markers": ["\"/settings/t3-turbo\": GaugeIcon", "SETTINGS_NAV_ITEMS"]
+        },
+        {
+          "path": "apps/web/src/components/settings/settingsSearch.test.ts",
+          "markers": ["exposes T3 Turbo Settings and its Markdown preference"]
         }
       ]
     },
@@ -240,6 +284,30 @@
           ]
         },
         {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["openChatPaneTarget({ kind: \"server\", threadRef }, chatPaneSide)"]
+        },
+        {
+          "path": "apps/web/src/components/SidebarV2.tsx",
+          "markers": ["openChatPaneTarget({ kind: \"server\", threadRef }, chatPaneSide)"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneContextMenu.test.ts",
+          "markers": ["offers the right and left split actions"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneLayout.test.ts",
+          "markers": ["inserts panes immediately left and right of the focused pane"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPanePersistence.test.ts",
+          "markers": ["round-trips server and draft targets"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
+          "markers": ["grants global resource ownership only to the focused pane"]
+        },
+        {
           "path": "docs/user/chat-panes.md",
           "markers": ["T3 Turbo can keep several chats visible", "layout record"]
         }
@@ -286,7 +354,8 @@
           "markers": [
             "ingestion starts with the last known-good T3 Turbo branch",
             "Never resolve a collision with a blanket `ours`, `theirs`, force push, clean checkout",
-            "Never bake credentials, tokens, secrets"
+            "Never bake credentials, tokens, secrets",
+            "Do not publish T3 Turbo to NPM"
           ]
         },
         {
@@ -294,7 +363,11 @@
           "markers": [
             "cron: \"0 23 * * *\"",
             "timezone: \"America/New_York\"",
+            "Resolve the completed Eastern cutoff",
+            "-f until=\"$CUTOFF_INSTANT\"",
             "Rebase in an isolated worktree",
+            "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
+            "Create nightly completion report",
             "T3CODE_DESKTOP_UPDATE_REPOSITORY",
             "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",
             "--force-with-lease"

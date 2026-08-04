@@ -14,6 +14,8 @@ import {
   decodeTurboUpstreamState,
   findPathCollisions,
   renderTurboCollisionReport,
+  renderTurboSuccessReport,
+  resolveTurboEasternCutoff,
   resolveTurboInboundUpdate,
   selectLatestNightlyRelease,
 } from "./turbo-nightly-sync.ts";
@@ -31,10 +33,31 @@ it("runs once at the 11 PM Eastern cutoff and names the dated Turbo release", ()
 
   assert.include(workflow, 'cron: "0 23 * * *"');
   assert.include(workflow, 'timezone: "America/New_York"');
-  assert.include(workflow, '--cutoff-date "$(TZ=America/New_York date +%F)"');
+  assert.include(workflow, "node scripts/turbo-nightly-sync.ts cutoff --github-output");
+  assert.include(workflow, '--cutoff-instant "$CUTOFF_INSTANT"');
+  assert.include(workflow, '-f until="$CUTOFF_INSTANT"');
+  assert.include(workflow, "compare/$official_tag...$main_sha");
   assert.include(workflow, '--release-sequence "$GITHUB_RUN_NUMBER"');
   assert.include(workflow, '--title "T3 Turbo $CUTOFF_LABEL.exe"');
   assert.notInclude(workflow, 'cron: "20 */3 * * *"');
+});
+
+it("resolves the latest completed 11 PM Eastern cutoff across daylight-saving time", () => {
+  assert.deepStrictEqual(resolveTurboEasternCutoff("2026-08-05T03:17:00.000Z"), {
+    cutoffDate: "2026-08-04",
+    cutoffLabel: "08-04-26",
+    cutoffInstant: "2026-08-05T03:00:00.000Z",
+  });
+  assert.deepStrictEqual(resolveTurboEasternCutoff("2026-08-05T02:59:59.000Z"), {
+    cutoffDate: "2026-08-03",
+    cutoffLabel: "08-03-26",
+    cutoffInstant: "2026-08-04T03:00:00.000Z",
+  });
+  assert.deepStrictEqual(resolveTurboEasternCutoff("2026-01-15T04:05:00.000Z"), {
+    cutoffDate: "2026-01-14",
+    cutoffLabel: "01-14-26",
+    cutoffInstant: "2026-01-15T04:00:00.000Z",
+  });
 });
 
 it("keeps the pre-install sync bootstrap dependency-free", () => {
@@ -100,6 +123,29 @@ it("selects the newest published official nightly and ignores drafts and stable 
   );
 });
 
+it("excludes official nightlies published after the exact Eastern cutoff", () => {
+  assert.strictEqual(
+    selectLatestNightlyRelease(
+      [
+        {
+          tag_name: "v0.0.33-nightly.20260804.2",
+          prerelease: true,
+          draft: false,
+          published_at: "2026-08-05T03:00:01Z",
+        },
+        {
+          tag_name: "v0.0.33-nightly.20260804.1",
+          prerelease: true,
+          draft: false,
+          published_at: "2026-08-05T03:00:00Z",
+        },
+      ],
+      "2026-08-05T03:00:00.000Z",
+    ).tag,
+    "v0.0.33-nightly.20260804.1",
+  );
+});
+
 it("validates the durable upstream state", () => {
   assert.deepStrictEqual(
     decodeTurboUpstreamState({
@@ -137,6 +183,34 @@ it("validates the durable upstream state", () => {
       nightlyTag: "v0.0.32-nightly.20260802.980",
       nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
       version: "0.0.32-nightly.20260802.980.turbo.0",
+    }),
+  );
+  assert.deepInclude(
+    decodeTurboUpstreamState({
+      repository: "pingdotgg/t3code",
+      branch: "main",
+      mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      nightlyTag: "v0.0.32-nightly.20260802.980",
+      nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      version: "0.0.32-nightly.20260802.980.turbo.20260804.42",
+      cutoffDate: "2026-08-04",
+      cutoffInstant: "2026-08-05T03:00:00.000Z",
+    }),
+    {
+      cutoffDate: "2026-08-04",
+      cutoffInstant: "2026-08-05T03:00:00.000Z",
+    },
+  );
+  assert.throws(() =>
+    decodeTurboUpstreamState({
+      repository: "pingdotgg/t3code",
+      branch: "main",
+      mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      nightlyTag: "v0.0.32-nightly.20260802.980",
+      nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      version: "0.0.32-nightly.20260802.980.turbo.20260804.42",
+      cutoffDate: "2026-08-03",
+      cutoffInstant: "2026-08-05T03:00:00.000Z",
     }),
   );
 });
@@ -346,6 +420,33 @@ it("renders a review report without claiming that path overlap is a merge confli
   assert.include(report, "CONFLICT (content)");
 });
 
+it("renders a complete successful nightly report", () => {
+  const report = renderTurboSuccessReport({
+    cutoffInstant: "2026-08-05T03:00:00.000Z",
+    upstreamSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    nightlyTag: "v0.0.33-nightly.20260804.1",
+    nightlySha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    priorTurboSha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    resultingTurboSha: "cccccccccccccccccccccccccccccccccccccccc",
+    manifestResult: "passed (9 seams)",
+    testResult: "passed",
+    relayPortalStatus: "preserved; no deployment performed",
+    artifactName: "T3-Turbo.exe",
+    artifactSha256: "d".repeat(64),
+    releaseUrl: "https://github.com/gfsaaser24/t3code/releases/tag/v1",
+  });
+
+  assert.include(report, "Upstream main: `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`");
+  assert.include(report, "Official Nightly: `v0.0.33-nightly.20260804.1`");
+  assert.include(report, "Prior Turbo: `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`");
+  assert.include(report, "Resulting Turbo: `cccccccccccccccccccccccccccccccccccccccc`");
+  assert.include(report, "Customization manifest: passed (9 seams)");
+  assert.include(report, "Focused seam tests: passed");
+  assert.include(report, "Relay/portal: preserved; no deployment performed");
+  assert.include(report, "Installer SHA-256");
+  assert.include(report, "https://github.com/gfsaaser24/t3code/releases/tag/v1");
+});
+
 it("resolves update metadata through the CLI", () => {
   const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "turbo-nightly-sync-"));
   try {
@@ -377,7 +478,7 @@ it("resolves update metadata through the CLI", () => {
     );
     NodeFS.writeFileSync(
       mainPath,
-      JSON.stringify({ sha: "ffffffffffffffffffffffffffffffffffffffff" }),
+      JSON.stringify([{ sha: "ffffffffffffffffffffffffffffffffffffffff" }]),
     );
     NodeFS.writeFileSync(
       comparePath,
