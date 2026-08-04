@@ -215,6 +215,20 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("exposes the repeatable official data import utility", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(
+        runCli(["import", "official", "--help"], noConnectCli),
+      );
+
+      assert.include(output, "Import official T3 Code data directly into the T3 Turbo database.");
+      assert.include(output, "plan");
+      assert.include(output, "apply");
+      assert.include(output, "run");
+      assert.include(output, "restore");
+    }),
+  );
+
   it.effect("reports fresh headless connect state without requiring local configuration", () =>
     Effect.gen(function* () {
       const baseDir = NodeFS.mkdtempSync(

@@ -34,6 +34,15 @@ export class OfficialImportProjectionVerificationError extends Schema.TaggedErro
   }
 }
 
+export class OfficialImportProjectionReplayError extends Schema.TaggedErrorClass<OfficialImportProjectionReplayError>()(
+  "OfficialImportProjectionReplayError",
+  { reason: Schema.String },
+) {
+  override get message(): string {
+    return `Failed to rebuild imported projections: ${this.reason}`;
+  }
+}
+
 export interface RebuildOfficialImportProjectionsInput {
   readonly databasePath: string;
   /** Empty, disposable T3 base directory used for attachment side effects during replay. */
@@ -91,6 +100,15 @@ export const rebuildOfficialImportProjections = Effect.fn("rebuildOfficialImport
           maxSequence,
         });
       }
-    }).pipe(Effect.provide(runtimeLayer), Effect.scoped);
+    }).pipe(
+      Effect.provide(runtimeLayer),
+      Effect.scoped,
+      Effect.mapError(
+        (cause) =>
+          new OfficialImportProjectionReplayError({
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+      ),
+    );
   },
 );
