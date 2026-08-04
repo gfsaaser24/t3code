@@ -39,6 +39,7 @@ import {
   copyCheckpointDiffBlobs,
   cutoverImport,
   deleteCanonicalThreadStreams,
+  fingerprintDatabase,
   prepareImportWorkspace,
   readCommandReceipts,
   readOrchestrationEvents,
@@ -200,24 +201,26 @@ export const prepareOfficialImport = Effect.fn("prepareOfficialImport")(function
   input: PrepareOfficialImportInput,
 ) {
   const workspace = yield* prepareImportWorkspace(input);
-  const [sourceEvents, targetEvents] = yield* Effect.all([
-    readOrchestrationEvents(workspace.sourceSnapshotPath),
-    readOrchestrationEvents(workspace.targetStagingPath),
-  ]);
-  const plan = planOfficialImport({
-    source: buildOfficialImportDataset(sourceEvents),
-    target: buildOfficialImportDataset(targetEvents),
-    ...(input.collisionChoices === undefined ? {} : { collisionChoices: input.collisionChoices }),
-    ...(input.existingIdMap === undefined ? {} : { existingIdMap: input.existingIdMap }),
-  });
-  const createdAt = DateTime.formatIso(yield* DateTime.now);
-  return {
-    version: 1,
-    kind: "t3-turbo-official-import-plan",
-    createdAt,
-    workspace,
-    plan,
-  } as const;
+  return yield* Effect.gen(function* () {
+    const [sourceEvents, targetEvents] = yield* Effect.all([
+      readOrchestrationEvents(workspace.sourceSnapshotPath),
+      readOrchestrationEvents(workspace.targetStagingPath),
+    ]);
+    const plan = planOfficialImport({
+      source: buildOfficialImportDataset(sourceEvents),
+      target: buildOfficialImportDataset(targetEvents),
+      ...(input.collisionChoices === undefined ? {} : { collisionChoices: input.collisionChoices }),
+      ...(input.existingIdMap === undefined ? {} : { existingIdMap: input.existingIdMap }),
+    });
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    return {
+      version: 1,
+      kind: "t3-turbo-official-import-plan",
+      createdAt,
+      workspace,
+      plan,
+    } as const;
+  }).pipe(Effect.onError(() => removeImportWorkspace(workspace).pipe(Effect.ignore)));
 });
 
 const selectEventsToImport = (input: {
@@ -461,9 +464,22 @@ export const applyPreparedOfficialImport = Effect.fn("applyPreparedOfficialImpor
   });
 
   const installedAttachments = yield* installAttachments(attachments);
-  const cutover = yield* cutoverImport(prepared.workspace, installedAttachments).pipe(
-    Effect.tapError(() => cleanupInstalledAttachments(installedAttachments)),
+  const cutoverResult = yield* Effect.result(
+    cutoverImport(prepared.workspace, installedAttachments),
   );
+  if (cutoverResult._tag === "Failure") {
+    const liveTargetFingerprint = yield* Effect.result(
+      fingerprintDatabase(prepared.workspace.targetDatabasePath),
+    );
+    if (
+      liveTargetFingerprint._tag === "Success" &&
+      liveTargetFingerprint.success === prepared.workspace.targetFingerprint
+    ) {
+      yield* cleanupInstalledAttachments(installedAttachments);
+    }
+    return yield* cutoverResult.failure;
+  }
+  const cutover = cutoverResult.success;
   yield* removeImportWorkspace(prepared.workspace).pipe(Effect.ignore);
 
   return {

@@ -24,6 +24,7 @@ import {
 import {
   ImportRestoreReceipt,
   RESTORE_CONFIRMATION,
+  removeImportWorkspace,
   restoreImportBackup,
 } from "../turbo/officialImport/storage.ts";
 
@@ -203,12 +204,12 @@ const applyCommand = Command.make("apply", {
       const fs = yield* FileSystem.FileSystem;
       const encodedPlan = yield* fs.readFileString(plan);
       const prepared = yield* decodePreparedImport(encodedPlan);
-      const result = yield* applyPreparedOfficialImport(prepared);
-      const encodedResult = yield* encodeApplyResult(result);
       const targetBaseDir = NodePath.dirname(
         NodePath.dirname(prepared.workspace.targetDatabasePath),
       );
       yield* persistLastPlan(targetBaseDir, prepared);
+      const result = yield* applyPreparedOfficialImport(prepared);
+      const encodedResult = yield* encodeApplyResult(result);
       yield* Console.log(
         json
           ? encodedResult
@@ -231,19 +232,21 @@ const runCommand = Command.make("run", {
   Command.withHandler((flags) =>
     Effect.gen(function* () {
       const prepared = yield* prepareFromFlags(flags);
-      const encodedPlan = yield* encodePreparedImport(prepared);
-      const planPath = Option.isSome(flags.out)
-        ? flags.out.value
-        : yield* defaultPlanPath(flags.targetBaseDir, prepared.createdAt);
-      yield* writeStringAtomic(planPath, encodedPlan);
-      const result = yield* applyPreparedOfficialImport(prepared);
-      yield* persistLastPlan(flags.targetBaseDir, prepared);
-      const encodedResult = yield* encodeApplyResult(result);
-      yield* Console.log(
-        flags.json
-          ? encodedResult
-          : `Imported ${result.importedEventCount} events and ${result.copiedAttachmentCount} attachments.\nPlan: ${planPath}\nRecovery receipt: ${result.receiptPath}`,
-      );
+      return yield* Effect.gen(function* () {
+        const encodedPlan = yield* encodePreparedImport(prepared);
+        const planPath = Option.isSome(flags.out)
+          ? flags.out.value
+          : yield* defaultPlanPath(flags.targetBaseDir, prepared.createdAt);
+        yield* writeStringAtomic(planPath, encodedPlan);
+        yield* persistLastPlan(flags.targetBaseDir, prepared);
+        const result = yield* applyPreparedOfficialImport(prepared);
+        const encodedResult = yield* encodeApplyResult(result);
+        yield* Console.log(
+          flags.json
+            ? encodedResult
+            : `Imported ${result.importedEventCount} events and ${result.copiedAttachmentCount} attachments.\nPlan: ${planPath}\nRecovery receipt: ${result.receiptPath}`,
+        );
+      }).pipe(Effect.onError(() => removeImportWorkspace(prepared.workspace).pipe(Effect.ignore)));
     }),
   ),
 );

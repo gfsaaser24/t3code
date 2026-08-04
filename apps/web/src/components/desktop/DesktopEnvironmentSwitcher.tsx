@@ -255,9 +255,17 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
                 </div>
               </div>
             ) : result?.status === "imported" ? (
-              <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
-                Imported {result.importedEventCount} events and {result.copiedAttachmentCount}{" "}
-                attachments. Turbo has restarted with the merged database.
+              <div className="space-y-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+                <p>
+                  Imported {result.importedEventCount} events and {result.copiedAttachmentCount}{" "}
+                  attachments. Turbo has restarted with the merged database.
+                </p>
+                <div className="text-xs text-muted-foreground">
+                  Recovery receipt
+                  <code className="mt-1 block select-all break-all rounded bg-muted p-2">
+                    {result.receiptPath}
+                  </code>
+                </div>
               </div>
             ) : result?.status === "blocked" ? (
               <div className="space-y-2">

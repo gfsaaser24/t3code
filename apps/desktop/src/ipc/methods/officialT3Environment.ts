@@ -60,6 +60,7 @@ const decodePreparedImport = Schema.decodeUnknownEffect(
 );
 const decodeApplyResult = Schema.decodeUnknownEffect(Schema.fromJsonString(ApplyResultSchema));
 const encodeCollisionChoices = Schema.encodeEffect(Schema.fromJsonString(CollisionChoicesSchema));
+type PreparedImportSummary = typeof PreparedImportSummarySchema.Type;
 
 interface CliResult {
   readonly exitCode: number;
@@ -145,19 +146,34 @@ const blockedResult = (
 });
 
 const removePreparedWorkspace = Effect.fn("desktop.officialT3Import.removePreparedWorkspace")(
-  function* (directory: string) {
+  function* (availability: DesktopOfficialT3ImportAvailability, directory: string) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    if (!path.basename(directory).startsWith(".t3-turbo-import-")) return;
+    const expectedParent = path.resolve(availability.targetBaseDir, "userdata");
+    if (
+      path.resolve(path.dirname(directory)) !== expectedParent ||
+      !path.basename(directory).startsWith(".t3-turbo-import-")
+    ) {
+      return;
+    }
     yield* fs.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore);
   },
 );
 
-const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
+type ImportPlanOutcome =
+  | { readonly _tag: "Blocked"; readonly result: DesktopOfficialT3ImportResult }
+  | {
+      readonly _tag: "Prepared";
+      readonly prepared: PreparedImportSummary;
+      readonly planPath: string;
+      readonly choicesPath: string | null;
+    };
+
+const prepareImportPlan = Effect.fn("desktop.officialT3Import.preparePlan")(function* (
   availability: DesktopOfficialT3ImportAvailability,
   collisionChoices: Readonly<Record<string, "skip" | "replace" | "clone">> | undefined,
 ): Effect.fn.Return<
-  DesktopOfficialT3ImportResult,
+  ImportPlanOutcome,
   PlatformError.PlatformError | Schema.SchemaError,
   | DesktopEnvironment.DesktopEnvironment
   | FileSystem.FileSystem
@@ -191,20 +207,36 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
 
   const planRun = yield* runImporterCli(planArgs);
   if (planRun.exitCode !== 0) {
-    return blockedResult(availability, "import-failed", commandFailureMessage(planRun));
+    return {
+      _tag: "Blocked",
+      result: blockedResult(availability, "import-failed", commandFailureMessage(planRun)),
+    } as const;
   }
   const decodedPlan = yield* decodePreparedImport(planRun.stdout.trim()).pipe(Effect.result);
   if (decodedPlan._tag === "Failure") {
-    return blockedResult(
-      availability,
-      "import-failed",
-      "The importer created a plan, but T3 Turbo could not read its typed result. Run the displayed plan command in a terminal for details.",
-    );
+    return {
+      _tag: "Blocked",
+      result: blockedResult(
+        availability,
+        "import-failed",
+        "The importer created a plan, but T3 Turbo could not read its typed result. Run the displayed plan command in a terminal for details.",
+      ),
+    } as const;
   }
-  const prepared = decodedPlan.success;
+  return {
+    _tag: "Prepared",
+    prepared: decodedPlan.success,
+    planPath,
+    choicesPath: collisionChoices === undefined ? null : choicesPath,
+  } as const;
+});
+
+const classifyPreparedPlan = (
+  availability: DesktopOfficialT3ImportAvailability,
+  prepared: PreparedImportSummary,
+): DesktopOfficialT3ImportResult | null => {
   const classification = classifyPreparedOfficialT3Import(prepared);
   if (classification.status === "source-active") {
-    yield* removePreparedWorkspace(prepared.workspace.directory);
     return blockedResult(
       availability,
       "source-active",
@@ -212,7 +244,6 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
     );
   }
   if (classification.status === "target-active") {
-    yield* removePreparedWorkspace(prepared.workspace.directory);
     return blockedResult(
       availability,
       "target-active",
@@ -220,7 +251,6 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
     );
   }
   if (classification.status === "needs-collision-choices") {
-    yield* removePreparedWorkspace(prepared.workspace.directory);
     return {
       status: "needs-collision-choices",
       threadIds: classification.threadIds,
@@ -228,27 +258,103 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
         "These chats have the same ID but different history. Choose whether to keep both, replace the Turbo copy, or skip each chat.",
     };
   }
+  return null;
+};
 
-  const applyRun = yield* runImporterCli([
-    "import",
-    "official",
-    "apply",
-    "--plan",
-    planPath,
-    "--json",
-  ]);
-  if (applyRun.exitCode !== 0) {
-    return blockedResult(availability, "import-failed", commandFailureMessage(applyRun));
-  }
-  const decodedResult = yield* decodeApplyResult(applyRun.stdout.trim()).pipe(Effect.result);
-  if (decodedResult._tag === "Failure") {
-    return blockedResult(
+const cleanupPreparedPlan = Effect.fn("desktop.officialT3Import.cleanupPreparedPlan")(function* (
+  availability: DesktopOfficialT3ImportAvailability,
+  prepared: PreparedImportSummary,
+  planPath: string,
+  choicesPath: string | null,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* removePreparedWorkspace(availability, prepared.workspace.directory);
+  yield* fs.remove(planPath, { force: true }).pipe(Effect.ignore);
+  if (choicesPath !== null) yield* fs.remove(choicesPath, { force: true }).pipe(Effect.ignore);
+});
+
+/** Read-only target/source preflight performed before the desktop stops its backend. */
+const preflightImport = Effect.fn("desktop.officialT3Import.preflight")(function* (
+  availability: DesktopOfficialT3ImportAvailability,
+  collisionChoices: Readonly<Record<string, "skip" | "replace" | "clone">> | undefined,
+): Effect.fn.Return<
+  DesktopOfficialT3ImportResult | null,
+  PlatformError.PlatformError | Schema.SchemaError,
+  | DesktopEnvironment.DesktopEnvironment
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+> {
+  const outcome = yield* prepareImportPlan(availability, collisionChoices);
+  if (outcome._tag === "Blocked") return outcome.result;
+  const result = classifyPreparedPlan(availability, outcome.prepared);
+  yield* cleanupPreparedPlan(availability, outcome.prepared, outcome.planPath, outcome.choicesPath);
+  return result;
+});
+
+const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
+  availability: DesktopOfficialT3ImportAvailability,
+  collisionChoices: Readonly<Record<string, "skip" | "replace" | "clone">> | undefined,
+): Effect.fn.Return<
+  DesktopOfficialT3ImportResult,
+  PlatformError.PlatformError | Schema.SchemaError,
+  | DesktopEnvironment.DesktopEnvironment
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+> {
+  const outcome = yield* prepareImportPlan(availability, collisionChoices);
+  if (outcome._tag === "Blocked") return outcome.result;
+  const blocking = classifyPreparedPlan(availability, outcome.prepared);
+  if (blocking !== null) {
+    yield* cleanupPreparedPlan(
       availability,
-      "import-failed",
-      "The import finished, but T3 Turbo could not read its result. Restart Turbo and use the displayed plan command to inspect the import state.",
+      outcome.prepared,
+      outcome.planPath,
+      outcome.choicesPath,
     );
+    return blocking;
   }
-  return { status: "imported", ...decodedResult.success };
+
+  return yield* Effect.gen(function* () {
+    const applyRun = yield* runImporterCli([
+      "import",
+      "official",
+      "apply",
+      "--plan",
+      outcome.planPath,
+      "--json",
+    ]);
+    if (applyRun.exitCode !== 0) {
+      yield* cleanupPreparedPlan(
+        availability,
+        outcome.prepared,
+        outcome.planPath,
+        outcome.choicesPath,
+      );
+      return blockedResult(availability, "import-failed", commandFailureMessage(applyRun));
+    }
+    const decodedResult = yield* decodeApplyResult(applyRun.stdout.trim()).pipe(Effect.result);
+    if (decodedResult._tag === "Failure") {
+      yield* removePreparedWorkspace(availability, outcome.prepared.workspace.directory);
+      return blockedResult(
+        availability,
+        "import-failed",
+        "The import finished, but T3 Turbo could not read its result. Restart Turbo and use the displayed plan command to inspect the import state.",
+      );
+    }
+    yield* cleanupPreparedPlan(
+      availability,
+      outcome.prepared,
+      outcome.planPath,
+      outcome.choicesPath,
+    );
+    return { status: "imported", ...decodedResult.success } as const;
+  }).pipe(
+    Effect.onError(() =>
+      cleanupPreparedPlan(availability, outcome.prepared, outcome.planPath, outcome.choicesPath),
+    ),
+  );
 });
 
 export const discoverOfficialT3Import = DesktopIpc.makeIpcMethod({
@@ -309,6 +415,9 @@ export const runOfficialT3Import = DesktopIpc.makeIpcMethod({
     }
 
     return yield* Effect.gen(function* () {
+      const preflight = yield* preflightImport(availability, input.collisionChoices);
+      if (preflight !== null) return preflight;
+
       const pool = yield* DesktopBackendPool.DesktopBackendPool;
       const primary = yield* pool.primary;
       const snapshot = yield* primary.snapshot;

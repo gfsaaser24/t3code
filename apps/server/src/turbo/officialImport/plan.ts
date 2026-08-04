@@ -893,7 +893,9 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
   const provisionalThreads: Array<OfficialImportThreadPlan> = [];
   for (const sourceThread of input.source.threads) {
     const priorTargetId = idMap.threadIds[sourceThread.threadId];
-    const targetThread = targetThreadsById.get(priorTargetId ?? sourceThread.threadId);
+    const targetThread =
+      (priorTargetId ? targetThreadsById.get(priorTargetId) : undefined) ??
+      targetThreadsById.get(sourceThread.threadId);
     const comparisonEvents = targetThread
       ? sourceThread.events.map((event) => transformOfficialImportEvent(event, idMap))
       : sourceThread.events;

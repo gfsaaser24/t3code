@@ -221,6 +221,19 @@ export class OfficialImportActiveStateError extends Schema.TaggedErrorClass<Offi
   }
 }
 
+export class OfficialImportLiveServerError extends Schema.TaggedErrorClass<OfficialImportLiveServerError>()(
+  "OfficialImportLiveServerError",
+  {
+    role: Schema.Literals(["source", "target"]),
+    runtimeStatePath: Schema.String,
+    pid: Schema.Int,
+  },
+) {
+  override get message(): string {
+    return `The ${this.role} T3 server is still running (PID ${this.pid}). Quit it before applying the import.`;
+  }
+}
+
 export class OfficialImportConfirmationError extends Schema.TaggedErrorClass<OfficialImportConfirmationError>()(
   "OfficialImportConfirmationError",
   {
@@ -237,6 +250,7 @@ export type OfficialImportStorageFailure =
   | OfficialImportSchemaMismatchError
   | OfficialImportFingerprintMismatchError
   | OfficialImportActiveStateError
+  | OfficialImportLiveServerError
   | OfficialImportConfirmationError;
 
 export const RESTORE_CONFIRMATION = "RESTORE T3 TURBO FROM IMPORT BACKUP";
@@ -248,6 +262,7 @@ const MigrationRowsSchema = Schema.Array(
   Schema.Struct({ migrationId: Schema.Number, name: Schema.String }),
 );
 const CountRowSchema = Schema.Struct({ count: NonNegativeInt });
+const ImportRuntimeState = Schema.Struct({ version: Schema.Literal(1), pid: Schema.Int });
 
 const causeMessage = (cause: unknown): string =>
   Predicate.isError(cause) ? cause.message : String(cause);
@@ -258,6 +273,41 @@ const storageError = (operation: string, path: string) => (cause: unknown) =>
 const sqliteStringLiteral = (value: string): string => `'${value.replaceAll("'", "''")}'`;
 
 const sqliteIdentifier = (value: string): string => `"${value.replaceAll('"', '""')}"`;
+
+const isProcessAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+};
+
+/** Fail closed when a live server still owns the database described by its runtime file. */
+export const assertNoLiveImportServer = Effect.fn("assertNoLiveImportServer")(function* (
+  role: "source" | "target",
+  databasePath: string,
+): Effect.fn.Return<void, OfficialImportStorageFailure, FileSystem.FileSystem | Path.Path> {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const runtimeStatePath = path.join(path.dirname(databasePath), "server-runtime.json");
+  if (
+    !(yield* fs
+      .exists(runtimeStatePath)
+      .pipe(Effect.mapError(storageError("inspect import server ownership", runtimeStatePath))))
+  ) {
+    return;
+  }
+  const encoded = yield* fs
+    .readFileString(runtimeStatePath)
+    .pipe(Effect.mapError(storageError("read import server ownership", runtimeStatePath)));
+  const runtime = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ImportRuntimeState))(
+    encoded,
+  ).pipe(Effect.mapError(storageError("validate import server ownership", runtimeStatePath)));
+  if (isProcessAlive(runtime.pid)) {
+    return yield* new OfficialImportLiveServerError({ role, runtimeStatePath, pid: runtime.pid });
+  }
+});
 
 const withDatabase = <A>(
   path: string,
@@ -408,12 +458,14 @@ const readActivityStateOpen = (database: NodeSqlite.DatabaseSync): ImportActivit
     decodeSync(CountRowSchema, database.prepare(sql).get()).count;
   return {
     activeProviderSessions: count(
-      "SELECT COUNT(*) AS count FROM provider_session_runtime WHERE status IN ('starting', 'running')",
+      "SELECT COUNT(*) AS count FROM provider_session_runtime WHERE status IN ('starting', 'connecting', 'running')",
     ),
     activeProjectedSessions: count(
-      "SELECT COUNT(*) AS count FROM projection_thread_sessions WHERE status IN ('starting', 'running')",
+      "SELECT COUNT(*) AS count FROM projection_thread_sessions WHERE status IN ('starting', 'connecting', 'running')",
     ),
-    activeTurns: count("SELECT COUNT(*) AS count FROM projection_turns WHERE state = 'running'"),
+    activeTurns: count(
+      "SELECT COUNT(*) AS count FROM projection_turns WHERE state IN ('pending', 'running')",
+    ),
     pendingApprovals: count(
       "SELECT COUNT(*) AS count FROM projection_pending_approvals WHERE status = 'pending'",
     ),
@@ -488,56 +540,67 @@ export const prepareImportWorkspace = Effect.fn("prepareImportWorkspace")(functi
   yield* validateCompatibleDatabase(sourceDatabasePath);
   yield* validateCompatibleDatabase(targetDatabasePath);
   const directory = yield* makeWorkspaceDirectory(targetDatabasePath);
-  const sourceSnapshotPath = path.join(directory, "official-source.sqlite");
-  const targetStagingPath = path.join(directory, "turbo-target-staging.sqlite");
+  const fs = yield* FileSystem.FileSystem;
+  return yield* Effect.gen(function* () {
+    const sourceSnapshotPath = path.join(directory, "official-source.sqlite");
+    const targetStagingPath = path.join(directory, "turbo-target-staging.sqlite");
 
-  yield* snapshotDatabase(sourceDatabasePath, sourceSnapshotPath);
-  yield* snapshotDatabase(targetDatabasePath, targetStagingPath);
-  yield* validateCompatibleDatabase(sourceSnapshotPath);
-  yield* validateCompatibleDatabase(targetStagingPath);
+    yield* snapshotDatabase(sourceDatabasePath, sourceSnapshotPath);
+    yield* snapshotDatabase(targetDatabasePath, targetStagingPath);
+    yield* validateCompatibleDatabase(sourceSnapshotPath);
+    yield* validateCompatibleDatabase(targetStagingPath);
 
-  const [sourceFingerprint, liveSourceFingerprint, targetFingerprint, liveTargetFingerprint] =
-    yield* Effect.all([
-      fingerprintDatabase(sourceSnapshotPath),
-      fingerprintDatabase(sourceDatabasePath),
-      fingerprintDatabase(targetStagingPath),
-      fingerprintDatabase(targetDatabasePath),
+    const [sourceFingerprint, liveSourceFingerprint, targetFingerprint, liveTargetFingerprint] =
+      yield* Effect.all([
+        fingerprintDatabase(sourceSnapshotPath),
+        fingerprintDatabase(sourceDatabasePath),
+        fingerprintDatabase(targetStagingPath),
+        fingerprintDatabase(targetDatabasePath),
+      ]);
+    if (sourceFingerprint !== liveSourceFingerprint) {
+      return yield* new OfficialImportFingerprintMismatchError({
+        role: "source",
+        expected: sourceFingerprint,
+        actual: liveSourceFingerprint,
+      });
+    }
+    if (targetFingerprint !== liveTargetFingerprint) {
+      return yield* new OfficialImportFingerprintMismatchError({
+        role: "target",
+        expected: targetFingerprint,
+        actual: liveTargetFingerprint,
+      });
+    }
+
+    const [sourceActivity, targetActivity] = yield* Effect.all([
+      readImportActivityState(sourceSnapshotPath),
+      readImportActivityState(targetStagingPath),
     ]);
-  if (sourceFingerprint !== liveSourceFingerprint) {
-    return yield* new OfficialImportFingerprintMismatchError({
-      role: "source",
-      expected: sourceFingerprint,
-      actual: liveSourceFingerprint,
-    });
-  }
-  if (targetFingerprint !== liveTargetFingerprint) {
-    return yield* new OfficialImportFingerprintMismatchError({
-      role: "target",
-      expected: targetFingerprint,
-      actual: liveTargetFingerprint,
-    });
-  }
-
-  const [sourceActivity, targetActivity] = yield* Effect.all([
-    readImportActivityState(sourceSnapshotPath),
-    readImportActivityState(targetStagingPath),
-  ]);
-  return {
-    directory,
-    sourceDatabasePath,
-    targetDatabasePath,
-    sourceSnapshotPath,
-    targetStagingPath,
-    sourceFingerprint,
-    targetFingerprint,
-    sourceActivity,
-    targetActivity,
-  };
+    return {
+      directory,
+      sourceDatabasePath,
+      targetDatabasePath,
+      sourceSnapshotPath,
+      targetStagingPath,
+      sourceFingerprint,
+      targetFingerprint,
+      sourceActivity,
+      targetActivity,
+    };
+  }).pipe(
+    Effect.onError(() =>
+      fs.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore),
+    ),
+  );
 });
 
 export const assertWorkspaceReadyForApply = Effect.fn("assertWorkspaceReadyForApply")(function* (
   workspace: ImportWorkspace,
-): Effect.fn.Return<void, OfficialImportStorageFailure> {
+): Effect.fn.Return<void, OfficialImportStorageFailure, FileSystem.FileSystem | Path.Path> {
+  yield* Effect.all([
+    assertNoLiveImportServer("source", workspace.sourceDatabasePath),
+    assertNoLiveImportServer("target", workspace.targetDatabasePath),
+  ]);
   const [sourceFingerprint, targetFingerprint, sourceActivity, targetActivity] = yield* Effect.all([
     fingerprintDatabase(workspace.sourceDatabasePath),
     fingerprintDatabase(workspace.targetDatabasePath),
@@ -764,7 +827,11 @@ const inferActorKind = (
 export const appendCanonicalEvents = Effect.fn("appendCanonicalEvents")(function* (
   workspace: ImportWorkspace,
   events: ReadonlyArray<OrchestrationEvent>,
-): Effect.fn.Return<ReadonlyMap<number, number>, OfficialImportStorageFailure> {
+): Effect.fn.Return<
+  ReadonlyMap<number, number>,
+  OfficialImportStorageFailure,
+  FileSystem.FileSystem | Path.Path
+> {
   yield* assertWorkspaceReadyForApply(workspace);
   return yield* withDatabase(
     workspace.targetStagingPath,
@@ -905,17 +972,27 @@ interface MovedDatabaseFiles {
 const moveDatabaseFiles = Effect.fn("moveDatabaseFiles")(function* (
   sourceDatabasePath: string,
   destinationDatabasePath: string,
-) {
+): Effect.fn.Return<MovedDatabaseFiles, OfficialImportStorageError, FileSystem.FileSystem> {
   const fs = yield* FileSystem.FileSystem;
+  const rename = (source: string, destination: string) =>
+    fs
+      .rename(source, destination)
+      .pipe(Effect.mapError(storageError("move database file", source)));
   const moved: Array<readonly [string, string]> = [];
   const move = Effect.gen(function* () {
-    yield* fs.rename(sourceDatabasePath, destinationDatabasePath);
+    yield* rename(sourceDatabasePath, destinationDatabasePath);
     moved.push([sourceDatabasePath, destinationDatabasePath]);
     for (const suffix of ["-wal", "-shm"] as const) {
       const source = `${sourceDatabasePath}${suffix}`;
-      if (!(yield* fs.exists(source))) continue;
+      if (
+        !(yield* fs
+          .exists(source)
+          .pipe(Effect.mapError(storageError("inspect database sidecar", source))))
+      ) {
+        continue;
+      }
       const destination = `${destinationDatabasePath}${suffix}`;
-      yield* fs.rename(source, destination);
+      yield* rename(source, destination);
       moved.push([source, destination]);
     }
     return {
@@ -931,7 +1008,7 @@ const moveDatabaseFiles = Effect.fn("moveDatabaseFiles")(function* (
   const result = yield* Effect.result(move);
   if (result._tag === "Success") return result.success;
   for (const [source, destination] of moved.reverse()) {
-    yield* fs.rename(destination, source).pipe(Effect.ignore);
+    yield* rename(destination, source).pipe(Effect.ignore);
   }
   return yield* result.failure;
 });
@@ -946,7 +1023,7 @@ export const cutoverImport = Effect.fn("cutoverImport")(function* (
 ): Effect.fn.Return<
   { readonly receipt: ImportCutoverReceipt; readonly receiptPath: string },
   OfficialImportStorageFailure,
-  FileSystem.FileSystem
+  FileSystem.FileSystem | Path.Path
 > {
   yield* assertWorkspaceReadyForApply(workspace);
   yield* validateCompatibleDatabase(workspace.targetStagingPath);
@@ -971,29 +1048,76 @@ export const cutoverImport = Effect.fn("cutoverImport")(function* (
     installedAttachmentPaths,
   };
 
-  return yield* Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const moved = yield* moveDatabaseFiles(workspace.targetDatabasePath, backupDatabasePath);
-    const cutoverResult = yield* Effect.result(
-      fs.rename(workspace.targetStagingPath, workspace.targetDatabasePath),
-    );
-    if (cutoverResult._tag === "Failure") {
-      yield* moveDatabaseFiles(backupDatabasePath, workspace.targetDatabasePath);
-      return yield* cutoverResult.failure;
-    }
-    const receipt: ImportCutoverReceipt = {
-      ...preparedReceipt,
-      status: "complete",
-      backupWalPath: moved.walPath,
-      backupShmPath: moved.shmPath,
-    };
-    yield* writeJsonAtomic(receiptPath, encodeCutoverReceipt(receipt));
-    return { receipt, receiptPath };
-  }).pipe(
-    Effect.mapError(
-      storageError("atomically cut over imported database", workspace.targetDatabasePath),
-    ),
+  const fs = yield* FileSystem.FileSystem;
+  const moved = yield* moveDatabaseFiles(workspace.targetDatabasePath, backupDatabasePath);
+  const installResult = yield* Effect.result(
+    fs.rename(workspace.targetStagingPath, workspace.targetDatabasePath),
   );
+  if (installResult._tag === "Failure") {
+    const restoreResult = yield* Effect.result(
+      moveDatabaseFiles(backupDatabasePath, workspace.targetDatabasePath),
+    );
+    if (restoreResult._tag === "Failure") {
+      return yield* new OfficialImportStorageError({
+        operation: "roll back failed import install",
+        path: workspace.targetDatabasePath,
+        reason: `${causeMessage(installResult.failure)}; backup restore also failed: ${causeMessage(restoreResult.failure)}`,
+      });
+    }
+    return yield* new OfficialImportStorageError({
+      operation: "atomically install imported database",
+      path: workspace.targetDatabasePath,
+      reason: causeMessage(installResult.failure),
+    });
+  }
+
+  const receipt: ImportCutoverReceipt = {
+    ...preparedReceipt,
+    status: "complete",
+    backupWalPath: moved.walPath,
+    backupShmPath: moved.shmPath,
+  };
+  const receiptResult = yield* Effect.result(
+    writeJsonAtomic(receiptPath, encodeCutoverReceipt(receipt)),
+  );
+  if (receiptResult._tag === "Success") return { receipt, receiptPath };
+
+  // Receipt persistence is part of cutover. If it fails, put the imported
+  // database back in the guarded workspace and restore the exact old target.
+  const failedImportedPath = `${workspace.targetStagingPath}.receipt-failed-${randomUUID()}`;
+  const displaceImportedResult = yield* Effect.result(
+    moveDatabaseFiles(workspace.targetDatabasePath, failedImportedPath),
+  );
+  if (displaceImportedResult._tag === "Failure") {
+    return yield* new OfficialImportStorageError({
+      operation: "roll back import after receipt failure",
+      path: workspace.targetDatabasePath,
+      reason: `${causeMessage(receiptResult.failure)}; imported database could not be displaced: ${causeMessage(displaceImportedResult.failure)}`,
+    });
+  }
+
+  const restoreResult = yield* Effect.result(
+    moveDatabaseFiles(backupDatabasePath, workspace.targetDatabasePath),
+  );
+  if (restoreResult._tag === "Failure") {
+    const retainImportedResult = yield* Effect.result(
+      moveDatabaseFiles(failedImportedPath, workspace.targetDatabasePath),
+    );
+    return yield* new OfficialImportStorageError({
+      operation: "roll back import after receipt failure",
+      path: workspace.targetDatabasePath,
+      reason:
+        retainImportedResult._tag === "Success"
+          ? `${causeMessage(receiptResult.failure)}; old target restore failed, so the complete imported database was retained: ${causeMessage(restoreResult.failure)}`
+          : `${causeMessage(receiptResult.failure)}; old target restore failed: ${causeMessage(restoreResult.failure)}; imported database recovery also failed: ${causeMessage(retainImportedResult.failure)}`,
+    });
+  }
+
+  return yield* new OfficialImportStorageError({
+    operation: "persist import recovery receipt",
+    path: receiptPath,
+    reason: causeMessage(receiptResult.failure),
+  });
 });
 
 const readCompleteCutoverReceipt = Effect.fn("readCompleteCutoverReceipt")(function* (
@@ -1035,6 +1159,7 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
   const cutoverReceipt = yield* readCompleteCutoverReceipt(input.receiptPath);
   const path = yield* Path.Path;
   yield* validateCompatibleDatabase(cutoverReceipt.backupDatabasePath);
+  yield* assertNoLiveImportServer("target", cutoverReceipt.targetDatabasePath);
   const currentActivity = yield* readImportActivityState(cutoverReceipt.targetDatabasePath);
   yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
 

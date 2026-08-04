@@ -179,6 +179,40 @@ describe("official import stream planning", () => {
       }).threads[0],
     ).toMatchObject({ action: "replace", targetThreadId: "thread-source" });
   });
+
+  it("reuses a clone id reserved before a failed cutover", () => {
+    const source = dataset(
+      [project("project-source", "/code/example")],
+      [thread("thread-source", "project-source", [first])],
+    );
+    const target = dataset(
+      [project("project-source", "/code/example")],
+      [
+        thread("thread-source", "project-source", [
+          threadCreated({ sequence: 8, eventId: "event-target", title: "Turbo history" }),
+        ]),
+      ],
+    );
+    const reserved = planOfficialImport({
+      source,
+      target,
+      collisionChoices: { "thread-source": "clone" },
+    });
+    const reservedThreadId = reserved.threads[0]?.targetThreadId;
+
+    const retry = planOfficialImport({
+      source,
+      target,
+      collisionChoices: { "thread-source": "clone" },
+      existingIdMap: reserved.idMap,
+    });
+
+    expect(retry.threads[0]).toMatchObject({
+      action: "clone",
+      matchedTargetThreadId: "thread-source",
+      targetThreadId: reservedThreadId,
+    });
+  });
 });
 
 describe("official import clone identity graph", () => {

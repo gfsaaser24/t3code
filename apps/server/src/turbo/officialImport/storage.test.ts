@@ -1,18 +1,22 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as PlatformError from "effect/PlatformError";
 import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
 import { migrationManifest } from "../../persistence/Migrations.ts";
+import { prepareOfficialImport } from "./execute.ts";
 import {
   RESTORE_CONFIRMATION,
   appendCanonicalEvents,
+  assertNoLiveImportServer,
   clearDerivedImportState,
   copyCheckpointDiffBlobs,
   cutoverImport,
@@ -303,6 +307,100 @@ it.effect("creates a recoverable backup and restores it only with confirmation",
       yield* Effect.promise(() => access(restored.receipt.displacedAttachmentPaths[0]!));
       assert.equal(yield* fingerprintDatabase(target), targetBefore);
       assert.equal((yield* readOrchestrationEvents(target)).length, 1);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("restores the exact target when writing the recovery receipt fails", () =>
+  withDatabases(({ source, target }) =>
+    Effect.gen(function* () {
+      const targetBefore = yield* fingerprintDatabase(target);
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
+      yield* appendCanonicalEvents(workspace, events);
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      const receiptFailure = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "writeFileString",
+        pathOrDescriptor: target,
+      });
+      const failingFileSystem = FileSystem.FileSystem.of({
+        ...fileSystem,
+        writeFileString: (path, contents, options) =>
+          String(path).includes(".import-")
+            ? Effect.fail(receiptFailure)
+            : fileSystem.writeFileString(path, contents, options),
+      });
+
+      const result = yield* cutoverImport(workspace).pipe(
+        Effect.provideService(FileSystem.FileSystem, failingFileSystem),
+        Effect.result,
+      );
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(yield* fingerprintDatabase(target), targetBefore);
+      assert.equal((yield* readOrchestrationEvents(target)).length, 1);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("blocks apply when a runtime descriptor belongs to a live process", () =>
+  withDatabases(({ directory, source }) =>
+    Effect.gen(function* () {
+      const runtimeStatePath = join(directory, "server-runtime.json");
+      yield* Effect.promise(() =>
+        writeFile(runtimeStatePath, `{"version":1,"pid":${process.pid}}`),
+      );
+
+      const result = yield* Effect.result(assertNoLiveImportServer("source", source));
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "OfficialImportLiveServerError");
+      }
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("removes a fresh import workspace when preparation fails after snapshotting", () =>
+  withDatabases(({ directory, source, target }) =>
+    Effect.gen(function* () {
+      const existingWorkspaceName = ".t3-turbo-import-user-kept";
+      yield* Effect.promise(() => mkdir(join(directory, existingWorkspaceName)));
+      const database = new NodeSqlite.DatabaseSync(source);
+      try {
+        database
+          .prepare(
+            `INSERT INTO orchestration_events (
+              event_id, aggregate_kind, stream_id, stream_version, event_type, occurred_at,
+              command_id, causation_event_id, correlation_id, actor_kind, payload_json, metadata_json
+            ) VALUES (?, 'thread', ?, 0, 'thread.deleted', ?, ?, NULL, ?, 'client', ?, '{}')`,
+          )
+          .run(
+            "event-incomplete-thread",
+            "thread-incomplete",
+            NOW,
+            "command-incomplete-thread",
+            "command-incomplete-thread",
+            `{"threadId":"thread-incomplete","deletedAt":"${NOW}"}`,
+          );
+      } finally {
+        database.close();
+      }
+
+      const exit = yield* Effect.exit(
+        prepareOfficialImport({ sourceDatabasePath: source, targetDatabasePath: target }),
+      );
+      assert.equal(exit._tag, "Failure");
+      const leftovers = (yield* Effect.promise(() => readdir(directory))).filter((entry) =>
+        entry.startsWith(".t3-turbo-import-"),
+      );
+      assert.deepEqual(leftovers, [existingWorkspaceName]);
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
