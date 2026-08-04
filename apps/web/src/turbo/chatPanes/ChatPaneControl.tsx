@@ -8,7 +8,7 @@ import {
 
 import { Button } from "~/components/ui/button";
 import { Group, GroupSeparator } from "~/components/ui/group";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "~/components/ui/menu";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "~/components/ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
   type ChatPaneSide,
@@ -17,10 +17,11 @@ import {
 } from "./ChatPaneActionsContext";
 
 export function ChatPaneControl() {
-  const { closePane, focusedPaneId, layout, openNewChat } = useChatPaneActions();
+  const { closePane, focusedPaneId, layout, openNewChat, replaceWithNewChat } =
+    useChatPaneActions();
   const currentPaneId = useCurrentChatPaneId() ?? focusedPaneId;
   const canClose = currentPaneId !== null && (layout?.panes.length ?? 0) > 1;
-  const open = (side: ChatPaneSide) => void openNewChat(side);
+  const open = (side: ChatPaneSide) => void openNewChat(currentPaneId, side);
 
   return (
     <Group aria-label="Chat panes" data-chat-pane-control>
@@ -32,8 +33,8 @@ export function ChatPaneControl() {
               size="xs"
               variant="outline"
               className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
-              aria-label="Open new chat to the right"
-              onClick={() => open("right")}
+              aria-label="Start a new chat"
+              onClick={() => void replaceWithNewChat(currentPaneId)}
             />
           }
         >
@@ -42,7 +43,7 @@ export function ChatPaneControl() {
             New chat
           </span>
         </TooltipTrigger>
-        <TooltipPopup side="top">Open new chat to the right</TooltipPopup>
+        <TooltipPopup side="top">Start a new chat</TooltipPopup>
       </Tooltip>
       <GroupSeparator />
       <Menu>
@@ -62,17 +63,29 @@ export function ChatPaneControl() {
             <PanelLeftOpenIcon aria-hidden />
             Open new chat to the left
           </MenuItem>
-          {canClose ? (
-            <>
-              <MenuSeparator />
-              <MenuItem onClick={() => currentPaneId && closePane(currentPaneId)}>
-                <XIcon aria-hidden />
-                Close this chat pane
-              </MenuItem>
-            </>
-          ) : null}
         </MenuPopup>
       </Menu>
+      {canClose ? (
+        <>
+          <GroupSeparator />
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="outline"
+                  aria-label="Close this chat pane"
+                  onClick={() => currentPaneId && closePane(currentPaneId)}
+                />
+              }
+            >
+              <XIcon aria-hidden className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">Close this chat pane</TooltipPopup>
+          </Tooltip>
+        </>
+      ) : null}
     </Group>
   );
 }

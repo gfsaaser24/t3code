@@ -1,10 +1,12 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { useEffect, type ReactNode } from "react";
+import { XIcon } from "lucide-react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { ChatViewContent } from "../../components/ChatView";
 import { threadHasStarted } from "../../components/ChatView.logic";
 import { DiffWorkerPoolProvider } from "../../components/DiffWorkerPoolProvider";
 import { waitForDraftHeroTransition } from "../../components/chat/draftHeroTransition";
 import { SidebarInset } from "../../components/ui/sidebar";
+import { Button } from "../../components/ui/button";
 import {
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThreadByRef,
@@ -19,11 +21,39 @@ import {
 } from "../../state/entities";
 import { useEnvironmentQuery } from "../../state/query";
 import { environmentShell } from "../../state/shell";
+import { useEnvironments } from "../../state/environments";
 import { resolveThreadRouteRenderState } from "../../threadRoutes";
 import { resolveThreadSyncPhase } from "../../threadSync";
 import type { ChatPane } from "./chatPaneLayout";
 import { ChatPaneScope, useChatPaneActions } from "./ChatPaneActionsContext";
+import { isServerPaneEnvironmentUnavailable } from "./chatPaneActions.logic";
 import { chatPaneChromeOwnership } from "./chatPaneResourcePolicy";
+
+function ChatPanePlaceholder({
+  message,
+  paneId,
+}: {
+  readonly message: string;
+  readonly paneId: ChatPane["id"];
+}) {
+  const { discardPane } = useChatPaneActions();
+
+  return (
+    <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center p-6 text-center">
+      <Button
+        type="button"
+        size="icon-xs"
+        variant="ghost"
+        className="absolute top-3 right-3"
+        aria-label="Close this chat pane"
+        onClick={() => discardPane(paneId)}
+      >
+        <XIcon aria-hidden className="size-4" />
+      </Button>
+      <p className="max-w-xs text-sm text-muted-foreground">{message}</p>
+    </div>
+  );
+}
 
 function ServerChatPane({
   paneId,
@@ -73,7 +103,12 @@ function ServerChatPane({
   }, [draftThread, serverThreadStarted, threadRef]);
 
   if (renderState !== "ready" && !(renderState === "loading" && serverThreadShell !== null)) {
-    return null;
+    return (
+      <ChatPanePlaceholder
+        paneId={paneId}
+        message={renderState === "missing" ? "This chat is no longer available." : "Connecting…"}
+      />
+    );
   }
 
   return (
@@ -141,7 +176,7 @@ function DraftChatPane({
   }, [canonicalThreadRef, discardPane, draftSession, paneId]);
 
   if (!draftSession) {
-    return null;
+    return <ChatPanePlaceholder paneId={paneId} message="Opening chat…" />;
   }
 
   return (
@@ -161,11 +196,17 @@ function ChatPaneTarget({
   pane,
   reserveTitleBarControlInset,
   reserveSidebarControlInset,
+  environmentUnavailable,
 }: {
   readonly pane: ChatPane;
   readonly reserveTitleBarControlInset: boolean;
   readonly reserveSidebarControlInset: boolean;
+  readonly environmentUnavailable: boolean;
 }) {
+  if (pane.target.kind === "server" && environmentUnavailable) {
+    return <ChatPanePlaceholder paneId={pane.id} message="This chat environment is unavailable." />;
+  }
+
   return pane.target.kind === "server" ? (
     <ServerChatPane
       paneId={pane.id}
@@ -185,6 +226,11 @@ function ChatPaneTarget({
 
 export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }) {
   const { focusPane, layout } = useChatPaneActions();
+  const { environments, isReady: environmentCatalogReady } = useEnvironments();
+  const knownEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
 
   if (!layout) {
     return <DiffWorkerPoolProvider>{fallback}</DiffWorkerPoolProvider>;
@@ -197,6 +243,11 @@ export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }
           {layout.panes.map((pane, index) => {
             const isFocused = pane.id === layout.focusedPaneId;
             const chrome = chatPaneChromeOwnership(index, layout.panes.length);
+            const environmentUnavailable = isServerPaneEnvironmentUnavailable(
+              pane,
+              environmentCatalogReady,
+              knownEnvironmentIds,
+            );
             return (
               <section
                 key={pane.id}
@@ -213,6 +264,7 @@ export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }
                     pane={pane}
                     reserveTitleBarControlInset={chrome.reserveTitleBarControlInset}
                     reserveSidebarControlInset={chrome.reserveSidebarControlInset}
+                    environmentUnavailable={environmentUnavailable}
                   />
                 </ChatPaneScope>
               </section>

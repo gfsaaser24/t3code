@@ -27,3 +27,14 @@ export function buildDesktopEnvironmentOptions(input: {
       return rank[left.kind] - rank[right.kind] || left.label.localeCompare(right.label);
     });
 }
+
+export function applyDesktopEnvironmentSwitch(
+  environmentId: EnvironmentId,
+  effects: {
+    readonly activate: (environmentId: EnvironmentId) => void;
+    readonly resetChatWorkspace: () => void;
+  },
+): void {
+  effects.activate(environmentId);
+  effects.resetChatWorkspace();
+}

@@ -4,7 +4,6 @@ import type {
   DesktopOfficialT3ImportResult,
   EnvironmentId,
 } from "@t3tools/contracts";
-import { useNavigate } from "@tanstack/react-router";
 import { CloudIcon, DatabaseIcon, MonitorIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -31,7 +30,9 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Spinner } from "../ui/spinner";
+import { useChatPaneActions } from "../../turbo/chatPanes/ChatPaneActionsContext";
 import {
+  applyDesktopEnvironmentSwitch,
   buildDesktopEnvironmentOptions,
   IMPORT_OFFICIAL_T3_VALUE,
 } from "./DesktopEnvironmentSwitcher.logic";
@@ -65,7 +66,7 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
   const bridge = window.desktopBridge;
   const discoverImport = bridge?.discoverOfficialT3Import;
   const runImport = bridge?.runOfficialT3Import;
-  const navigate = useNavigate();
+  const { resetToHome } = useChatPaneActions();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [availability, setAvailability] = useState<DesktopOfficialT3ImportAvailability | null>(
@@ -101,10 +102,12 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
 
   const switchEnvironment = useCallback(
     (environmentId: EnvironmentId) => {
-      setActiveEnvironmentId(environmentId);
-      void navigate({ to: "/" });
+      applyDesktopEnvironmentSwitch(environmentId, {
+        activate: setActiveEnvironmentId,
+        resetChatWorkspace: resetToHome,
+      });
     },
-    [navigate],
+    [resetToHome],
   );
 
   const handleValueChange = useCallback(

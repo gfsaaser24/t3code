@@ -10,7 +10,7 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import { useCreateDraftThreadHandler, useHandleNewThread } from "../../hooks/useHandleNewThread";
+import { useCreateDraftThreadHandler, useDefaultProjectRef } from "../../hooks/useHandleNewThread";
 import {
   getClientSettings,
   useClientSettings,
@@ -19,6 +19,8 @@ import {
 } from "../../hooks/useSettings";
 import type { ThreadRouteTarget } from "../../threadRoutes";
 import { randomUUID } from "../../lib/utils";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { readThreadShell } from "../../state/entities";
 import {
   ChatPaneId,
   close,
@@ -32,6 +34,12 @@ import {
   type ChatPaneLayout,
 } from "./chatPaneLayout";
 import { persistChatPaneLayout, restoreChatPaneLayout } from "./chatPanePersistence";
+import {
+  applyNewChatPaneTarget,
+  resolveNewChatPaneSource,
+  resolveHomeNavigationSuppression,
+  type NewChatPanePlacement,
+} from "./chatPaneActions.logic";
 
 export type ChatPaneSide = "left" | "right";
 
@@ -39,7 +47,16 @@ export interface ChatPaneActions {
   readonly layout: ChatPaneLayout | null;
   readonly focusedPaneId: ChatPaneId | null;
   readonly openTarget: (target: ThreadRouteTarget, side: ChatPaneSide) => void;
-  readonly openNewChat: (side: ChatPaneSide, projectRef?: ScopedProjectRef) => Promise<void>;
+  readonly openNewChat: (
+    sourcePaneId: ChatPaneId | null,
+    side: ChatPaneSide,
+    projectRef?: ScopedProjectRef,
+  ) => Promise<void>;
+  readonly replaceWithNewChat: (
+    sourcePaneId: ChatPaneId | null,
+    projectRef?: ScopedProjectRef,
+  ) => Promise<void>;
+  readonly resetToHome: () => void;
   readonly focusPane: (paneId: ChatPaneId) => void;
   readonly closePane: (paneId: ChatPaneId) => void;
   readonly promoteDraft: (paneId: ChatPaneId, threadRef: ScopedThreadRef) => void;
@@ -67,6 +84,16 @@ function focusedPane(layout: ChatPaneLayout | null): ChatPane | null {
   return layout?.panes.find((pane) => pane.id === layout.focusedPaneId) ?? null;
 }
 
+function projectRefForTarget(target: ThreadRouteTarget): ScopedProjectRef | null {
+  if (target.kind === "server") {
+    const thread = readThreadShell(target.threadRef);
+    return thread ? scopeProjectRef(target.threadRef.environmentId, thread.projectId) : null;
+  }
+
+  const draft = useComposerDraftStore.getState().getDraftSession(target.draftId);
+  return draft ? scopeProjectRef(draft.environmentId, draft.projectId) : null;
+}
+
 export function ChatPaneActionsProvider({
   children,
   routeTarget,
@@ -78,10 +105,11 @@ export function ChatPaneActionsProvider({
   const settingsHydrated = useClientSettingsHydrated();
   const persistedLayout = useClientSettings((settings) => settings.turboChatPaneLayout);
   const updateClientSettings = useUpdateClientSettings();
-  const { activeDraftThread, activeThread, defaultProjectRef } = useHandleNewThread();
+  const defaultProjectRef = useDefaultProjectRef();
   const createDraftThread = useCreateDraftThreadHandler();
   const layout = useMemo(() => restoreChatPaneLayout(persistedLayout), [persistedLayout]);
   const layoutRef = useRef(layout);
+  const pendingHomeNavigationRef = useRef(false);
   layoutRef.current = layout;
 
   const navigateToTarget = useCallback(
@@ -189,6 +217,7 @@ export function ChatPaneActionsProvider({
       if (current.panes[0].id !== paneId) {
         return;
       }
+      pendingHomeNavigationRef.current = true;
       commitLayout(null);
       void navigate({ to: "/", replace: true });
     },
@@ -218,23 +247,61 @@ export function ChatPaneActionsProvider({
     [commitLayout, currentLayout, navigateToTarget],
   );
 
-  const openNewChat = useCallback(
-    async (side: ChatPaneSide, requestedProjectRef?: ScopedProjectRef) => {
-      const projectRef =
-        requestedProjectRef ??
-        (activeThread
-          ? scopeProjectRef(activeThread.environmentId, activeThread.projectId)
-          : activeDraftThread
-            ? scopeProjectRef(activeDraftThread.environmentId, activeDraftThread.projectId)
-            : defaultProjectRef);
+  const createNewChatPane = useCallback(
+    async (
+      sourcePaneId: ChatPaneId | null,
+      placement: NewChatPanePlacement,
+      requestedProjectRef?: ScopedProjectRef,
+    ) => {
+      const source = resolveNewChatPaneSource(
+        currentLayout(),
+        sourcePaneId,
+        projectRefForTarget,
+        defaultProjectRef,
+      );
+      const projectRef = requestedProjectRef ?? source.projectRef;
       if (!projectRef) {
         return;
       }
-      const draftId = await createDraftThread(projectRef, { navigation: "none" });
-      openTarget({ kind: "draft", draftId }, side);
+      const draftId = await createDraftThread(projectRef, {
+        navigation: "none",
+        sourceTarget: source.target,
+      });
+      const current = currentLayout();
+      const next = applyNewChatPaneTarget(
+        current,
+        sourcePaneId,
+        newPane({ kind: "draft", draftId }),
+        placement,
+      );
+      if (next !== current) {
+        commitLayout(next);
+      }
+      const pane = focusedPane(next);
+      if (pane) {
+        navigateToTarget(pane.target);
+      }
     },
-    [activeDraftThread, activeThread, createDraftThread, defaultProjectRef, openTarget],
+    [commitLayout, createDraftThread, currentLayout, defaultProjectRef, navigateToTarget],
   );
+
+  const openNewChat = useCallback(
+    (sourcePaneId: ChatPaneId | null, side: ChatPaneSide, projectRef?: ScopedProjectRef) =>
+      createNewChatPane(sourcePaneId, side, projectRef),
+    [createNewChatPane],
+  );
+
+  const replaceWithNewChat = useCallback(
+    (sourcePaneId: ChatPaneId | null, projectRef?: ScopedProjectRef) =>
+      createNewChatPane(sourcePaneId, "replace", projectRef),
+    [createNewChatPane],
+  );
+
+  const resetToHome = useCallback(() => {
+    pendingHomeNavigationRef.current = true;
+    commitLayout(null);
+    void navigate({ to: "/", replace: true });
+  }, [commitLayout, navigate]);
 
   useEffect(() => {
     if (!settingsHydrated) {
@@ -251,6 +318,14 @@ export function ChatPaneActionsProvider({
       return;
     }
     const current = currentLayout();
+    const homeNavigation = resolveHomeNavigationSuppression(
+      pendingHomeNavigationRef.current,
+      routeTarget,
+    );
+    pendingHomeNavigationRef.current = homeNavigation.pending;
+    if (homeNavigation.skipReconciliation) {
+      return;
+    }
     if (routeTarget) {
       const next = current
         ? reconcileFocusedRoute(current, routeTarget)
@@ -272,6 +347,8 @@ export function ChatPaneActionsProvider({
       focusedPaneId: settingsHydrated ? (layout?.focusedPaneId ?? null) : null,
       openTarget,
       openNewChat,
+      replaceWithNewChat,
+      resetToHome,
       focusPane,
       closePane,
       promoteDraft: promotePaneDraft,
@@ -285,6 +362,8 @@ export function ChatPaneActionsProvider({
       openNewChat,
       openTarget,
       promotePaneDraft,
+      replaceWithNewChat,
+      resetToHome,
       settingsHydrated,
     ],
   );
