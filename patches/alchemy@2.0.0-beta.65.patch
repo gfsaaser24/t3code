@@ -1,0 +1,17 @@
+diff --git a/lib/Cloudflare/Workers/WorkerProvider.js b/lib/Cloudflare/Workers/WorkerProvider.js
+index 52a072782f68273a5642e98d198606ebc3a151b5..cf05116a6afd626f504e31452288422e672098b6 100644
+--- a/lib/Cloudflare/Workers/WorkerProvider.js
++++ b/lib/Cloudflare/Workers/WorkerProvider.js
+@@ -409,9 +409,9 @@ export const LiveWorkerProvider = () => Provider.effect(Worker, Effect.gen(funct
+         const cached = zoneCache.get(hostname);
+         if (cached)
+             return cached;
+-        const zoneList = yield* zones
+-            .listZones({})
+-            .pipe(Effect.map((response) => response.result ?? []));
++        const zoneList = Array.from(yield* zones
++            .listZones.pages({})
++            .pipe(Stream.map((page) => page.result ?? []), Stream.runCollect)).flat();
+         for (const zone of zoneList) {
+             zoneCache.set(zone.name, zone.id);
+         }
