@@ -16,6 +16,7 @@ import {
   KeybindingRule,
   MessageId,
   ExternalLauncherCommandNotFoundError,
+  ExternalLauncherInvalidPathError,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
@@ -5032,6 +5033,61 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           client[WS_METHODS.shellOpenInEditor]({
             cwd: "/tmp/project",
             editor: "cursor",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertFailure(result, externalLauncherError);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc shell.openPath with a typed result", () =>
+    Effect.gen(function* () {
+      let openedPath: string | null = null;
+      yield* buildAppUnderTest({
+        layers: {
+          externalLauncher: {
+            launchPath: (path) =>
+              Effect.sync(() => {
+                openedPath = path;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.shellOpenPath]({
+            path: "/tmp/project/README.md",
+          }),
+        ),
+      );
+
+      assert.deepEqual(result, { path: "/tmp/project/README.md" });
+      assert.equal(openedPath, "/tmp/project/README.md");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc shell.openPath errors", () =>
+    Effect.gen(function* () {
+      const externalLauncherError = new ExternalLauncherInvalidPathError({
+        path: "README.md",
+        reason: "not_absolute",
+      });
+      yield* buildAppUnderTest({
+        layers: {
+          externalLauncher: {
+            launchPath: () => Effect.fail(externalLauncherError),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.shellOpenPath]({
+            path: "README.md",
           }),
         ).pipe(Effect.result),
       );

@@ -92,6 +92,57 @@ it.effect("launches the default browser through the platform command", () => {
   );
 });
 
+it.effect("opens an absolute path with the system default application without a shell", () => {
+  let spawned: ChildProcess.StandardCommand | undefined;
+  let didUnref = false;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+    yield* launcher.launchPath("/tmp/notes $(touch ignored).md");
+
+    assert.ok(spawned);
+    assert.equal(spawned.command, "xdg-open");
+    assert.deepEqual(spawned.args, ["/tmp/notes $(touch ignored).md"]);
+    assert.equal(spawned.options.shell, false);
+    assert.equal(spawned.options.detached, true);
+    assert.equal(didUnref, true);
+  }).pipe(
+    Effect.provide(
+      testLayer({
+        platform: "linux",
+        onSpawn: (command) => {
+          spawned = command;
+        },
+        onUnref: () => {
+          didUnref = true;
+        },
+      }),
+    ),
+  );
+});
+
+it.effect("rejects relative default-application paths before spawning", () => {
+  let didSpawn = false;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+    const error = yield* launcher.launchPath("notes/readme.md").pipe(Effect.flip);
+
+    assert.instanceOf(error, ExternalLauncher.ExternalLauncherInvalidPathError);
+    assert.equal(error.path, "notes/readme.md");
+    assert.equal(error.reason, "not_absolute");
+    assert.equal(didSpawn, false);
+  }).pipe(
+    Effect.provide(
+      testLayer({
+        platform: "linux",
+        onSpawn: () => {
+          didSpawn = true;
+        },
+      }),
+    ),
+  );
+});
+
 it.effect("launches an installed editor with platform-safe arguments", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
