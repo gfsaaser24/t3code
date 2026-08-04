@@ -253,8 +253,8 @@ try {
   );
   assertContains(
     nightlyReleaseMetadata,
-    "name=T3 Code Nightly 9.9.10-nightly.20260413.321 (abcdef123456)",
-    "Expected nightly metadata to include the short commit SHA in the release name.",
+    "name=T3 Turbo 04-13-26",
+    "Expected nightly metadata to use the T3 Turbo MM-DD-YY release name.",
   );
 
   const { arm64Path, x64Path } = writeMacManifestFixtures(tempRoot);
