@@ -67,6 +67,67 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
+describe("ClientSettings T3 Turbo chat panes", () => {
+  const layout = {
+    version: 1,
+    panes: [
+      {
+        id: "pane-a",
+        target: {
+          kind: "server",
+          threadRef: {
+            environmentId: "environment-a",
+            threadId: "thread-a",
+          },
+        },
+      },
+      {
+        id: "pane-b",
+        target: {
+          kind: "draft",
+          draftId: "draft-a",
+        },
+      },
+    ],
+    focusedPaneId: "pane-b",
+  } as const;
+
+  it("defaults legacy client settings to no saved pane layout", () => {
+    expect(decodeClientSettings({}).turboChatPaneLayout).toBeNull();
+  });
+
+  it("decodes and patches the versioned ordered pane references", () => {
+    expect(decodeClientSettings({ turboChatPaneLayout: layout }).turboChatPaneLayout).toEqual(
+      layout,
+    );
+    expect(decodeClientSettingsPatch({ turboChatPaneLayout: layout }).turboChatPaneLayout).toEqual(
+      layout,
+    );
+    expect(decodeClientSettingsPatch({ turboChatPaneLayout: null }).turboChatPaneLayout).toBeNull();
+  });
+
+  it("rejects empty layouts, unsupported versions, and blank identifiers", () => {
+    expect(() =>
+      decodeClientSettings({
+        turboChatPaneLayout: { version: 1, panes: [], focusedPaneId: "pane-a" },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettings({
+        turboChatPaneLayout: { ...layout, version: 2 },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        turboChatPaneLayout: {
+          ...layout,
+          panes: [{ ...layout.panes[0], id: "   " }],
+        },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ClientSettings sidebar v2", () => {
   it("defaults the beta off with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
