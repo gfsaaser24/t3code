@@ -23,14 +23,17 @@ import { resolveThreadRouteRenderState } from "../../threadRoutes";
 import { resolveThreadSyncPhase } from "../../threadSync";
 import type { ChatPane } from "./chatPaneLayout";
 import { ChatPaneScope, useChatPaneActions } from "./ChatPaneActionsContext";
+import { chatPaneChromeOwnership } from "./chatPaneResourcePolicy";
 
 function ServerChatPane({
   paneId,
   reserveTitleBarControlInset,
+  reserveSidebarControlInset,
   threadRef,
 }: {
   readonly paneId: ChatPane["id"];
   readonly reserveTitleBarControlInset: boolean;
+  readonly reserveSidebarControlInset: boolean;
   readonly threadRef: ScopedThreadRef;
 }) {
   const { discardPane } = useChatPaneActions();
@@ -77,6 +80,7 @@ function ServerChatPane({
     <ChatViewContent
       environmentId={threadRef.environmentId}
       reserveTitleBarControlInset={reserveTitleBarControlInset}
+      reserveSidebarControlInset={reserveSidebarControlInset}
       threadId={threadRef.threadId}
       routeKind="server"
       threadSyncPhase={threadSyncPhase}
@@ -88,10 +92,12 @@ function DraftChatPane({
   draftId,
   paneId,
   reserveTitleBarControlInset,
+  reserveSidebarControlInset,
 }: {
   readonly draftId: Extract<ChatPane["target"], { kind: "draft" }>["draftId"];
   readonly paneId: ChatPane["id"];
   readonly reserveTitleBarControlInset: boolean;
+  readonly reserveSidebarControlInset: boolean;
 }) {
   const { discardPane, promoteDraft } = useChatPaneActions();
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
@@ -143,6 +149,7 @@ function DraftChatPane({
       draftId={draftId}
       environmentId={draftSession.environmentId}
       reserveTitleBarControlInset={reserveTitleBarControlInset}
+      reserveSidebarControlInset={reserveSidebarControlInset}
       threadId={draftSession.threadId}
       routeKind="draft"
       forceExpandedMobileComposer
@@ -153,14 +160,17 @@ function DraftChatPane({
 function ChatPaneTarget({
   pane,
   reserveTitleBarControlInset,
+  reserveSidebarControlInset,
 }: {
   readonly pane: ChatPane;
   readonly reserveTitleBarControlInset: boolean;
+  readonly reserveSidebarControlInset: boolean;
 }) {
   return pane.target.kind === "server" ? (
     <ServerChatPane
       paneId={pane.id}
       reserveTitleBarControlInset={reserveTitleBarControlInset}
+      reserveSidebarControlInset={reserveSidebarControlInset}
       threadRef={pane.target.threadRef}
     />
   ) : (
@@ -168,6 +178,7 @@ function ChatPaneTarget({
       draftId={pane.target.draftId}
       paneId={pane.id}
       reserveTitleBarControlInset={reserveTitleBarControlInset}
+      reserveSidebarControlInset={reserveSidebarControlInset}
     />
   );
 }
@@ -185,6 +196,7 @@ export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden" data-chat-pane-workspace="">
           {layout.panes.map((pane, index) => {
             const isFocused = pane.id === layout.focusedPaneId;
+            const chrome = chatPaneChromeOwnership(index, layout.panes.length);
             return (
               <section
                 key={pane.id}
@@ -199,7 +211,8 @@ export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }
                 <ChatPaneScope paneId={pane.id}>
                   <ChatPaneTarget
                     pane={pane}
-                    reserveTitleBarControlInset={index === layout.panes.length - 1}
+                    reserveTitleBarControlInset={chrome.reserveTitleBarControlInset}
+                    reserveSidebarControlInset={chrome.reserveSidebarControlInset}
                   />
                 </ChatPaneScope>
               </section>

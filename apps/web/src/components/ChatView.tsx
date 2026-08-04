@@ -308,6 +308,12 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { useChatPaneActions, useCurrentChatPaneId } from "~/turbo/chatPanes/ChatPaneActionsContext";
+import {
+  isChatPaneFocused,
+  selectPaneTerminalMountKeys,
+  shouldUseChatPaneRightPanelSheet,
+} from "~/turbo/chatPanes/chatPaneResourcePolicy";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -470,6 +476,7 @@ type ChatViewProps =
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
+      reserveSidebarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: ThreadSyncPhase | null;
       routeKind: "server";
@@ -480,6 +487,7 @@ type ChatViewProps =
       threadId: ThreadId;
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
+      reserveSidebarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
       threadSyncPhase?: never;
       routeKind: "draft";
@@ -602,6 +610,7 @@ interface PersistentThreadTerminalDrawerProps {
   threadRef: { environmentId: EnvironmentId; threadId: ThreadId };
   threadId: ThreadId;
   visible: boolean;
+  autoFocus: boolean;
   launchContext: PersistentTerminalLaunchContext | null;
   focusRequestId: number;
   splitShortcutLabel: string | undefined;
@@ -616,6 +625,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
   threadRef,
   threadId,
   visible,
+  autoFocus,
   launchContext,
   focusRequestId,
   splitShortcutLabel,
@@ -936,6 +946,7 @@ const PersistentThreadTerminalDrawer = memo(function PersistentThreadTerminalDra
         worktreePath={effectiveWorktreePath}
         runtimeEnv={runtimeEnv}
         visible={visible}
+        autoFocus={autoFocus}
         height={terminalUiState.terminalHeight}
         // Known-session order is MRU and changes on focus; persisted store order keeps sidebar labels stable.
         terminalIds={terminalUiState.terminalIds}
@@ -967,6 +978,7 @@ interface PersistentThreadTerminalPanelProps {
   surface: Extract<RightPanelSurface, { kind: "terminal" }>;
   launchContext: PersistentTerminalLaunchContext | null;
   focusRequestId: number;
+  autoFocus: boolean;
   keybindings: ResolvedKeybindingsConfig;
   onAddTerminalContext: (selection: TerminalContextSelection) => void;
   onSplitTerminal: () => void;
@@ -985,6 +997,7 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
   surface,
   launchContext,
   focusRequestId,
+  autoFocus,
   keybindings,
   onAddTerminalContext,
   onSplitTerminal,
@@ -1113,6 +1126,7 @@ const PersistentThreadTerminalPanel = memo(function PersistentThreadTerminalPane
       ]}
       activeTerminalGroupId={surface.id}
       focusRequestId={focusRequestId}
+      autoFocus={autoFocus}
       onSplitTerminal={onSplitTerminal}
       onSplitTerminalVertical={onSplitTerminalVertical}
       onNewTerminal={onNewTerminal}
@@ -1150,8 +1164,14 @@ export function ChatViewContent(props: ChatViewProps) {
     routeKind,
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
+    reserveSidebarControlInset = true,
     forceExpandedMobileComposer = false,
   } = props;
+  const paneId = useCurrentChatPaneId();
+  const { focusedPaneId, layout: chatPaneLayout } = useChatPaneActions();
+  const isFocusedPane = isChatPaneFocused(paneId, focusedPaneId);
+  const chatPaneCount = chatPaneLayout?.panes.length ?? 0;
+  const isMultiPane = chatPaneCount > 1;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -1278,7 +1298,8 @@ export function ChatViewContent(props: ChatViewProps) {
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
-  const composerRef = useComposerHandleContext() ?? localComposerRef;
+  const sharedComposerRef = useComposerHandleContext();
+  const composerRef = isFocusedPane ? (sharedComposerRef ?? localComposerRef) : localComposerRef;
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -1304,7 +1325,9 @@ export function ChatViewContent(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const narrowRightPanelLayout = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const shouldUsePlanSidebarSheet =
+    shouldUseChatPaneRightPanelSheet(chatPaneCount) || narrowRightPanelLayout;
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
@@ -1576,8 +1599,15 @@ export function ChatViewContent(props: ChatViewProps) {
 
   const existingOpenTerminalThreadKeys = useMemo(() => {
     const existingThreadKeys = new Set<string>([...serverThreadKeys, ...draftThreadKeys]);
-    return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
-  }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
+    const existingOpenKeys = openTerminalThreadKeys.filter((nextThreadKey) =>
+      existingThreadKeys.has(nextThreadKey),
+    );
+    return selectPaneTerminalMountKeys({
+      multiPane: isMultiPane,
+      activeThreadKey,
+      existingOpenThreadKeys: existingOpenKeys,
+    });
+  }, [activeThreadKey, draftThreadKeys, isMultiPane, openTerminalThreadKeys, serverThreadKeys]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const sourcePlanThreadRef = useMemo(() => {
     const sourceThreadId = activeLatestTurn?.sourceProposedPlan?.threadId;
@@ -2620,8 +2650,9 @@ export function ChatViewContent(props: ChatViewProps) {
   );
 
   const focusComposer = useCallback(() => {
+    if (!isFocusedPane) return;
     composerRef.current?.focusAtEnd();
-  }, [composerRef]);
+  }, [composerRef, isFocusedPane]);
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
       focusComposer();
@@ -3427,9 +3458,10 @@ export function ChatViewContent(props: ChatViewProps) {
   useEffect(
     () =>
       subscribePreviewAction((action) => {
+        if (!isFocusedPane) return;
         if (action === "toggle-panel") togglePreviewPanel();
       }),
-    [togglePreviewPanel],
+    [isFocusedPane, togglePreviewPanel],
   );
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -4364,7 +4396,7 @@ export function ChatViewContent(props: ChatViewProps) {
         event.stopPropagation();
         return;
       }
-      if (!activeThreadId || isCommandPaletteOpen()) {
+      if (!isFocusedPane || !activeThreadId || isCommandPaletteOpen()) {
         return;
       }
       const terminalFocusOwner = getTerminalFocusOwner();
@@ -4505,6 +4537,7 @@ export function ChatViewContent(props: ChatViewProps) {
     toggleRightPanel,
     toggleTerminalVisibility,
     composerRef,
+    isFocusedPane,
   ]);
 
   const onRevertToTurnCount = useCallback(
@@ -5727,6 +5760,7 @@ export function ChatViewContent(props: ChatViewProps) {
           onSendAnnotation={(annotation, image) => {
             void onSend(undefined, { annotation, image });
           }}
+          actionsEnabled={isFocusedPane}
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "terminal" ? (
@@ -5735,6 +5769,7 @@ export function ChatViewContent(props: ChatViewProps) {
         surface={activeRightPanelSurface}
         launchContext={activeTerminalLaunchContext ?? null}
         focusRequestId={terminalFocusRequestId}
+        autoFocus={isFocusedPane}
         keybindings={keybindings}
         onAddTerminalContext={addTerminalContextToDraft}
         onSplitTerminal={splitPanelTerminal}
@@ -5823,7 +5858,7 @@ export function ChatViewContent(props: ChatViewProps) {
                     "wco:pr-[var(--workspace-native-controls-inset)]",
                 )
               : "workspace-topbar pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)]",
-            COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+            reserveSidebarControlInset && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
           {!rightPanelOpen ? panelLayoutControls : null}
@@ -6173,6 +6208,7 @@ export function ChatViewContent(props: ChatViewProps) {
             threadRef={mountedThreadRef}
             threadId={mountedThreadRef.threadId}
             visible={mountedThreadKey === activeThreadKey && terminalUiState.terminalOpen}
+            autoFocus={isFocusedPane}
             launchContext={
               mountedThreadKey === activeThreadKey ? (activeTerminalLaunchContext ?? null) : null
             }

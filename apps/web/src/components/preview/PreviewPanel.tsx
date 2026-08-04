@@ -18,6 +18,7 @@ interface Props {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
+  actionsEnabled?: boolean;
 }
 
 export function PreviewPanel({
@@ -27,6 +28,7 @@ export function PreviewPanel({
   configuredUrls,
   visible,
   onSendAnnotation,
+  actionsEnabled = visible,
 }: Props) {
   if (!isPreviewSupportedInRuntime()) {
     return (
@@ -48,6 +50,7 @@ export function PreviewPanel({
         configuredUrls={configuredUrls}
         visible={visible}
         {...(onSendAnnotation ? { onSendAnnotation } : {})}
+        actionsEnabled={actionsEnabled}
       />
     </PreviewPanelShell>
   );

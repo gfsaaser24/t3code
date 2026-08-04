@@ -130,29 +130,29 @@ shared-resource model cannot keep the client stable.
 
 ## Task Breakdown
 
-- [ ] Add branded `ChatPaneId`, the non-empty flat layout model, pure transitions, and exhaustive
+- [x] Add branded `ChatPaneId`, the non-empty flat layout model, pure transitions, and exhaustive
       unit tests.
-- [ ] Extend `ClientSettingsSchema` with a versioned, defaulted Turbo pane layout and add the thin
+- [x] Extend `ClientSettingsSchema` with a versioned, defaulted Turbo pane layout and add the thin
       persisted store and focused-route adapter; keep secondary panes out of the URL.
-- [ ] Decode defensively and fall back to a single URL-derived pane when persisted targets are
+- [x] Decode defensively and fall back to a single URL-derived pane when persisted targets are
       malformed, stale, unavailable, or from an older layout version.
-- [ ] Extract route-free draft creation and reusable draft promotion/missing-target resolution.
-- [ ] Add `ChatPaneWorkspace` and render existing `ChatView` instances as equal-width peers.
-- [ ] Gate global shortcuts, type-to-focus, automatic composer focus, and command-palette composer
+- [x] Extract route-free draft creation and reusable draft promotion/missing-target resolution.
+- [x] Add `ChatPaneWorkspace` and render existing `ChatView` instances as equal-width peers.
+- [x] Gate global shortcuts, type-to-focus, automatic composer focus, and command-palette composer
       ownership to the focused pane.
-- [ ] Lift `DiffWorkerPoolProvider` to the workspace so additional panes do not create additional
+- [x] Lift `DiffWorkerPoolProvider` to the workspace so additional panes do not create additional
       2-6 worker pools.
-- [ ] Prevent duplicate hidden terminal drawers; share terminal ownership and mount persistence
+- [x] Prevent duplicate hidden terminal drawers; share terminal ownership and mount persistence
       once per relevant thread, not once per `ChatView` instance.
-- [ ] Make title-bar ownership pane-aware: only the leftmost pane receives the collapsed-sidebar
+- [x] Make title-bar ownership pane-aware: only the leftmost pane receives the collapsed-sidebar
       inset and only the rightmost pane reserves Electron window-control space.
-- [ ] Make right-panel layout depend on pane width, or use its sheet/overlay form in multi-pane
+- [x] Make right-panel layout depend on pane width, or use its sheet/overlay form in multi-pane
       mode, so narrow panes do not each claim a 360-540px inline panel.
-- [ ] Add the `+`/chevron pane control and a separate close-pane button to every chat header.
-- [ ] Add the left/right open actions to both Sidebar V2 and V1 thread-card context menus.
-- [ ] Reconcile ordinary sidebar clicks, command palette creation, deletion, missing threads,
+- [x] Add the `+`/chevron pane control and a separate close-pane button to every chat header.
+- [x] Add the left/right open actions to both Sidebar V2 and V1 thread-card context menus.
+- [x] Reconcile ordinary sidebar clicks, command palette creation, deletion, missing threads,
       draft promotion, deep links, and browser back/forward against the focused pane.
-- [ ] Add user documentation and an internal seam note for nightly upstream recovery.
+- [x] Add user documentation and an internal seam note for nightly upstream recovery.
 
 ## Acceptance Criteria
 

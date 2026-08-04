@@ -1340,9 +1340,9 @@ function ChatMarkdown({
   const preparedConnection = usePreparedConnection(threadRef?.environmentId ?? null);
   const environmentId = useActiveEnvironmentId();
   const fileEnvironmentId = threadRef?.environmentId ?? environmentId;
-  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(fileEnvironmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
-    environmentId,
+    fileEnvironmentId,
     serverConfig?.availableEditors ?? [],
   );
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
