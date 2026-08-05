@@ -273,6 +273,17 @@ function isInsideComposerFloatingLayer(element: Element): boolean {
   return element.closest(COMPOSER_FLOATING_LAYER_SELECTOR) !== null;
 }
 
+/** A pasted link the user meant to keep, as opposed to accessory clipboard text. */
+function isHttpUrlText(text: string): boolean {
+  if (!/^https?:\/\//i.test(text)) return false;
+  try {
+    const url = new URL(text);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
@@ -2395,9 +2406,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Copying a link from a browser or chat app often puts the URL text and a
     // preview image on the clipboard together. preventDefault above suppresses
     // the native text insertion, so re-insert the text half instead of
-    // silently dropping it with the attachment.
-    const text = event.clipboardData.getData("text/plain");
-    if (text.length > 0) {
+    // silently dropping it with the attachment. Only URL-shaped text
+    // qualifies: OS file copies and image copies can carry accessory
+    // text/plain (file names, local paths) the user never meant to insert.
+    const text = event.clipboardData.getData("text/plain").trim();
+    if (isHttpUrlText(text)) {
       composerEditorRef.current?.insertText(text);
     }
   };
