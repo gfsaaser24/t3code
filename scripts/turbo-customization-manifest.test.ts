@@ -18,6 +18,7 @@ const fixtureManifest = (
 ) => ({
   schemaVersion: 1,
   product: "T3 Turbo",
+  registeredRefs: [{ id: "fixture-ref", ref: "refs/heads/infra/fixture" }],
   seams: [
     {
       id: "fixture-seam",
@@ -108,16 +109,37 @@ it("rejects ambiguous lifecycles and non-portable repository paths", () => {
       fixtureManifest([{ path: "folder\\feature.ts", markers: [] }]),
     ),
   );
+  assert.throws(() =>
+    decodeTurboCustomizationManifest({
+      ...fixtureManifest([{ path: "feature.ts", markers: [] }]),
+      registeredRefs: [{ id: "fixture-ref", ref: "infra/fixture" }],
+    }),
+  );
+  assert.throws(() =>
+    decodeTurboCustomizationManifest({
+      ...fixtureManifest([{ path: "feature.ts", markers: [] }]),
+      registeredRefs: [
+        { id: "fixture-ref", ref: "refs/heads/infra/fixture" },
+        { id: "fixture-ref", ref: "refs/heads/infra/other" },
+      ],
+    }),
+  );
 });
 
 it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat seam", () => {
   const result = verifyTurboCustomizationManifest({ root: repositoryRoot });
   const multiChat = result.manifest.seams.find((seam) => seam.id === "multi-chat-pane-workspace");
   const markdown = result.manifest.seams.find((seam) => seam.id === "markdown-preview-preference");
+  const imagePreview = result.manifest.seams.find((seam) => seam.id === "workspace-image-preview");
+  const officialImport = result.manifest.seams.find((seam) => seam.id === "official-data-import");
+  const icons = result.manifest.seams.find((seam) => seam.id === "canonical-icon-pipeline");
   const nightly = result.manifest.seams.find((seam) => seam.id === "nightly-and-secret-policy");
   const product = result.manifest.seams.find((seam) => seam.id === "product-identity-and-updater");
 
   assert.deepStrictEqual(result.failures, []);
+  assert.deepStrictEqual(result.manifest.registeredRefs, [
+    { id: "relay-portal", ref: "refs/heads/infra/t3turbo-relay" },
+  ]);
   assert.deepStrictEqual(result.manifest.seams.map((seam) => seam.id).sort(), [
     "canonical-icon-pipeline",
     "file-explorer",
@@ -151,6 +173,15 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     multiChat?.checks.some((check) => check.path.endsWith("chatPaneResourcePolicy.test.ts")),
   );
   assert.isTrue(
+    [
+      "apps/web/src/routes/_chat.tsx",
+      "apps/web/src/components/ChatView.tsx",
+      "apps/web/src/components/chat/ChatHeader.tsx",
+      "apps/web/src/terminalUiStateStore.ts",
+      "apps/web/src/rightPanelStore.ts",
+    ].every((path) => multiChat?.checks.some((check) => check.path === path)),
+  );
+  assert.isTrue(
     markdown?.checks.some(
       (check) => check.path === "apps/web/src/components/chat/markdownFileLinkGesture.test.ts",
     ),
@@ -164,6 +195,34 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     markdown?.checks.some(
       (check) => check.path === "apps/web/src/components/settings/SettingsSidebarNav.tsx",
     ),
+  );
+  assert.isTrue(
+    [
+      "packages/client-runtime/src/state/shellCommands.ts",
+      "apps/web/src/state/shell.ts",
+      "apps/web/src/components/ChatMarkdown.tsx",
+    ].every((path) => markdown?.checks.some((check) => check.path === path)),
+  );
+  assert.isTrue(
+    imagePreview?.checks.some((check) => check.path === "apps/web/src/rightPanelStore.ts"),
+  );
+  assert.isTrue(
+    [
+      "apps/server/src/cli/officialImport.ts",
+      "apps/server/src/bin.ts",
+      "packages/contracts/src/ipc.ts",
+      "apps/desktop/src/ipc/channels.ts",
+      "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
+      "apps/desktop/src/preload.ts",
+      "apps/desktop/src/ipc/methods/officialT3Environment.ts",
+    ].every((path) => officialImport?.checks.some((check) => check.path === path)),
+  );
+  assert.isTrue(
+    [
+      "apps/mobile/assets/t3turbo-android-monochrome.png",
+      "apps/mobile/assets/t3turbo-android-notification.png",
+      "scripts/turbo-product-branding.test.ts",
+    ].every((path) => icons?.checks.some((check) => check.path === path)),
   );
   assert.isTrue(
     nightly?.checks.some((check) => check.markers.includes("Do not publish T3 Turbo to NPM")),

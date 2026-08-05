@@ -7,6 +7,15 @@ describe("T3 Turbo brand assets", () => {
     expect(TURBO_BRAND_ASSET_PATHS.sourcePng).toBe("t3turbo.png");
   });
 
+  it("registers purpose-built Turbo masks for Android system surfaces", () => {
+    expect(TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng).toBe(
+      "apps/mobile/assets/t3turbo-android-monochrome.png",
+    );
+    expect(TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng).toBe(
+      "apps/mobile/assets/t3turbo-android-notification.png",
+    );
+  });
+
   it("maps every web build to the Turbo favicon family", () => {
     expect(resolveTurboWebIconOverrides("dist/client")).toEqual([
       {

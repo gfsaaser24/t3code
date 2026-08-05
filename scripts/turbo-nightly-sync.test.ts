@@ -14,6 +14,7 @@ import {
   decodeTurboUpstreamState,
   findPathCollisions,
   renderTurboCollisionReport,
+  renderTurboRegisteredRefStatus,
   renderTurboSuccessReport,
   resolveTurboEasternCutoff,
   resolveTurboInboundUpdate,
@@ -381,6 +382,34 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.notInclude(workflow, "vp run dist:desktop:artifact --");
 });
 
+it("measures relay and portal status from the manifest-registered branch ref", () => {
+  const workflow = readTurboWorkflow();
+
+  assert.include(workflow, '.registeredRefs[] | select(.id == "relay-portal") | .ref');
+  assert.include(workflow, 'before_ref="refs/t3-turbo/registered/relay-portal-before"');
+  assert.include(workflow, 'after_ref="refs/t3-turbo/registered/relay-portal-after"');
+  assert.include(workflow, '--relay-portal-ref "$RELAY_PORTAL_REF"');
+  assert.include(workflow, '--relay-portal-before-sha "$RELAY_PORTAL_BEFORE_SHA"');
+  assert.include(workflow, '--relay-portal-after-sha "$RELAY_PORTAL_AFTER_SHA"');
+  assert.notInclude(workflow, "--relay-portal-status");
+});
+
+it("opens a documented repair issue for manifest, icon, seam, build, and publish failures", () => {
+  const workflow = readTurboWorkflow();
+  const repairJob = workflow.slice(
+    workflow.indexOf("  report_repair:"),
+    workflow.indexOf("  notify_openclaw:"),
+  );
+
+  assert.include(repairJob, "issues: write");
+  assert.include(repairJob, "needs.sync_source.result == 'failure'");
+  assert.include(repairJob, "needs.build_windows.result == 'failure'");
+  assert.include(repairJob, "manifest, focused-test, icon, native-build");
+  assert.include(repairJob, "Open a reviewed PR back to \\`turbo\\`");
+  assert.include(repairJob, "pnpm icons:turbo:check");
+  assert.include(workflow, "REPAIR_ISSUE_URL: ${{ needs.report_repair.outputs.issue_url }}");
+});
+
 it("uses public fork runners and gates the self-host relay on configuration", () => {
   const ciWorkflow = readWorkflow("ci.yml");
   const relayWorkflow = readWorkflow("deploy-relay.yml");
@@ -431,7 +460,9 @@ it("renders a complete successful nightly report", () => {
     resultingTurboSha: "cccccccccccccccccccccccccccccccccccccccc",
     manifestResult: "passed (9 seams)",
     testResult: "passed",
-    relayPortalStatus: "preserved; no deployment performed",
+    relayPortalRef: "refs/heads/infra/t3turbo-relay",
+    relayPortalBeforeSha: "f".repeat(40),
+    relayPortalAfterSha: "f".repeat(40),
     artifactName: "T3-Turbo.exe",
     artifactSha256: "d".repeat(64),
     releaseUrl: "https://github.com/gfsaaser24/t3code/releases/tag/v1",
@@ -443,9 +474,30 @@ it("renders a complete successful nightly report", () => {
   assert.include(report, "Resulting Turbo: `cccccccccccccccccccccccccccccccccccccccc`");
   assert.include(report, "Customization manifest: passed (9 seams)");
   assert.include(report, "Focused seam tests: passed");
-  assert.include(report, "Relay/portal: preserved; no deployment performed");
+  assert.include(
+    report,
+    `Relay/portal: registered branch \`infra/t3turbo-relay\` remained at \`${"f".repeat(40)}\``,
+  );
   assert.include(report, "Installer SHA-256");
   assert.include(report, "https://github.com/gfsaaser24/t3code/releases/tag/v1");
+});
+
+it("reports registered relay and portal branch movement from measured ref state", () => {
+  const status = renderTurboRegisteredRefStatus({
+    ref: "refs/heads/infra/t3turbo-relay",
+    beforeSha: "a".repeat(40),
+    afterSha: "b".repeat(40),
+  });
+
+  assert.include(status, "changed from");
+  assert.include(status, "during the run");
+  assert.throws(() =>
+    renderTurboRegisteredRefStatus({
+      ref: "infra/t3turbo-relay",
+      beforeSha: "a".repeat(40),
+      afterSha: "b".repeat(40),
+    }),
+  );
 });
 
 it("resolves update metadata through the CLI", () => {

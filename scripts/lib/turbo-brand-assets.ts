@@ -12,6 +12,8 @@ export const TURBO_BRAND_ASSET_PATHS = {
   webFavicon32Png: "assets/turbo/t3turbo-web-favicon-32x32.png",
   webAppleTouchIconPng: "assets/turbo/t3turbo-web-apple-touch-180.png",
 
+  androidMonochromeIconPng: "apps/mobile/assets/t3turbo-android-monochrome.png",
+  androidNotificationIconPng: "apps/mobile/assets/t3turbo-android-notification.png",
   widgetIconPng: "apps/mobile/assets/widget/T3Mark.png",
 } as const;
 

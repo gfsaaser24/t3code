@@ -37,6 +37,7 @@ const TURBO_NIGHTLY_VERSION_PATTERN =
 const CUTOFF_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const BRANCH_REF_PATTERN = /^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u;
 const EASTERN_TIME_ZONE = "America/New_York";
 const EASTERN_DATE_TIME_FORMATTER = new Intl.DateTimeFormat("en-US", {
   timeZone: EASTERN_TIME_ZONE,
@@ -390,7 +391,9 @@ export function renderTurboSuccessReport(input: {
   readonly resultingTurboSha: string;
   readonly manifestResult: string;
   readonly testResult: string;
-  readonly relayPortalStatus: string;
+  readonly relayPortalRef: string;
+  readonly relayPortalBeforeSha: string;
+  readonly relayPortalAfterSha: string;
   readonly artifactName: string;
   readonly artifactSha256: string;
   readonly releaseUrl: string;
@@ -413,7 +416,6 @@ export function renderTurboSuccessReport(input: {
   for (const [label, value] of [
     ["manifest result", input.manifestResult],
     ["test result", input.testResult],
-    ["relay/portal status", input.relayPortalStatus],
     ["artifact name", input.artifactName],
     ["release URL", input.releaseUrl],
   ] as const) {
@@ -429,11 +431,34 @@ export function renderTurboSuccessReport(input: {
     `- Resulting Turbo: \`${input.resultingTurboSha}\``,
     `- Customization manifest: ${input.manifestResult}`,
     `- Focused seam tests: ${input.testResult}`,
-    `- Relay/portal: ${input.relayPortalStatus}`,
+    `- Relay/portal: ${renderTurboRegisteredRefStatus({
+      ref: input.relayPortalRef,
+      beforeSha: input.relayPortalBeforeSha,
+      afterSha: input.relayPortalAfterSha,
+    })}`,
     `- Installer SHA-256: \`${input.artifactSha256}\` (\`${input.artifactName}\`)`,
     `- Release: ${input.releaseUrl}`,
     "",
   ].join("\n");
+}
+
+export function renderTurboRegisteredRefStatus(input: {
+  readonly ref: string;
+  readonly beforeSha: string;
+  readonly afterSha: string;
+}): string {
+  if (!BRANCH_REF_PATTERN.test(input.ref) || input.ref.includes("..") || input.ref.endsWith("/")) {
+    throw new Error(
+      "Turbo registered infrastructure ref must be a full refs/heads/... branch ref.",
+    );
+  }
+  if (!SHA_PATTERN.test(input.beforeSha) || !SHA_PATTERN.test(input.afterSha)) {
+    throw new Error("Turbo registered infrastructure state must contain valid commit SHAs.");
+  }
+  const branch = input.ref.slice("refs/heads/".length);
+  return input.beforeSha === input.afterSha
+    ? `registered branch \`${branch}\` remained at \`${input.afterSha}\`; no infrastructure deployment was performed`
+    : `registered branch \`${branch}\` changed from \`${input.beforeSha}\` to \`${input.afterSha}\` during the run; no infrastructure deployment was performed by product ingestion`;
 }
 
 export function findPathCollisions(
@@ -616,7 +641,9 @@ function runSuccessReport(values: Record<string, string | boolean | undefined>):
     "resulting-turbo-sha",
     "manifest-result",
     "test-result",
-    "relay-portal-status",
+    "relay-portal-ref",
+    "relay-portal-before-sha",
+    "relay-portal-after-sha",
     "artifact-name",
     "artifact-sha256",
     "release-url",
@@ -633,7 +660,9 @@ function runSuccessReport(values: Record<string, string | boolean | undefined>):
     resultingTurboSha: values["resulting-turbo-sha"] as string,
     manifestResult: values["manifest-result"] as string,
     testResult: values["test-result"] as string,
-    relayPortalStatus: values["relay-portal-status"] as string,
+    relayPortalRef: values["relay-portal-ref"] as string,
+    relayPortalBeforeSha: values["relay-portal-before-sha"] as string,
+    relayPortalAfterSha: values["relay-portal-after-sha"] as string,
     artifactName: values["artifact-name"] as string,
     artifactSha256: values["artifact-sha256"] as string,
     releaseUrl: values["release-url"] as string,
@@ -707,7 +736,9 @@ if (isMain) {
       "resulting-turbo-sha": { type: "string" },
       "manifest-result": { type: "string" },
       "test-result": { type: "string" },
-      "relay-portal-status": { type: "string" },
+      "relay-portal-ref": { type: "string" },
+      "relay-portal-before-sha": { type: "string" },
+      "relay-portal-after-sha": { type: "string" },
       "artifact-name": { type: "string" },
       "artifact-sha256": { type: "string" },
       "release-url": { type: "string" },

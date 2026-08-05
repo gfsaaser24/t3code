@@ -18,9 +18,15 @@ export interface TurboCustomizationSeam {
   readonly checks: ReadonlyArray<TurboCustomizationCheck>;
 }
 
+export interface TurboCustomizationRegisteredRef {
+  readonly id: string;
+  readonly ref: string;
+}
+
 export interface TurboCustomizationManifest {
   readonly schemaVersion: 1;
   readonly product: "T3 Turbo";
+  readonly registeredRefs: ReadonlyArray<TurboCustomizationRegisteredRef>;
   readonly seams: ReadonlyArray<TurboCustomizationSeam>;
 }
 
@@ -83,6 +89,33 @@ export function decodeTurboCustomizationManifest(value: unknown): TurboCustomiza
   if (!Array.isArray(value.seams) || value.seams.length === 0) {
     throw new Error("Turbo customization manifest must contain at least one seam.");
   }
+  if (!Array.isArray(value.registeredRefs) || value.registeredRefs.length === 0) {
+    throw new Error("Turbo customization manifest must contain at least one registered ref.");
+  }
+
+  const registeredRefIds = new Set<string>();
+  const registeredRefs = value.registeredRefs.map(
+    (registeredRef, registeredRefIndex): TurboCustomizationRegisteredRef => {
+      const context = `registeredRefs[${registeredRefIndex}]`;
+      if (!isRecord(registeredRef)) throw new Error(`${context} must be an object.`);
+      if (typeof registeredRef.id !== "string" || !/^[a-z][a-z0-9-]*$/u.test(registeredRef.id)) {
+        throw new Error(`${context}.id must be a lowercase kebab-case identifier.`);
+      }
+      if (registeredRefIds.has(registeredRef.id)) {
+        throw new Error(`Duplicate Turbo registered ref id: ${registeredRef.id}`);
+      }
+      registeredRefIds.add(registeredRef.id);
+      if (
+        typeof registeredRef.ref !== "string" ||
+        !/^refs\/heads\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(registeredRef.ref) ||
+        registeredRef.ref.includes("..") ||
+        registeredRef.ref.endsWith("/")
+      ) {
+        throw new Error(`${context}.ref must be a full refs/heads/... branch ref.`);
+      }
+      return { id: registeredRef.id, ref: registeredRef.ref };
+    },
+  );
 
   const ids = new Set<string>();
   const seams = value.seams.map((seam, seamIndex): TurboCustomizationSeam => {
@@ -115,7 +148,7 @@ export function decodeTurboCustomizationManifest(value: unknown): TurboCustomiza
     };
   });
 
-  return { schemaVersion: 1, product: "T3 Turbo", seams };
+  return { schemaVersion: 1, product: "T3 Turbo", registeredRefs, seams };
 }
 
 function resolveRepositoryPath(root: string, relativePath: string): string {

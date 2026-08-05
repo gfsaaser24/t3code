@@ -38,7 +38,9 @@ It checks stable content markers at each Turbo integration seam instead of hashi
 which lets ordinary upstream changes coexist with the fork while still failing when expected
 modules, assets, behavior markers, tests, or policy text disappear. Each seam is labeled
 `implemented`, `policy`, or `planned`; a planned seam verifies its reviewed design contract and
-does not claim that the feature has shipped.
+does not claim that the feature has shipped. The same manifest registers infrastructure refs whose
+state must be measured without bringing those branches into the product rebase. The
+`relay-portal` entry currently owns `refs/heads/infra/t3turbo-relay`.
 
 ## Recreating the pipeline in a fork
 
@@ -52,12 +54,16 @@ first scheduled run:
    workflow file plus the Turbo customization stack. The workflow blobs on both branches must be
    identical; the schedule is read from `main`, while inbound rebases carry the file forward on
    `turbo`.
-3. GitHub Actions enabled for the fork, with the workflow allowed to write contents at the
-   publish job and issues at the conflict-report job. The workflow-scoped `GITHUB_TOKEN` supplies
-   these permissions; do not add a personal access token as an Actions secret.
-4. The repository variable `TURBO_NIGHTLY_ENABLED=true`.
-5. Optional conflict assignment with `TURBO_NOTIFY_USER=<github-login>`.
-6. Optional OpenClaw secrets described in [Email and OpenClaw Telegram alerts](#email-and-openclaw-telegram-alerts).
+3. Every branch listed in `customizations.json`, including `infra/t3turbo-relay`. Registered
+   infrastructure branches use normal reviewed merges and are never rebased or force-pushed by
+   product ingestion.
+4. GitHub Actions enabled for the fork, with the workflow allowed to write contents at the
+   publish job and issues at the conflict and repair-report jobs. The workflow-scoped
+   `GITHUB_TOKEN` supplies these permissions; do not add a personal access token as an Actions
+   secret.
+5. The repository variable `TURBO_NIGHTLY_ENABLED=true`.
+6. Optional conflict or repair assignment with `TURBO_NOTIFY_USER=<github-login>`.
+7. Optional OpenClaw secrets described in [Email and OpenClaw Telegram alerts](#email-and-openclaw-telegram-alerts).
 
 Verify the branch and workflow wiring before enabling the schedule:
 
@@ -117,7 +123,8 @@ claiming a future boundary. The repository variable `TURBO_NIGHTLY_ENABLED` is t
 
 ## Step-by-step
 
-1. The workflow checks out our `turbo` branch with a sparse, read-only Git fetch.
+1. The workflow checks out our `turbo` branch with a sparse, read-only Git fetch, reads the
+   `relay-portal` ref from the manifest, and records that branch's commit before ingestion.
 2. The dependency-free resolver turns the latest completed 11:00 PM Eastern boundary into a UTC
    instant, including the correct daylight-saving offset.
 3. It reads public metadata from `pingdotgg/t3code`: the latest `main` commit returned by GitHub's
@@ -144,9 +151,10 @@ claiming a future boundary. The repository variable `TURBO_NIGHTLY_ENABLED` is t
     requires a valid `nightly.yml` update manifest for our fork-owned build.
 12. Only after every check succeeds does the publish job create a prerelease in
     `gfsaaser24/t3code` and advance `turbo` with `--force-with-lease`.
-13. The publish job records the cutoff, upstream/prior/resulting SHAs, validation status,
-    relay/portal preservation status, installer SHA-256, and release URL in the release notes,
-    Actions summary, and a downloadable completion-report artifact.
+13. The publish job fetches the same registered relay/portal ref again and records whether its
+    commit stayed fixed or moved independently during the run. It then records the cutoff,
+    upstream/prior/resulting SHAs, validation status, measured infrastructure state, installer
+    SHA-256, and release URL in the release notes, Actions summary, and a downloadable report.
 
 The jobs are intentionally gated in sequence:
 
@@ -206,13 +214,14 @@ starts late.
 
 The completion report is generated from validated workflow inputs rather than handwritten shell
 text. It records the exact cutoff instant, upstream main SHA, official Nightly tag/SHA, prior Turbo
-SHA, resulting Turbo SHA, manifest and focused-test results, relay/portal preservation status,
+SHA, resulting Turbo SHA, manifest and focused-test results, measured relay/portal branch state,
 installer name and SHA-256, and the fork release link. The same Markdown is used for the release
 notes, appended to the Actions job summary, and uploaded as `turbo-success-report-<tag>`.
 
-“Relay/portal preserved” means their registered source and policy seams passed and the product
-ingestion did not alter or deploy their infrastructure branch. It does not claim a Cloudflare or
-portal deployment occurred during the desktop build.
+The relay/portal line is not a handwritten claim. The workflow resolves the `relay-portal` branch
+name from `customizations.json`, records its commit before ingestion, fetches that same ref again
+before publication, and reports both SHAs. Equal SHAs mean the branch stayed fixed. Different SHAs
+mean it moved independently during the run; product ingestion still did not deploy it.
 
 ## What happens when Git reports a conflict
 
@@ -225,8 +234,26 @@ Automation never chooses "ours" or "theirs." It:
 5. opens or updates a GitHub issue; and
 6. leaves the current Turbo branch and installer release untouched.
 
-The existing T3 Turbo installation therefore remains on the last known-good release until we
-review the conflict and push a corrected commit stack.
+The issue gives the exact recovery route: branch from the unchanged `turbo` tip, repair and test
+the collided customization, and open a reviewed PR back to `turbo`. If the workflow changes, its
+blob must also land identically on `main` before retry. The existing installation remains on the
+last known-good release until that corrected stack is reviewed and pushed.
+
+## What happens when verification or building fails
+
+Manifest, focused seam, branding, icon, native-module, installer, and publish failures all stop
+before `turbo` advances. A final workflow job opens or updates a repair issue with every job result,
+the exact Actions run, and this required repair path:
+
+1. create `repair/turbo-nightly-<run-id>` from the unchanged `turbo` branch;
+2. reproduce the first failed focused check and repair its registered seam or pipeline guard;
+3. keep the manifest marker and regression test with the repair, running the manifest verifier,
+   named focused tests, and `pnpm icons:turbo:check` when branding or icons are involved;
+4. open a reviewed PR back to `turbo`, mirroring workflow changes identically onto `main`; and
+5. rerun ingestion only after the repaired stack becomes the new last known-good base.
+
+Do not delete checks to make the run green, hand-edit `.t3-turbo/upstream.json`, publish a partial
+artifact, or advance the product branch around the failed candidate.
 
 ## How the installed app receives our update
 
@@ -245,7 +272,7 @@ may show SmartScreen. No Azure signing, Clerk, relay, or official T3 credentials
 ## Permissions and safety boundaries
 
 - Source and build jobs receive read-only repository permissions.
-- Only the source-sync job receives issue-writing permission for conflict reports.
+- Only the source-sync and final repair-report jobs receive issue-writing permission.
 - Only the final publish job receives `contents: write`.
 - The publish script targets `gfsaaser24/t3code`; packaging rejects `pingdotgg/t3code`
   case-insensitively.
@@ -344,7 +371,7 @@ Routine forward updates require nothing from us. Human review is needed only whe
 
 - Git cannot rebase a Turbo customization cleanly;
 - upstream history moves backward or becomes unrelated;
-- tests or packaging fail on the rebased candidate; or
+- manifest, focused seam, icon, native build, packaging, or publication checks fail; or
 - we intentionally change the workflow and must copy the same YAML to both `main` and `turbo`.
 
 Until the issue is resolved, the current branch and release remain the last known-good version.
@@ -356,11 +383,12 @@ Until the issue is resolved, the current branch and release remain the last know
 | No sync job appears                | `TURBO_NIGHTLY_ENABLED`, Actions enabled, 11 PM Eastern schedule | A disabled variable causes the job to be skipped.                                       |
 | Green run, no installer            | `sync_source` outputs and checkpoint                             | The exact workflow run/version was already published; inspect if this was not a retry.  |
 | Conflict issue/artifact            | Issue body, `turbo-rebase-report.md`, unmerged paths             | Resolve the Turbo commit stack, then rerun; the prior release is safe.                  |
-| Build failure                      | `build_wsl_node_pty` and `build_windows` logs                    | The candidate was not published and `turbo` was not advanced.                           |
+| Build or seam failure              | Repair issue plus the first failed job log                       | The candidate was not published; follow the documented repair PR path.                  |
 | No Telegram/Slack notice           | notification job, variable/secrets names, hook reachability      | OpenClaw delivery is optional and non-blocking; inspect the gateway separately.         |
 | Run queued indefinitely            | job runner label and Actions runner availability                 | Check for an accidental private runner label; do not rewrite history to work around it. |
 | Publish refuses to advance `turbo` | branch history and `--force-with-lease` message                  | Someone changed the branch concurrently; inspect before retrying.                       |
 
-For any failed run, start with the run URL and job logs. Do not manually create a release from a
-partial artifact or copy an official binary into the fork feed. The safe recovery is to fix the
-candidate or workflow, rerun it, and let the publish job atomically create the fork-owned release.
+For any failed run, start with the generated repair issue and its run URL. Do not manually create a
+release from a partial artifact or copy an official binary into the fork feed. The safe recovery is
+the reviewed repair branch and PR described above, followed by a clean rerun that lets the publish
+job atomically create the fork-owned release.

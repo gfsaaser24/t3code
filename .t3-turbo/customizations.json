@@ -1,6 +1,12 @@
 {
   "schemaVersion": 1,
   "product": "T3 Turbo",
+  "registeredRefs": [
+    {
+      "id": "relay-portal",
+      "ref": "refs/heads/infra/t3turbo-relay"
+    }
+  ],
   "seams": [
     {
       "id": "product-identity-and-updater",
@@ -47,6 +53,8 @@
             "windowsIconIco: \"assets/turbo/t3turbo-windows.ico\"",
             "desktopIconIcns: \"assets/turbo/t3turbo.icns\"",
             "webFaviconIco: \"assets/turbo/t3turbo-web-favicon.ico\"",
+            "androidMonochromeIconPng: \"apps/mobile/assets/t3turbo-android-monochrome.png\"",
+            "androidNotificationIconPng: \"apps/mobile/assets/t3turbo-android-notification.png\"",
             "widgetIconPng: \"apps/mobile/assets/widget/T3Mark.png\""
           ]
         },
@@ -58,7 +66,28 @@
         { "path": "assets/turbo/t3turbo.icns", "markers": [] },
         { "path": "assets/turbo/t3turbo-ios-1024.png", "markers": [] },
         { "path": "assets/turbo/t3turbo-web-favicon.ico", "markers": [] },
+        { "path": "apps/mobile/assets/t3turbo-android-monochrome.png", "markers": [] },
+        { "path": "apps/mobile/assets/t3turbo-android-notification.png", "markers": [] },
         { "path": "apps/mobile/assets/widget/T3Mark.png", "markers": [] },
+        {
+          "path": "apps/mobile/app.config.ts",
+          "markers": [
+            "TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng",
+            "TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng"
+          ]
+        },
+        {
+          "path": "apps/mobile/src/components/BrandMark.tsx",
+          "markers": ["assets/turbo/t3turbo-ios-1024.png", "MOBILE_PRODUCT_NAME"]
+        },
+        {
+          "path": "apps/marketing/src/layouts/Layout.astro",
+          "markers": ["T3 Turbo", "Based on T3 Code by T3 Tools Inc"]
+        },
+        {
+          "path": "scripts/turbo-product-branding.test.ts",
+          "markers": ["keeps mobile and marketing product copy on T3 Turbo"]
+        },
         {
           "path": "scripts/lib/turbo-brand-assets.test.ts",
           "markers": ["TURBO_BRAND_ASSET_PATHS"]
@@ -118,6 +147,10 @@
           "markers": ["function WorkspaceImagePreview", "isWorkspaceImagePreviewPath(relativePath)"]
         },
         {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "markers": ["const fileSurface =", "openFile: (ref, relativePath, line) =>"]
+        },
+        {
           "path": "packages/shared/src/filePreview.test.ts",
           "markers": ["isWorkspaceImagePreviewPath"]
         },
@@ -157,7 +190,21 @@
         },
         {
           "path": "apps/web/src/components/ChatMarkdown.tsx",
-          "markers": ["resolveMarkdownFileLinkGesture", "open-file-with-system-default"]
+          "markers": [
+            "resolveMarkdownFileLinkGesture",
+            "open-file-with-system-default",
+            "useAtomCommand(shellEnvironment.openPath",
+            "usePreparedConnection(threadRef?.environmentId ?? null)",
+            "environmentId: fileEnvironmentId"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/shellCommands.ts",
+          "markers": ["createEnvironmentRpcCommand", "tag: WS_METHODS.shellOpenPath"]
+        },
+        {
+          "path": "apps/web/src/state/shell.ts",
+          "markers": ["createShellEnvironmentAtoms", "connectionAtomRuntime"]
         },
         {
           "path": "packages/contracts/src/rpc.ts",
@@ -219,6 +266,42 @@
           "markers": ["prepareImportWorkspace", "cutoverImport", "restoreImportBackup"]
         },
         {
+          "path": "apps/server/src/cli/officialImport.ts",
+          "markers": [
+            "export const officialImportCommand",
+            "prepareOfficialImport",
+            "applyPreparedOfficialImport"
+          ]
+        },
+        {
+          "path": "apps/server/src/bin.ts",
+          "markers": ["import { officialImportCommand }", "officialImportCommand,"]
+        },
+        {
+          "path": "packages/contracts/src/ipc.ts",
+          "markers": [
+            "DesktopOfficialT3ImportInputSchema",
+            "DesktopOfficialT3ImportResultSchema",
+            "discoverOfficialT3Import?:",
+            "runOfficialT3Import?:"
+          ]
+        },
+        {
+          "path": "apps/desktop/src/ipc/channels.ts",
+          "markers": ["DISCOVER_OFFICIAL_T3_IMPORT_CHANNEL", "RUN_OFFICIAL_T3_IMPORT_CHANNEL"]
+        },
+        {
+          "path": "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
+          "markers": [
+            "yield* ipc.handle(discoverOfficialT3Import)",
+            "yield* ipc.handle(runOfficialT3Import)"
+          ]
+        },
+        {
+          "path": "apps/desktop/src/preload.ts",
+          "markers": ["discoverOfficialT3Import: () =>", "runOfficialT3Import: (input) =>"]
+        },
+        {
           "path": "apps/server/src/turbo/officialImport/plan.test.ts",
           "markers": ["official import clone identity graph", "validateOfficialImportPlan"]
         },
@@ -231,6 +314,8 @@
           "markers": [
             "const executeImport = Effect.fn",
             "export const runOfficialT3Import",
+            "yield* primary.stop();",
+            "snapshot.desiredRunning ? primary.start : Effect.void",
             "Official T3 Code still has an active chat, turn, or approval"
           ]
         },
@@ -286,6 +371,36 @@
             "Open new chat to the left",
             "Close this chat pane"
           ]
+        },
+        {
+          "path": "apps/web/src/routes/_chat.tsx",
+          "markers": [
+            "<ChatPaneActionsProvider routeTarget={routeTarget}>",
+            "<ChatPaneWorkspace fallback={<Outlet />} />"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "markers": [
+            "isChatPaneFocused(paneId, focusedPaneId)",
+            "selectPaneTerminalMountKeys({",
+            "shouldUseChatPaneRightPanelSheet(chatPaneCount)",
+            "<PersistentThreadTerminalPanel",
+            "<PersistentThreadTerminalDrawer",
+            "<RightPanelTabs"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "markers": ["<ChatPaneControl />"]
+        },
+        {
+          "path": "apps/web/src/terminalUiStateStore.ts",
+          "markers": ["scopedThreadKey(threadRef)", "parseScopedThreadKey"]
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "markers": ["scopedThreadKey(ref)", "byThreadKey"]
         },
         {
           "path": "apps/web/src/components/Sidebar.tsx",
@@ -375,6 +490,11 @@
             "-f until=\"$CUTOFF_INSTANT\"",
             "Rebase in an isolated worktree",
             "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
+            "scripts/turbo-product-branding.test.ts",
+            "Record registered relay and portal branch state",
+            "Measure registered relay and portal branch state",
+            "report_repair:",
+            "Record the reviewed repair and PR path",
             "Create nightly completion report",
             "T3CODE_DESKTOP_UPDATE_REPOSITORY",
             "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",

@@ -71,6 +71,18 @@ async function renderTurboIcons(sourcePath: string): Promise<Map<string, Buffer>
       .webp({ quality: 95, alphaQuality: 100, smartSubsample: true })
       .toBuffer();
 
+  const monochromeTurboGlyphAt = (size: number) => {
+    const blade = '<path d="M50 13c12 0 22 4 30 12-17-1-26 6-29 22-6-9-7-20-1-34Z"/>';
+    const blades = Array.from(
+      { length: 8 },
+      (_, index) => `<g transform="rotate(${index * 45} 50 50)">${blade}</g>`,
+    ).join("");
+    const svg = Buffer.from(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 100 100"><g fill="#fff">${blades}<circle cx="50" cy="50" r="9"/></g><circle cx="50" cy="50" r="40" fill="none" stroke="#fff" stroke-width="6"/></svg>`,
+    );
+    return sharp(svg).png({ compressionLevel: 9, effort: 10 }).toBuffer();
+  };
+
   const icoRenditions = await Promise.all(
     WINDOWS_ICON_SIZES.map(async (size) => ({ size, contents: await pngAt(size) })),
   );
@@ -84,6 +96,8 @@ async function renderTurboIcons(sourcePath: string): Promise<Map<string, Buffer>
   const appleTouch = await pngAt(180);
   const desktopPng = await pngAt(512);
   const widgetPng = await pngAt(256);
+  const androidMonochrome = await monochromeTurboGlyphAt(432);
+  const androidNotification = await monochromeTurboGlyphAt(96);
   const ico = encodePngIco(icoRenditions);
   const icns = encodePngIcns(icnsRenditions);
 
@@ -97,6 +111,8 @@ async function renderTurboIcons(sourcePath: string): Promise<Map<string, Buffer>
     [TURBO_BRAND_ASSET_PATHS.webFavicon16Png, favicon16],
     [TURBO_BRAND_ASSET_PATHS.webFavicon32Png, favicon32],
     [TURBO_BRAND_ASSET_PATHS.webAppleTouchIconPng, appleTouch],
+    [TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng, androidMonochrome],
+    [TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng, androidNotification],
     [TURBO_BRAND_ASSET_PATHS.widgetIconPng, widgetPng],
 
     ["apps/web/public/favicon.ico", ico],
