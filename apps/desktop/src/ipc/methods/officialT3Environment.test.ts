@@ -24,20 +24,36 @@ const idleActivity = {
   pendingApprovals: 0,
 };
 
-const planStdout = JSON.stringify({
+// Mirrors the real importer document: the desktop schema must tolerate the
+// extra fields the CLI writes alongside the summary it needs.
+const encodedPlanDocument = JSON.stringify({
+  version: 1,
+  kind: "t3-turbo-official-import-plan",
+  createdAt: "2026-08-05T04:09:19.821Z",
   workspace: {
     directory: `${targetBaseDir}/userdata/.t3-turbo-import-test`,
+    sourceDatabasePath: "C:/Users/test/.t3/userdata/state.sqlite",
+    targetDatabasePath: `${targetBaseDir}/userdata/state.sqlite`,
+    sourceSnapshotPath: `${targetBaseDir}/userdata/.t3-turbo-import-test/official-source.sqlite`,
+    targetStagingPath: `${targetBaseDir}/userdata/.t3-turbo-import-test/turbo-target-staging.sqlite`,
+    sourceFingerprint: "src-fingerprint",
+    targetFingerprint: "tgt-fingerprint",
     sourceActivity: idleActivity,
     targetActivity: idleActivity,
   },
-  plan: { threads: [] },
+  plan: { projects: [], threads: [], idMap: {} },
 });
 
-const applyStdout = JSON.stringify({
+const encodedApplyResult = JSON.stringify({
   importedEventCount: 3,
   copiedAttachmentCount: 1,
   receiptPath: `${targetBaseDir}/userdata/.t3-turbo-import-test/receipt.json`,
 });
+
+// The importer's stdout is log noise (e.g. migration notices), never the
+// typed document — that hand-off happens through the --out files.
+const importerLogNoise =
+  "[00:09:14.139] INFO (#5): Migrations ran successfully { migrations: [ '36_ProjectionThreadsPinned' ] }";
 
 const makeEnvironment = () =>
   DesktopEnvironment.DesktopEnvironment.of({
@@ -115,6 +131,10 @@ const testLayer = (
       exists: () => Effect.succeed(true),
       makeDirectory: () => Effect.void,
       remove: () => Effect.void,
+      readFileString: (path) =>
+        Effect.succeed(
+          String(path).endsWith(".result.json") ? encodedApplyResult : encodedPlanDocument,
+        ),
     }),
     Path.layer,
     spawnerLayer(events, resultFor),
@@ -139,11 +159,7 @@ describe("runOfficialT3Import", () => {
       ]);
     }).pipe(
       Effect.provide(
-        testLayer(events, (mode) =>
-          mode === "plan"
-            ? { exitCode: 0, stdout: planStdout, stderr: "" }
-            : { exitCode: 0, stdout: applyStdout, stderr: "" },
-        ),
+        testLayer(events, () => ({ exitCode: 0, stdout: importerLogNoise, stderr: "" })),
       ),
     );
   });

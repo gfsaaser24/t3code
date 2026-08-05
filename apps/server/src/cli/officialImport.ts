@@ -194,12 +194,13 @@ const planCommand = Command.make("plan", {
 
 const applyCommand = Command.make("apply", {
   plan: Flag.string("plan").pipe(Flag.withDescription("Reviewed plan JSON created by `plan`.")),
+  out: outputFlag,
   json: jsonFlag,
 }).pipe(
   Command.withDescription(
     "Apply a fresh reviewed plan to staging and atomically install it into T3 Turbo.",
   ),
-  Command.withHandler(({ plan, json }) =>
+  Command.withHandler(({ plan, out, json }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const encodedPlan = yield* fs.readFileString(plan);
@@ -210,6 +211,9 @@ const applyCommand = Command.make("apply", {
       yield* persistLastPlan(targetBaseDir, prepared);
       const result = yield* applyPreparedOfficialImport(prepared);
       const encodedResult = yield* encodeApplyResult(result);
+      // Stdout carries log lines too (e.g. migration notices), so typed
+      // consumers read the result from --out instead of the stream.
+      if (Option.isSome(out)) yield* writeStringAtomic(out.value, encodedResult);
       yield* Console.log(
         json
           ? encodedResult

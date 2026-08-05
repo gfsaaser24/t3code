@@ -212,7 +212,11 @@ const prepareImportPlan = Effect.fn("desktop.officialT3Import.preparePlan")(func
       result: blockedResult(availability, "import-failed", commandFailureMessage(planRun)),
     } as const;
   }
-  const decodedPlan = yield* decodePreparedImport(planRun.stdout.trim()).pipe(Effect.result);
+  // The importer's stdout carries log lines too (e.g. migration notices), so
+  // the typed plan is handed over through the --out file, never the stream.
+  const decodedPlan = yield* fs
+    .readFileString(planPath)
+    .pipe(Effect.flatMap(decodePreparedImport), Effect.result);
   if (decodedPlan._tag === "Failure") {
     return {
       _tag: "Blocked",
@@ -297,6 +301,8 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
     return blocking;
   }
 
+  const fs = yield* FileSystem.FileSystem;
+  const resultPath = `${outcome.planPath}.result.json`;
   return yield* Effect.gen(function* () {
     const applyRun = yield* runImporterCli([
       "import",
@@ -304,6 +310,8 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
       "apply",
       "--plan",
       outcome.planPath,
+      "--out",
+      resultPath,
       "--json",
     ]);
     if (applyRun.exitCode !== 0) {
@@ -315,7 +323,11 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
       );
       return blockedResult(availability, "import-failed", commandFailureMessage(applyRun));
     }
-    const decodedResult = yield* decodeApplyResult(applyRun.stdout.trim()).pipe(Effect.result);
+    // Same stdout-vs-logs hazard as the plan stage: read the typed result
+    // from the --out file the importer wrote atomically.
+    const decodedResult = yield* fs
+      .readFileString(resultPath)
+      .pipe(Effect.flatMap(decodeApplyResult), Effect.result);
     if (decodedResult._tag === "Failure") {
       yield* removePreparedWorkspace(availability, outcome.prepared.workspace.directory);
       return blockedResult(
@@ -332,6 +344,7 @@ const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
     );
     return { status: "imported", ...decodedResult.success } as const;
   }).pipe(
+    Effect.ensuring(fs.remove(resultPath, { force: true }).pipe(Effect.ignore)),
     Effect.onError(() =>
       cleanupPreparedPlan(availability, outcome.prepared, outcome.planPath, outcome.choicesPath),
     ),
