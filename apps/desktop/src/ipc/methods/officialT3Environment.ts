@@ -273,25 +273,6 @@ const cleanupPreparedPlan = Effect.fn("desktop.officialT3Import.cleanupPreparedP
   if (choicesPath !== null) yield* fs.remove(choicesPath, { force: true }).pipe(Effect.ignore);
 });
 
-/** Read-only target/source preflight performed before the desktop stops its backend. */
-const preflightImport = Effect.fn("desktop.officialT3Import.preflight")(function* (
-  availability: DesktopOfficialT3ImportAvailability,
-  collisionChoices: Readonly<Record<string, "skip" | "replace" | "clone">> | undefined,
-): Effect.fn.Return<
-  DesktopOfficialT3ImportResult | null,
-  PlatformError.PlatformError | Schema.SchemaError,
-  | DesktopEnvironment.DesktopEnvironment
-  | FileSystem.FileSystem
-  | Path.Path
-  | ChildProcessSpawner.ChildProcessSpawner
-> {
-  const outcome = yield* prepareImportPlan(availability, collisionChoices);
-  if (outcome._tag === "Blocked") return outcome.result;
-  const result = classifyPreparedPlan(availability, outcome.prepared);
-  yield* cleanupPreparedPlan(availability, outcome.prepared, outcome.planPath, outcome.choicesPath);
-  return result;
-});
-
 const executeImport = Effect.fn("desktop.officialT3Import.execute")(function* (
   availability: DesktopOfficialT3ImportAvailability,
   collisionChoices: Readonly<Record<string, "skip" | "replace" | "clone">> | undefined,
@@ -415,9 +396,11 @@ export const runOfficialT3Import = DesktopIpc.makeIpcMethod({
     }
 
     return yield* Effect.gen(function* () {
-      const preflight = yield* preflightImport(availability, input.collisionChoices);
-      if (preflight !== null) return preflight;
-
+      // Every importer CLI invocation — including the planning pass —
+      // acquires the same official-import lock the running backend holds
+      // for its entire lifetime (src/cli/server.ts wraps runServer in
+      // withOfficialImportLock), so the backend must be stopped before
+      // the first importer call, not just before apply.
       const pool = yield* DesktopBackendPool.DesktopBackendPool;
       const primary = yield* pool.primary;
       const snapshot = yield* primary.snapshot;
