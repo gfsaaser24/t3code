@@ -1,6 +1,6 @@
 import type { DesktopUpdateChannel } from "@t3tools/contracts";
 
-const NIGHTLY_VERSION_PATTERN = /-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?$/;
+const NIGHTLY_VERSION_PATTERN = /-nightly\.\d{8}\.\d+(?:\.turbo\.(?:\d{8}\.\d+|\d+))?$/u;
 
 export function isNightlyDesktopVersion(version: string): boolean {
   return NIGHTLY_VERSION_PATTERN.test(version);

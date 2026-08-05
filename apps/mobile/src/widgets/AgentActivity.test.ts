@@ -141,7 +141,7 @@ describe("AgentActivity widget layout", () => {
     expect(banner).toContain("1 needs attention");
   });
 
-  it("uses the attention tint for the compact presentations when a row needs input", () => {
+  it("keeps the branded compact logo original while tinting attention signals", () => {
     const layout = AgentActivity(
       {
         ...props,
@@ -153,7 +153,9 @@ describe("AgentActivity widget layout", () => {
       },
       environment as never,
     );
-    expect(JSON.stringify(layout.compactLeading)).toContain("#a5b4fc"); // indigo-300
+    expect(JSON.stringify(layout.compactLeading)).toContain('"assetName":"T3Mark"');
+    expect(JSON.stringify(layout.compactLeading)).not.toContain("#a5b4fc"); // indigo-300
+    expect(JSON.stringify(layout.compactTrailing)).toContain("#a5b4fc");
     expect(JSON.stringify(layout.compactTrailing)).toContain("Input");
     expect(JSON.stringify(layout.minimal)).toContain("#a5b4fc");
   });

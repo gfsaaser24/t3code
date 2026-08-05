@@ -21,6 +21,7 @@ import {
   SERVICE_LAUNCHER_PROTOCOL,
   SERVICE_STATE_FILE,
   parseServiceState,
+  serviceStateHasPendingUpdate,
   type ServiceState,
 } from "./serviceProtocol.ts";
 
@@ -53,7 +54,7 @@ export function renderBootServiceUnit(plan: BootServicePlan): string {
   // The user manager has no reliable network-online target; server networking retries itself.
   return [
     "[Unit]",
-    "Description=T3 Code server",
+    "Description=T3 Turbo server",
     "StartLimitIntervalSec=300",
     "StartLimitBurst=5",
     "",
@@ -106,14 +107,24 @@ export class BootServiceInstallError extends Schema.TaggedErrorClass<BootService
   { cause: Schema.Defect() },
 ) {
   override get message(): string {
-    return "Could not set up the T3 Code background service.";
+    return "Could not set up the T3 Turbo background service.";
+  }
+}
+
+export class BootServiceUpdatePendingError extends Schema.TaggedErrorClass<BootServiceUpdatePendingError>()(
+  "BootServiceUpdatePendingError",
+  {},
+) {
+  override get message(): string {
+    return "A remote server update is still pending. Wait for it to finish, then retry.";
   }
 }
 
 export type BootServiceError =
   | BootServiceUnsupportedError
   | BootServiceCommandError
-  | BootServiceInstallError;
+  | BootServiceInstallError
+  | BootServiceUpdatePendingError;
 
 export interface BootServiceStatus {
   readonly supported: boolean;
@@ -288,6 +299,15 @@ export const make = Effect.fn("cloud.boot_service.make")(function* (input: {
     }
 
     yield* Effect.gen(function* () {
+      if (installed) {
+        const previousStateText = yield* fs.readFileString(statePath).pipe(Effect.option);
+        if (
+          Option.isSome(previousStateText) &&
+          serviceStateHasPendingUpdate(previousStateText.value)
+        ) {
+          return yield* new BootServiceUpdatePendingError();
+        }
+      }
       yield* fs
         .makeDirectory(unitDir, { recursive: true })
         .pipe(Effect.mapError((cause) => new BootServiceInstallError({ cause })));

@@ -5,46 +5,79 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Drizzle from "alchemy/Drizzle";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Planetscale from "alchemy/Planetscale";
 
 import * as RelayDb from "./src/db.ts";
-import { RelayObservability } from "./src/observability.ts";
+import { AxiomConfiguration, RelayObservability } from "./src/observability.ts";
 import { ManagedEndpointZone, RelayApiZone } from "./src/zone.ts";
 import ApiLive, { Api } from "./src/worker.ts";
+
+const emptyProviderCollection = {
+  kind: "ProviderCollection" as const,
+  get: () => undefined,
+  providers: {},
+};
+
+const axiomProviders = Layer.unwrap(
+  AxiomConfiguration.pipe(
+    Effect.map(
+      Option.match({
+        onNone: () => Layer.succeed(Axiom.Providers, emptyProviderCollection),
+        onSome: () => Axiom.providers(),
+      }),
+    ),
+  ),
+).pipe(Layer.orDie);
+
+const planetscaleProviders = Layer.unwrap(
+  RelayDb.ExternalDatabaseConfiguration.pipe(
+    Effect.map(
+      Option.match({
+        onNone: () => Planetscale.providers(),
+        onSome: () => Layer.succeed(Planetscale.Providers, emptyProviderCollection),
+      }),
+    ),
+  ),
+).pipe(Layer.orDie);
 
 export default Alchemy.Stack(
   "T3CodeRelay",
   {
     providers: Layer.mergeAll(
-      Axiom.providers(),
+      axiomProviders,
       Cloudflare.providers(),
       Drizzle.providers(),
-      Planetscale.providers(),
+      planetscaleProviders,
     ),
     state: Cloudflare.state(),
   },
   Effect.gen(function* () {
-    const db = yield* RelayDb.PlanetscaleDatabase;
-    const hyperdrive = yield* RelayDb.RelayHyperdrive;
+    const database = yield* RelayDb.RelayDatabase;
+    const hyperdrive = database.hyperdrive;
     const managedEndpointZone = yield* ManagedEndpointZone.pipe(Effect.orDie);
     const relayApiZone = yield* RelayApiZone.pipe(Effect.orDie);
     const observability = yield* RelayObservability;
     const api = yield* Api;
 
     return {
-      databaseName: db.database.name,
-      databaseBranchName: db.branch?.name ?? "main",
+      databaseName: database.databaseName,
+      databaseBranchName: database.databaseBranchName,
       hyperdriveName: hyperdrive.name,
       workerName: api.workerName,
       url: api.url,
       relayApiZoneId: relayApiZone.zoneId,
       managedEndpointZoneId: managedEndpointZone.zoneId,
-      mobileTracingUrl: observability.traces.otelTracesEndpoint,
-      mobileTracingDataset: observability.traces.name,
-      mobileTracingToken: observability.mobileIngestToken.token,
-      clientTracingUrl: observability.traces.otelTracesEndpoint,
-      clientTracingDataset: observability.traces.name,
-      clientTracingToken: observability.clientIngestToken.token,
+      ...(observability.enabled
+        ? {
+            mobileTracingUrl: observability.traces.otelTracesEndpoint,
+            mobileTracingDataset: observability.traces.name,
+            mobileTracingToken: observability.mobileIngestToken.token,
+            clientTracingUrl: observability.traces.otelTracesEndpoint,
+            clientTracingDataset: observability.traces.name,
+            clientTracingToken: observability.clientIngestToken.token,
+          }
+        : {}),
     };
   }).pipe(Effect.provide(ApiLive)),
 );

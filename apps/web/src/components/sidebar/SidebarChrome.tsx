@@ -3,6 +3,9 @@ import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { APP_BASE_NAME } from "../../branding";
+import { useActiveEnvironmentId } from "../../state/entities";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { DesktopEnvironmentSwitcher } from "../desktop/DesktopEnvironmentSwitcher";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import {
@@ -115,6 +118,9 @@ function T3Wordmark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const switcherEnvironmentId = activeEnvironmentId ?? primaryEnvironmentId;
   const handleSettingsClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -126,6 +132,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
+      {switcherEnvironmentId ? (
+        <div className="px-1 pb-0.5">
+          <DesktopEnvironmentSwitcher activeEnvironmentId={switcherEnvironmentId} />
+        </div>
+      ) : null}
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleSettingsClick}>

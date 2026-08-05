@@ -32,7 +32,7 @@ export const hostFlag = Flag.string("host").pipe(
 );
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
-    "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+    "Explicit T3 Turbo data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
   ),
   Flag.optional,
 );
@@ -466,7 +466,7 @@ export const DurationFromString = Schema.String.pipe(
           return Effect.succeed(duration);
         }
         return Effect.fail(
-          new SchemaIssue.InvalidValue(Option.some(value), {
+          new SchemaIssue.InvalidValue({
             message: "Invalid duration. Use values like 5m, 1h, 30d, or 15 minutes.",
           }),
         );

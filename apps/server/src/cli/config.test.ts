@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import { assert, expect, it } from "@effect/vitest";
@@ -56,8 +58,22 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
     const encoded = yield* encodeDesktopBootstrap(payload);
     yield* fs.writeFileString(filePath, `${encoded}\n`);
-    const { fd } = yield* fs.open(filePath, { flag: "r" });
-    return fd;
+    return yield* Effect.acquireRelease(
+      Effect.sync(() => NodeFS.openSync(filePath, "r")),
+      (fd) =>
+        Effect.sync(() => {
+          try {
+            NodeFS.closeSync(fd);
+          } catch (error) {
+            // Windows reads the inherited fd directly, so readBootstrapEnvelope's
+            // auto-closing stream already owns it. POSIX reads a duplicated fd,
+            // leaving this original descriptor for the test scope to release.
+            if ((error as NodeJS.ErrnoException).code !== "EBADF") {
+              throw error;
+            }
+          }
+        }),
+    );
   });
 
   it.effect("falls back to effect/config values when flags are omitted", () =>
@@ -277,8 +293,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const { join } = yield* Path.Path;
-      const baseDir = "/tmp/t3-bootstrap-home";
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-bootstrap-home-",
+      });
       const fd = yield* openBootstrapFd(
         makeDesktopBootstrap({
           port: 4888,

@@ -1,19 +1,16 @@
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { DesktopOfficialT3Environment, EnvironmentId } from "@t3tools/contracts";
+import type {
+  DesktopOfficialT3ImportAvailability,
+  DesktopOfficialT3ImportCollisionChoice,
+  DesktopOfficialT3ImportResult,
+  EnvironmentId,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { CloudIcon, LinkIcon, MonitorIcon } from "lucide-react";
+import { CloudIcon, DatabaseIcon, MonitorIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
-import {
-  connectPairing as connectPairingAtom,
-  updateBearerConnection as updateBearerConnectionAtom,
-} from "../../connection/onboarding";
+import { useUpdateClientSettings } from "../../hooks/useSettings";
 import { setActiveEnvironmentId } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -24,7 +21,6 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
-import { Input } from "../ui/input";
 import {
   Select,
   SelectGroup,
@@ -36,16 +32,14 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Spinner } from "../ui/spinner";
+import { useChatPaneActionsOptional } from "../../turbo/chatPanes/ChatPaneActionsContext";
 import {
+  applyDesktopEnvironmentSwitch,
   buildDesktopEnvironmentOptions,
-  CONNECT_OFFICIAL_T3_VALUE,
-  resolveOfficialT3PairingInput,
-  shouldRefreshOfficialT3Connection,
+  IMPORT_OFFICIAL_T3_VALUE,
 } from "./DesktopEnvironmentSwitcher.logic";
 
-const DISCOVERY_REFRESH_MS = 5_000;
-
-function EnvironmentIcon({ kind }: { readonly kind: "turbo" | "official" | "other" }) {
+function EnvironmentIcon({ kind }: { readonly kind: "turbo" | "other" }) {
   return kind === "turbo" ? (
     <MonitorIcon className="size-3 shrink-0" />
   ) : (
@@ -57,97 +51,87 @@ interface DesktopEnvironmentSwitcherProps {
   readonly activeEnvironmentId: EnvironmentId;
 }
 
+const collisionLabel = (choice: DesktopOfficialT3ImportCollisionChoice): string => {
+  switch (choice) {
+    case "clone":
+      return "Keep both (new chat ID)";
+    case "replace":
+      return "Replace Turbo chat";
+    case "skip":
+      return "Skip official chat";
+  }
+};
+
 export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitcher({
   activeEnvironmentId,
 }: DesktopEnvironmentSwitcherProps) {
   const bridge = window.desktopBridge;
-  const discoverOfficial = bridge?.discoverOfficialT3Environment;
+  const discoverImport = bridge?.discoverOfficialT3Import;
+  const runImport = bridge?.runOfficialT3Import;
+  // The switcher renders both inside the chat routes and above them (app
+  // sidebar), so the pane actions context may be absent. The fallback mirrors
+  // resetToHome: clear the persisted pane layout and land on home.
+  const paneActions = useChatPaneActionsOptional();
   const navigate = useNavigate();
-  const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const connectPairing = useAtomCommand(connectPairingAtom, { reportFailure: false });
-  const updateBearerConnection = useAtomCommand(updateBearerConnectionAtom, {
-    reportFailure: false,
-  });
-  const [official, setOfficial] = useState<DesktopOfficialT3Environment | null>(null);
-  const [pairingOpen, setPairingOpen] = useState(false);
-  const [pairingCode, setPairingCode] = useState("");
-  const [pairingError, setPairingError] = useState<string | null>(null);
-  const [pairing, setPairing] = useState(false);
-
-  useEffect(() => {
-    if (!discoverOfficial) return;
-    let cancelled = false;
-
-    const refresh = () => {
-      void discoverOfficial()
-        .then((result) => {
-          if (!cancelled) setOfficial(result);
-        })
-        .catch(() => {
-          if (!cancelled) setOfficial(null);
-        });
-    };
-
-    refresh();
-    const interval = window.setInterval(refresh, DISCOVERY_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [discoverOfficial]);
-
-  const officialEnvironmentId = official?.descriptor.environmentId ?? null;
-  const options = useMemo(
-    () =>
-      buildDesktopEnvironmentOptions({
-        environments,
-        primaryEnvironmentId,
-        officialEnvironmentId,
-      }),
-    [environments, officialEnvironmentId, primaryEnvironmentId],
-  );
-  const officialIsConnected =
-    officialEnvironmentId !== null &&
-    environments.some((environment) => environment.environmentId === officialEnvironmentId);
-  const officialEnvironment =
-    officialEnvironmentId === null
-      ? null
-      : (environments.find((environment) => environment.environmentId === officialEnvironmentId) ??
-        null);
-  const selected = options.find((option) => option.environmentId === activeEnvironmentId) ?? null;
-
-  useEffect(() => {
-    if (
-      !official ||
-      !officialEnvironment ||
-      officialEnvironment.entry.target._tag !== "BearerConnectionTarget" ||
-      !shouldRefreshOfficialT3Connection(officialEnvironment.displayUrl, official.httpBaseUrl)
-    ) {
+  const updateClientSettings = useUpdateClientSettings();
+  const resetToHome = useCallback(() => {
+    if (paneActions) {
+      paneActions.resetToHome();
       return;
     }
+    updateClientSettings({ turboChatPaneLayout: null });
+    void navigate({ to: "/", replace: true });
+  }, [navigate, paneActions, updateClientSettings]);
+  const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const [availability, setAvailability] = useState<DesktopOfficialT3ImportAvailability | null>(
+    null,
+  );
+  const [importOpen, setImportOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [result, setResult] = useState<DesktopOfficialT3ImportResult | null>(null);
+  const [collisionChoices, setCollisionChoices] = useState<
+    Record<string, DesktopOfficialT3ImportCollisionChoice>
+  >({});
 
-    void updateBearerConnection({
-      environmentId: official.descriptor.environmentId,
-      label: officialEnvironment.label,
-      httpBaseUrl: official.httpBaseUrl,
-    });
-  }, [official, officialEnvironment, updateBearerConnection]);
+  useEffect(() => {
+    if (!discoverImport) return;
+    let cancelled = false;
+    void discoverImport()
+      .then((discovered) => {
+        if (!cancelled) setAvailability(discovered);
+      })
+      .catch(() => {
+        if (!cancelled) setAvailability(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [discoverImport]);
+
+  const options = useMemo(
+    () => buildDesktopEnvironmentOptions({ environments, primaryEnvironmentId }),
+    [environments, primaryEnvironmentId],
+  );
+  const selected = options.find((option) => option.environmentId === activeEnvironmentId) ?? null;
 
   const switchEnvironment = useCallback(
     (environmentId: EnvironmentId) => {
-      setActiveEnvironmentId(environmentId);
-      void navigate({ to: "/" });
+      applyDesktopEnvironmentSwitch(environmentId, {
+        activate: setActiveEnvironmentId,
+        resetChatWorkspace: resetToHome,
+      });
     },
-    [navigate],
+    [resetToHome],
   );
 
   const handleValueChange = useCallback(
     (value: string | null) => {
       if (value === null) return;
-      if (value === CONNECT_OFFICIAL_T3_VALUE) {
-        setPairingError(null);
-        setPairingOpen(true);
+      if (value === IMPORT_OFFICIAL_T3_VALUE) {
+        setResult(null);
+        setCollisionChoices({});
+        setImportOpen(true);
         return;
       }
       switchEnvironment(value as EnvironmentId);
@@ -155,31 +139,35 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
     [switchEnvironment],
   );
 
-  const handlePair = useCallback(async () => {
-    const code = pairingCode.trim();
-    if (!official || !code) {
-      setPairingError("Enter the pairing link or one-time code from T3 Code.");
-      return;
-    }
-
-    setPairing(true);
-    setPairingError(null);
-    const result = await connectPairing(resolveOfficialT3PairingInput(code, official.httpBaseUrl));
-    setPairing(false);
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        setPairingError(error instanceof Error ? error.message : "Could not connect to T3 Code.");
+  const handleImport = useCallback(async () => {
+    if (!runImport) return;
+    setImporting(true);
+    try {
+      const next = await runImport({
+        ...(result?.status === "needs-collision-choices" ? { collisionChoices } : {}),
+      });
+      setResult(next);
+      if (next.status === "needs-collision-choices") {
+        setCollisionChoices((current) =>
+          Object.fromEntries(
+            next.threadIds.map((threadId) => [threadId, current[threadId] ?? "clone"]),
+          ),
+        );
       }
-      return;
+    } catch (cause) {
+      setResult({
+        status: "blocked",
+        reason: "import-failed",
+        message: cause instanceof Error ? cause.message : "The direct importer could not run.",
+        runCommand: availability?.runCommand ?? "t3 import official run",
+        planCommand: availability?.planCommand ?? "t3 import official plan",
+      });
+    } finally {
+      setImporting(false);
     }
+  }, [availability, collisionChoices, result, runImport]);
 
-    setPairingCode("");
-    setPairingOpen(false);
-    switchEnvironment(result.value);
-  }, [connectPairing, official, pairingCode, switchEnvironment]);
-
-  if (!bridge || !discoverOfficial || selected === null) return null;
+  if (!bridge || selected === null) return null;
 
   return (
     <>
@@ -210,13 +198,13 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
               </SelectItem>
             ))}
           </SelectGroup>
-          {official ? (
+          {availability && runImport ? (
             <>
               <SelectSeparator />
-              <SelectItem value={CONNECT_OFFICIAL_T3_VALUE}>
+              <SelectItem value={IMPORT_OFFICIAL_T3_VALUE}>
                 <span className="inline-flex items-center gap-1.5">
-                  <LinkIcon className="size-3" />
-                  {officialIsConnected ? "Reconnect T3 Code…" : "Connect T3 Code…"}
+                  <DatabaseIcon className="size-3" />
+                  Import official T3 Code…
                 </span>
               </SelectItem>
             </>
@@ -225,54 +213,107 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
       </Select>
 
       <Dialog
-        open={pairingOpen}
+        open={importOpen}
         onOpenChange={(open) => {
-          if (pairing) return;
-          setPairingOpen(open);
-          if (!open) setPairingError(null);
+          if (!importing) setImportOpen(open);
         }}
       >
         <DialogPopup>
           <DialogHeader>
-            <DialogTitle>Connect official T3 Code</DialogTitle>
+            <DialogTitle>Import official T3 Code</DialogTitle>
             <DialogDescription>
-              In T3 Code, open Settings → Connections and create a pairing link. Paste the link or
-              its one-time code here; Turbo will connect to the running server without opening its
-              database.
+              Copy official projects and chats directly into the T3 Turbo database. Turbo briefly
+              stops its local backend, verifies a fresh plan, creates a recovery backup, and starts
+              again. It never connects to or runs a second T3 instance.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel>
-            <form
-              className="space-y-3"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void handlePair();
-              }}
-            >
-              <Input
-                autoFocus
-                value={pairingCode}
-                onChange={(event) => setPairingCode(event.target.value)}
-                placeholder="Pairing link or code"
-                aria-label="Pairing link or code"
-                autoComplete="off"
-                disabled={pairing}
-              />
-              {pairingError ? (
-                <p role="alert" className="text-sm text-destructive">
-                  {pairingError}
+          <DialogPanel className="space-y-4">
+            {result?.status === "needs-collision-choices" ? (
+              <div className="space-y-3">
+                <p className="text-sm text-muted-foreground">{result.message}</p>
+                <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                  {result.threadIds.map((threadId) => {
+                    const choice = collisionChoices[threadId] ?? "clone";
+                    return (
+                      <div key={threadId} className="space-y-1 rounded-md border p-2">
+                        <code className="block truncate text-xs">{threadId}</code>
+                        <Select
+                          value={choice}
+                          onValueChange={(value) => {
+                            if (value !== "clone" && value !== "replace" && value !== "skip") {
+                              return;
+                            }
+                            setCollisionChoices((current) => ({
+                              ...current,
+                              [threadId]: value,
+                            }));
+                          }}
+                          items={(["clone", "replace", "skip"] as const).map((value) => ({
+                            value,
+                            label: collisionLabel(value),
+                          }))}
+                        >
+                          <SelectTrigger size="sm" aria-label={`Collision choice for ${threadId}`}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectPopup>
+                            {(["clone", "replace", "skip"] as const).map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {collisionLabel(value)}
+                              </SelectItem>
+                            ))}
+                          </SelectPopup>
+                        </Select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : result?.status === "imported" ? (
+              <div className="space-y-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+                <p>
+                  Imported {result.importedEventCount} events and {result.copiedAttachmentCount}{" "}
+                  attachments. Turbo has restarted with the merged database.
                 </p>
-              ) : null}
-            </form>
+                <div className="text-xs text-muted-foreground">
+                  Recovery receipt
+                  <code className="mt-1 block select-all break-all rounded bg-muted p-2">
+                    {result.receiptPath}
+                  </code>
+                </div>
+              </div>
+            ) : result?.status === "blocked" ? (
+              <div className="space-y-2">
+                <p role="alert" className="text-sm text-destructive">
+                  {result.message}
+                </p>
+                <details className="text-xs text-muted-foreground">
+                  <summary>Run manually</summary>
+                  <code className="mt-2 block select-all break-all rounded bg-muted p-2">
+                    {result.runCommand}
+                  </code>
+                  <p className="mt-2">
+                    For per-chat collision review, run: <code>{result.planCommand}</code>
+                  </p>
+                </details>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Finish active chats in both apps first. If matching chat IDs have different history,
+                Turbo will pause and ask what to do with each one.
+              </p>
+            )}
           </DialogPanel>
           <DialogFooter>
-            <Button variant="ghost" disabled={pairing} onClick={() => setPairingOpen(false)}>
-              Cancel
+            <Button variant="ghost" disabled={importing} onClick={() => setImportOpen(false)}>
+              {result?.status === "imported" ? "Close" : "Cancel"}
             </Button>
-            <Button disabled={pairing || pairingCode.trim().length === 0} onClick={handlePair}>
-              {pairing ? <Spinner /> : null}
-              Connect
-            </Button>
+            {result?.status !== "imported" ? (
+              <Button disabled={importing} onClick={handleImport}>
+                {importing ? <Spinner /> : null}
+                {result?.status === "needs-collision-choices" ? "Apply choices" : "Check & import"}
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogPopup>
       </Dialog>

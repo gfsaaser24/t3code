@@ -34,6 +34,7 @@ import Animated, {
   LinearTransition,
 } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { MOBILE_PRODUCT_NAME } from "../../lib/mobileBranding";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 
@@ -526,7 +527,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       // contend with the queued-message feedback on the tap frame.
       armAgentAwarenessLiveActivityForLocalWork({
         threadTitle: props.selectedThread.title,
-        projectTitle: props.environmentLabel ?? "T3 Code",
+        projectTitle: props.environmentLabel ?? MOBILE_PRODUCT_NAME,
       });
     } finally {
       inFlightThreadIdsRef.current.delete(threadKey);

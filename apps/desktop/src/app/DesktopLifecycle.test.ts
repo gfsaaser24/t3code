@@ -20,7 +20,7 @@ describe("DesktopLifecycle", () => {
 
       const electronAppLayer = Layer.succeed(ElectronApp.ElectronApp, {
         metadata: Effect.die("unexpected metadata read"),
-        name: Effect.succeed("T3 Code"),
+        name: Effect.succeed("T3 Turbo"),
         whenReady: Effect.void,
         quit: Effect.void,
         exit: () => Effect.void,
@@ -35,6 +35,7 @@ describe("DesktopLifecycle", () => {
         setDesktopName: () => Effect.void,
         setDockIcon: () => Effect.void,
         appendCommandLineSwitch: () => Effect.void,
+        removeCommandLineSwitch: () => Effect.void,
         onBeforeQuitForUpdate: (listener) =>
           Effect.acquireRelease(
             Effect.sync(() => {

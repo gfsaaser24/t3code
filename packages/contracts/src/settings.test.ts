@@ -12,6 +12,7 @@ import {
 
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
+const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
@@ -67,6 +68,70 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
+describe("ClientSettings T3 Turbo chat panes", () => {
+  const layout = {
+    version: 1,
+    panes: [
+      {
+        id: "pane-a",
+        target: {
+          kind: "server",
+          threadRef: {
+            environmentId: "environment-a",
+            threadId: "thread-a",
+          },
+        },
+      },
+      {
+        id: "pane-b",
+        target: {
+          kind: "draft",
+          draftId: "draft-a",
+        },
+      },
+    ],
+    focusedPaneId: "pane-b",
+  } as const;
+
+  it("defaults legacy client settings to no saved pane layout", () => {
+    expect(decodeClientSettings({}).turboChatPaneLayout).toBeNull();
+  });
+
+  it("decodes and patches the versioned ordered pane references", () => {
+    const decoded = decodeClientSettings({ turboChatPaneLayout: layout });
+    expect(decoded.turboChatPaneLayout).toEqual(layout);
+    expect(encodeClientSettings(decoded).turboChatPaneLayout).toEqual(layout);
+    expect(decodeClientSettingsPatch({ turboChatPaneLayout: layout }).turboChatPaneLayout).toEqual(
+      layout,
+    );
+    expect(decodeClientSettingsPatch({ turboChatPaneLayout: null }).turboChatPaneLayout).toBeNull();
+  });
+
+  it("drops malformed or future layouts without invalidating other settings", () => {
+    expect(
+      decodeClientSettings({
+        wordWrap: false,
+        turboChatPaneLayout: { version: 1, panes: [], focusedPaneId: "pane-a" },
+      }),
+    ).toEqual(expect.objectContaining({ wordWrap: false, turboChatPaneLayout: null }));
+    expect(
+      decodeClientSettings({
+        timestampFormat: "24-hour",
+        turboChatPaneLayout: { ...layout, version: 2 },
+      }),
+    ).toEqual(expect.objectContaining({ timestampFormat: "24-hour", turboChatPaneLayout: null }));
+    expect(
+      decodeClientSettingsPatch({
+        wordWrap: false,
+        turboChatPaneLayout: {
+          ...layout,
+          panes: [{ ...layout.panes[0], id: "   " }],
+        },
+      }),
+    ).toEqual({ wordWrap: false, turboChatPaneLayout: null });
+  });
+});
+
 describe("ClientSettings sidebar v2", () => {
   it("defaults the beta off with a three-day auto-settle threshold", () => {
     const settings = decodeClientSettings({});
@@ -112,6 +177,14 @@ describe("ClientSettings sidebar v2", () => {
 });
 
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
+  it("defaults text generation to Luna at low reasoning effort", () => {
+    expect(DEFAULT_SERVER_SETTINGS.textGenerationModelSelection).toEqual({
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.6-luna",
+      options: [{ id: "reasoningEffort", value: "low" }],
+    });
+  });
+
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
   });

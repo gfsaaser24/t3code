@@ -19,6 +19,7 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import type { SavedRemoteConnection } from "../../lib/connection";
+import { MOBILE_PRODUCT_NAME } from "../../lib/mobileBranding";
 import { runtime } from "../../lib/runtime";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import {
@@ -480,7 +481,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     }
     const nowIso = new Date(Date.now()).toISOString();
     const activity = AgentActivity.start({
-      title: "T3 Code",
+      title: MOBILE_PRODUCT_NAME,
       subtitle: "Agent work in progress",
       activeCount: 1,
       updatedAt: nowIso,

@@ -2532,6 +2532,89 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
   },
 );
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-bootstrap-drain-")))(
+  "OrchestrationProjectionPipeline bootstrap drain",
+  (it) => {
+    it.effect("drains more than 1,000 events after every projector cursor", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-01-01T00:00:00.000Z";
+        const projectId = ProjectId.make("project-bootstrap-drain");
+
+        yield* eventStore.append({
+          type: "project.created",
+          eventId: EventId.make("evt-bootstrap-drain-created"),
+          aggregateKind: "project",
+          aggregateId: projectId,
+          occurredAt: now,
+          commandId: CommandId.make("cmd-bootstrap-drain-created"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-bootstrap-drain-created"),
+          metadata: {},
+          payload: {
+            projectId,
+            title: "Project before drain",
+            workspaceRoot: "/tmp/project-bootstrap-drain",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+        yield* projectionPipeline.bootstrap;
+
+        yield* Effect.forEach(
+          Array.from({ length: 1_001 }, (_, index) => index),
+          (index) =>
+            eventStore.append({
+              type: "project.meta-updated",
+              eventId: EventId.make(`evt-bootstrap-drain-${index}`),
+              aggregateKind: "project",
+              aggregateId: projectId,
+              occurredAt: now,
+              commandId: CommandId.make(`cmd-bootstrap-drain-${index}`),
+              causationEventId: null,
+              correlationId: CorrelationId.make(`cmd-bootstrap-drain-${index}`),
+              metadata: {},
+              payload: {
+                projectId,
+                title: `Project after event ${index}`,
+                updatedAt: now,
+              },
+            }),
+          { discard: true },
+        );
+
+        yield* projectionPipeline.bootstrap;
+
+        const projectRows = yield* sql<{ readonly title: string }>`
+        SELECT title
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+      `;
+        assert.deepEqual(projectRows, [{ title: "Project after event 1000" }]);
+
+        const stateRows = yield* sql<{
+          readonly projector: string;
+          readonly lastAppliedSequence: number;
+        }>`
+        SELECT
+          projector,
+          last_applied_sequence AS "lastAppliedSequence"
+        FROM projection_state
+        ORDER BY projector ASC
+      `;
+        assert.equal(stateRows.length, Object.keys(ORCHESTRATION_PROJECTOR_NAMES).length);
+        for (const row of stateRows) {
+          assert.equal(row.lastAppliedSequence, 1_002);
+        }
+      }),
+    );
+  },
+);
+
 it.effect("restores pending turn-start metadata across projection pipeline restart", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;

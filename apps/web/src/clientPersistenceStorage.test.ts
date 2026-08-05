@@ -90,4 +90,25 @@ describe("clientPersistenceStorage", () => {
     expect(settings).not.toHaveProperty("chatWordWrap");
     expect(settings).not.toHaveProperty("diffWordWrap");
   });
+
+  it("keeps unrelated browser settings when a saved pane layout is unsupported", async () => {
+    const testWindow = getTestWindow();
+    testWindow.localStorage.setItem(
+      "t3code:client-settings:v1",
+      JSON.stringify({
+        wordWrap: false,
+        timestampFormat: "24-hour",
+        turboChatPaneLayout: { version: 2, panes: [], focusedPaneId: "pane-a" },
+      }),
+    );
+    const { readBrowserClientSettings } = await import("./clientPersistenceStorage");
+
+    expect(readBrowserClientSettings()).toEqual(
+      expect.objectContaining({
+        wordWrap: false,
+        timestampFormat: "24-hour",
+        turboChatPaneLayout: null,
+      }),
+    );
+  });
 });

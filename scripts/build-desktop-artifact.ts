@@ -11,18 +11,16 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
-import {
-  BRAND_ASSET_PATHS,
-  resolveWebAssetBrandForChannel,
-  type WebAssetBrand,
-} from "./lib/brand-assets.ts";
+import { resolveWebAssetBrandForChannel, type WebAssetBrand } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
+import { TURBO_BRAND_ASSET_PATHS } from "./lib/turbo-brand-assets.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -70,7 +68,7 @@ type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
-const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
+const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
 const decodeNodePtyManifest = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
@@ -1452,7 +1450,9 @@ export function resolveDesktopRuntimeDependencies(
 }
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?$/.test(version) ? "nightly" : "latest";
+  return /-nightly\.\d{8}\.\d+(?:\.turbo\.(?:\d{8}\.\d+|\d+))?$/u.test(version)
+    ? "nightly"
+    : "latest";
 }
 
 /**
@@ -1489,18 +1489,11 @@ export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
 }
 
 export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
-    return {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
-    };
-  }
-
+  void version;
   return {
-    macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-    linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-    windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+    macIconPng: TURBO_BRAND_ASSET_PATHS.macIconPng,
+    linuxIconPng: TURBO_BRAND_ASSET_PATHS.universalIconPng,
+    windowsIconIco: TURBO_BRAND_ASSET_PATHS.windowsIconIco,
   };
 }
 
@@ -1521,8 +1514,10 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
   return `${trimmed.slice(0, versionSeparator)}/${trimmed.slice(versionSeparator + 1)}`;
 }
 
-export function resolveDesktopProductName(_version: string): string {
-  return desktopPackageJson.productName ?? "T3-Turbo";
+export function resolveDesktopProductName(version: string): string {
+  return resolveDesktopUpdateChannel(version) === "nightly"
+    ? "T3 Turbo"
+    : (desktopPackageJson.productName ?? "T3 Turbo");
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -1574,7 +1569,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "public.app-category.developer-tools",
       protocols: [
         {
-          name: "T3 Code",
+          name: "T3 Turbo",
           schemes: ["t3code", "t3code-dev"],
         },
       ],
@@ -1598,7 +1593,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // t3code:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "T3 Code",
+          name: "T3 Turbo",
           schemes: ["t3code", "t3code-dev"],
         },
       ],
@@ -1624,6 +1619,22 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
     }
     buildConfig.win = winConfig;
+    // NSIS writes these schemes to the registry so the system browser can hand
+    // t3code:// OAuth callbacks to the app, mirroring the mac/linux protocol
+    // registrations above.
+    buildConfig.protocols = [
+      {
+        name: "T3 Turbo",
+        schemes: ["t3code", "t3code-dev"],
+      },
+    ];
+    buildConfig.nsis = {
+      // "always" recreates the desktop shortcut on reinstall even when a
+      // previous install shipped without one.
+      createDesktopShortcut: "always",
+      createStartMenuShortcut: true,
+      shortcutName: "T3 Turbo",
+    };
   }
 
   return buildConfig;
@@ -2082,6 +2093,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
+  // Fork policy: user-facing Windows releases are named `T3 Turbo MM-DD-YY.exe`,
+  // the date being the ingestion cutoff the build contains. Emit that copy next
+  // to the versioned artifact (which the updater metadata keeps referencing).
+  if (options.platform === "win") {
+    const now = DateTime.toDate(yield* DateTime.now);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const releaseDateName = `T3 Turbo ${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${String(now.getFullYear()).slice(-2)}.exe`;
+    const versionedExe = copiedArtifacts.find((artifact) => artifact.endsWith(".exe"));
+    if (versionedExe !== undefined) {
+      const releaseNamedPath = path.join(options.outputDir, releaseDateName);
+      yield* fs.copyFile(versionedExe, releaseNamedPath);
+      copiedArtifacts.push(releaseNamedPath);
+    }
+  }
+
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
     Effect.annotateLogs({ artifacts: copiedArtifacts }),
   );
@@ -2146,7 +2172,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for T3 Code."),
+  Command.withDescription("Build a desktop artifact for T3 Turbo."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

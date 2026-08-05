@@ -1,7 +1,8 @@
 "use client";
 
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { PreviewAnnotationPayload, ScopedThreadRef } from "@t3tools/contracts";
 
+import type { ComposerImageAttachment } from "~/composerDraftStore";
 import { isPreviewSupportedInRuntime } from "~/previewStateStore";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./PreviewPanelShell";
@@ -13,15 +14,28 @@ interface Props {
   tabId?: string | null;
   configuredUrls?: ReadonlyArray<string> | undefined;
   visible: boolean;
+  onSendAnnotation?: (
+    annotation: PreviewAnnotationPayload,
+    image: ComposerImageAttachment | null,
+  ) => void;
+  actionsEnabled?: boolean;
 }
 
-export function PreviewPanel({ mode, threadRef, tabId, configuredUrls, visible }: Props) {
+export function PreviewPanel({
+  mode,
+  threadRef,
+  tabId,
+  configuredUrls,
+  visible,
+  onSendAnnotation,
+  actionsEnabled = visible,
+}: Props) {
   if (!isPreviewSupportedInRuntime()) {
     return (
       <PreviewPanelShell mode={mode}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
-            Preview is only available in the T3 Code desktop app.
+            Preview is only available in the T3 Turbo desktop app.
           </p>
         </div>
       </PreviewPanelShell>
@@ -35,6 +49,8 @@ export function PreviewPanel({ mode, threadRef, tabId, configuredUrls, visible }
         {...(tabId !== undefined ? { tabId } : {})}
         configuredUrls={configuredUrls}
         visible={visible}
+        {...(onSendAnnotation ? { onSendAnnotation } : {})}
+        actionsEnabled={actionsEnabled}
       />
     </PreviewPanelShell>
   );

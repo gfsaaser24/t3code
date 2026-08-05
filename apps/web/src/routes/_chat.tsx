@@ -1,4 +1,4 @@
-import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+import { Outlet, createFileRoute, redirect, useParams } from "@tanstack/react-router";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
 
@@ -21,6 +21,9 @@ import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { stackedThreadToast, toastManager } from "~/components/ui/toast";
 import { primaryServerKeybindingsAtom } from "~/state/server";
+import { resolveThreadRouteTarget } from "~/threadRoutes";
+import { ChatPaneActionsProvider } from "~/turbo/chatPanes/ChatPaneActionsContext";
+import { ChatPaneWorkspace } from "~/turbo/chatPanes/ChatPaneWorkspace";
 
 function ChatRouteGlobalShortcuts() {
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -117,7 +120,7 @@ function ChatRouteGlobalShortcuts() {
             stackedThreadToast({
               type: "info",
               title: "Preview is desktop-only",
-              description: "Open T3 Code in the desktop app to use the in-app preview.",
+              description: "Open T3 Turbo in the desktop app to use the in-app preview.",
             }),
           );
           return;
@@ -175,11 +178,16 @@ function ChatRouteGlobalShortcuts() {
 }
 
 function ChatRouteLayout() {
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+
   return (
-    <>
+    <ChatPaneActionsProvider routeTarget={routeTarget}>
       <ChatRouteGlobalShortcuts />
-      <Outlet />
-    </>
+      <ChatPaneWorkspace fallback={<Outlet />} />
+    </ChatPaneActionsProvider>
   );
 }
 

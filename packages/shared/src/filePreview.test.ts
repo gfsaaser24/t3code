@@ -17,6 +17,7 @@ describe("workspace file previews", () => {
 
   it.each([
     "icon.png",
+    "bitmap.bmp",
     "photo.JPEG",
     "animation.gif",
     "vector.svg#mark",

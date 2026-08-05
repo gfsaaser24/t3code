@@ -193,6 +193,33 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("opens image files as reusable peer tabs", () => {
+    useRightPanelStore.getState().openFile(refA, "assets/hero.png");
+    useRightPanelStore.getState().openFile(refA, "assets/diagram.svg");
+    useRightPanelStore.getState().openFile(refA, "assets/hero.png");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "file:assets/hero.png",
+      surfaces: [
+        {
+          id: "file:assets/hero.png",
+          kind: "file",
+          relativePath: "assets/hero.png",
+          revealLine: null,
+          revealRequestId: 2,
+        },
+        {
+          id: "file:assets/diagram.svg",
+          kind: "file",
+          relativePath: "assets/diagram.svg",
+          revealLine: null,
+          revealRequestId: 1,
+        },
+      ],
+    });
+  });
+
   it("activates the Files surface with repeatable path reveal requests", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/components/App.tsx", 12);

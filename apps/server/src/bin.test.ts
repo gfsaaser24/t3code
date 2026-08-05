@@ -207,11 +207,25 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     Effect.gen(function* () {
       const { output } = yield* captureStdout(runCli(["service", "--help"], noConnectCli));
 
-      assert.include(output, "Manage the T3 Code background service.");
+      assert.include(output, "Manage the T3 Turbo background service.");
       assert.include(output, "install");
       assert.include(output, "uninstall");
       assert.include(output, "update");
       assert.include(output, "status");
+    }),
+  );
+
+  it.effect("exposes the repeatable official data import utility", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(
+        runCli(["import", "official", "--help"], noConnectCli),
+      );
+
+      assert.include(output, "Import official T3 Code data directly into the T3 Turbo database.");
+      assert.include(output, "plan");
+      assert.include(output, "apply");
+      assert.include(output, "run");
+      assert.include(output, "restore");
     }),
   );
 

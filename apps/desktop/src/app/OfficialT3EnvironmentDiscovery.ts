@@ -1,63 +1,55 @@
-import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
-import * as Duration from "effect/Duration";
+import type { DesktopOfficialT3ImportAvailability } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Schema from "effect/Schema";
+import * as Path from "effect/Path";
 
-const DISCOVERY_TIMEOUT_MS = 1_500;
+const quoteCliArgument = (value: string): string => `"${value.replaceAll('"', '\\"')}"`;
 
-const OfficialT3RuntimeState = Schema.Struct({
-  version: Schema.Literal(1),
-  pid: Schema.Int,
-  origin: Schema.String,
-  devUrl: Schema.optional(Schema.String),
-});
-const decodeOfficialT3RuntimeState = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(OfficialT3RuntimeState),
-);
-
-function normalizeHttpBaseUrl(value: string): string | null {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
-    url.pathname = url.pathname.replace(/\/$/u, "");
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/$/u, "");
-  } catch {
-    return null;
-  }
-}
-
-function toWebSocketBaseUrl(httpBaseUrl: string): string {
-  const url = new URL(httpBaseUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString().replace(/\/$/u, "");
-}
+const importCommand = (
+  mode: "plan" | "run",
+  sourceBaseDir: string,
+  targetBaseDir: string,
+): string =>
+  [
+    "t3 import official",
+    mode,
+    "--source-base-dir",
+    quoteCliArgument(sourceBaseDir),
+    "--target-base-dir",
+    quoteCliArgument(targetBaseDir),
+  ].join(" ");
 
 /**
- * Finds the official desktop server without opening its database. The runtime
- * file is only a hint; a successful descriptor probe is what makes the
- * environment eligible for attachment.
+ * Discover importable official T3 data without probing or attaching to an
+ * official server. Both databases stay closed; the importer owns snapshotting
+ * and validation after the user starts an import.
  */
-export const discoverOfficialT3Environment = Effect.fn("desktop.officialT3.discover")(function* (
-  runtimeStatePath: string,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  return yield* Effect.gen(function* () {
-    const runtimeState = yield* decodeOfficialT3RuntimeState(
-      yield* fs.readFileString(runtimeStatePath),
-    );
-    const httpBaseUrl = normalizeHttpBaseUrl(runtimeState.devUrl ?? runtimeState.origin);
-    if (httpBaseUrl === null) return null;
+export const discoverOfficialT3ImportAvailability = Effect.fn("desktop.officialT3Import.discover")(
+  function* (input: {
+    readonly sourceBaseDir: string;
+    readonly targetBaseDir: string;
+  }): Effect.fn.Return<
+    DesktopOfficialT3ImportAvailability | null,
+    never,
+    FileSystem.FileSystem | Path.Path
+  > {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const sourceBaseDir = path.resolve(input.sourceBaseDir);
+    const targetBaseDir = path.resolve(input.targetBaseDir);
+    if (sourceBaseDir.toLowerCase() === targetBaseDir.toLowerCase()) return null;
 
-    const descriptor = yield* fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(
-      Effect.timeout(Duration.millis(DISCOVERY_TIMEOUT_MS)),
-    );
+    const [sourceExists, targetExists] = yield* Effect.all([
+      fs.exists(path.join(sourceBaseDir, "userdata", "state.sqlite")),
+      fs.exists(path.join(targetBaseDir, "userdata", "state.sqlite")),
+    ]).pipe(Effect.orElseSucceed(() => [false, false] as const));
+    if (!sourceExists || !targetExists) return null;
+
     return {
-      descriptor,
-      httpBaseUrl,
-      wsBaseUrl: toWebSocketBaseUrl(httpBaseUrl),
+      sourceBaseDir,
+      targetBaseDir,
+      runCommand: importCommand("run", sourceBaseDir, targetBaseDir),
+      planCommand: importCommand("plan", sourceBaseDir, targetBaseDir),
     };
-  }).pipe(Effect.orElseSucceed(() => null));
-});
+  },
+);
