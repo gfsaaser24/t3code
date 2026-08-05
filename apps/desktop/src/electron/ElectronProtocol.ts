@@ -230,6 +230,34 @@ export const make = Effect.gen(function* () {
               }),
           }).pipe(Effect.andThen(Ref.set(registered, false)), Effect.orDie),
       );
+
+      // Clerk's Frontend API rejects any request carrying both an Origin and
+      // an Authorization header. Because the desktop scheme is registered as
+      // standard+CORS, Chromium stamps `Origin: <scheme>://app` on every
+      // renderer fetch, and @clerk/electron attaches the cached client JWT as
+      // Authorization — so every authenticated Clerk call would fail. Native
+      // apps send no Origin at all; drop it for Clerk requests to match.
+      if (input.clerkFrontendApiHostname !== undefined) {
+        const clerkUrls = [`https://${input.clerkFrontendApiHostname}/*`];
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            Electron.session.defaultSession.webRequest.onBeforeSendHeaders(
+              { urls: clerkUrls },
+              (details, callback) => {
+                const requestHeaders = { ...details.requestHeaders };
+                for (const name of Object.keys(requestHeaders)) {
+                  if (name.toLowerCase() === "origin") delete requestHeaders[name];
+                }
+                callback({ requestHeaders });
+              },
+            );
+          }),
+          () =>
+            Effect.sync(() => {
+              Electron.session.defaultSession.webRequest.onBeforeSendHeaders(null);
+            }),
+        );
+      }
     },
   );
 
