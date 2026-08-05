@@ -4,7 +4,8 @@
 
 This runbook deploys the existing T3 Connect relay into infrastructure owned by the fork operator
 and explains how release builds consume it. T3 Connect remains optional: a repository without both
-Cloudflare credentials produces release artifacts with Connect disabled.
+Cloudflare credentials produces release artifacts with Connect disabled. For the browser-facing
+companion deployment, see [Self-host the hosted web app](./self-host-hosted-app.md).
 
 ## Architecture
 
@@ -227,12 +228,47 @@ gh secret set CLERK_SECRET_KEY --repo OWNER/REPO
 gh secret set DATABASE_PASSWORD --repo OWNER/REPO
 ```
 
+## Apply database migrations
+
+The deploy workflow does **not** apply migrations to an external `DATABASE_*` database. Only the
+upstream managed-PlanetScale path has a migration runner; the external-database path in
+`infra/relay/src/db.ts` provisions the Hyperdrive connection and nothing else. A relay pointed at
+an unmigrated database returns HTTP 500 for every request that touches persistence — clients
+surface it as `environment_link_failed (replay_persistence_failed)` when linking an environment.
+
+Apply the migrations in `infra/relay/migrations/postgres/` by hand, in timestamp order, with the
+same bookkeeping the upstream runner uses so a future runner can take over without re-applying:
+
+```sh
+psql "$DATABASE_URL" -c 'CREATE TABLE IF NOT EXISTS "relay_migrations" (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, applied_at TIMESTAMPTZ NOT NULL DEFAULT now());'
+
+seq=1
+for d in infra/relay/migrations/postgres/*/; do
+  name="$(basename "$d")/migration.sql"
+  id=$(printf '%05d' "$seq"); seq=$((seq + 1))
+  { echo 'BEGIN;'; cat "$d/migration.sql"; echo ';';
+    echo "INSERT INTO relay_migrations (id, name) VALUES ('$id', '$name');";
+    echo 'COMMIT;'; } | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f -
+done
+```
+
+Each migration runs in one transaction together with its bookkeeping insert, so partial
+application is impossible. Re-running is safe once you guard on the `relay_migrations` row
+(`SELECT count(*) FROM relay_migrations WHERE name = '<name>'`). Verify with `\dt public.*`:
+the relay expects the `relay_*` tables, including `relay_dpop_proofs` and
+`relay_environment_links`.
+
+Repeat this section whenever a release adds a new folder under
+`infra/relay/migrations/postgres/`.
+
 ## First deploy and later deploys
 
 The workflow [`deploy-relay.yml`](../../.github/workflows/deploy-relay.yml) supports both pushes
 to `main` and manual dispatch:
 
-1. Apply the relay SQL migrations and add all **Required** variables and secrets above.
+1. Apply the relay SQL migrations (see [Apply database migrations](#apply-database-migrations))
+   and add all **Required** variables and secrets above.
 2. Open **Actions > Deploy T3 Connect relay > Run workflow** and select `main`.
 3. Confirm **Detect Cloudflare configuration** reports enabled.
 4. Confirm **Deploy production relay stage** completes and reports an HTTPS `relay_url`.
