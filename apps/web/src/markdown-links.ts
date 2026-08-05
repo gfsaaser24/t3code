@@ -167,17 +167,25 @@ export function resolveMarkdownFileLinkTarget(
   const decodedHash = safeDecode(source.hash.trim());
 
   if (decodedPath.length === 0) return null;
+  // Windows drive/UNC destinations keep their backslashes; any other
+  // backslashes are relative Windows-style destinations (agents running on
+  // Windows emit them), which the candidate checks below only understand
+  // with forward slashes.
+  const pathCandidate =
+    WINDOWS_DRIVE_PATH_PATTERN.test(decodedPath) || WINDOWS_UNC_PATH_PATTERN.test(decodedPath)
+      ? decodedPath
+      : decodedPath.replaceAll("\\", "/");
   if (
-    !WINDOWS_DRIVE_PATH_PATTERN.test(decodedPath) &&
-    !WINDOWS_UNC_PATH_PATTERN.test(decodedPath) &&
-    hasExternalScheme(decodedPath)
+    !WINDOWS_DRIVE_PATH_PATTERN.test(pathCandidate) &&
+    !WINDOWS_UNC_PATH_PATTERN.test(pathCandidate) &&
+    hasExternalScheme(pathCandidate)
   ) {
     return null;
   }
 
-  if (!isLikelyPathCandidate(decodedPath)) return null;
+  if (!isLikelyPathCandidate(pathCandidate)) return null;
 
-  const pathWithPosition = appendLineColumnFromHash(decodedPath, decodedHash);
+  const pathWithPosition = appendLineColumnFromHash(pathCandidate, decodedHash);
   if (!isRelativePath(pathWithPosition)) {
     return pathWithPosition;
   }
