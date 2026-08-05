@@ -314,7 +314,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
       assert.equal(win.appId, "com.gabef.t3turbo");
-      assert.equal(win.productName, "T3-Turbo");
+      assert.equal(win.productName, "T3 Turbo");
       assert.equal(win.artifactName, "T3-Turbo-${version}-${arch}.${ext}");
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
