@@ -1680,7 +1680,7 @@ export default function GitActionsControl({
           }}
         >
           <GitBranchPlusIcon className="size-3.5" aria-hidden />
-          <span className="ml-0.5">
+          <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
             {initAction.isPending ? "Initializing..." : "Initialize Git"}
           </span>
         </Button>
