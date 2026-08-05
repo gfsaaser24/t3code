@@ -1620,6 +1620,22 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       winConfig.azureSignOptions = yield* AzureTrustedSigningOptionsConfig;
     }
     buildConfig.win = winConfig;
+    // NSIS writes these schemes to the registry so the system browser can hand
+    // t3code:// OAuth callbacks to the app, mirroring the mac/linux protocol
+    // registrations above.
+    buildConfig.protocols = [
+      {
+        name: "T3 Turbo",
+        schemes: ["t3code", "t3code-dev"],
+      },
+    ];
+    buildConfig.nsis = {
+      // "always" recreates the desktop shortcut on reinstall even when a
+      // previous install shipped without one.
+      createDesktopShortcut: "always",
+      createStartMenuShortcut: true,
+      shortcutName: "T3 Turbo",
+    };
   }
 
   return buildConfig;
