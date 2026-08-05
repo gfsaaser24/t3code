@@ -20,6 +20,7 @@ import { TURBO_BRAND_ASSET_PATHS } from "./lib/turbo-brand-assets.ts";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -2074,6 +2075,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       platform: options.platform,
       arch: options.arch,
     });
+  }
+
+  // Fork policy: user-facing Windows releases are named `T3 Turbo MM-DD-YY.exe`,
+  // the date being the ingestion cutoff the build contains. Emit that copy next
+  // to the versioned artifact (which the updater metadata keeps referencing).
+  if (options.platform === "win") {
+    const now = DateTime.toDate(yield* DateTime.now);
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const releaseDateName = `T3 Turbo ${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${String(now.getFullYear()).slice(-2)}.exe`;
+    const versionedExe = copiedArtifacts.find((artifact) => artifact.endsWith(".exe"));
+    if (versionedExe !== undefined) {
+      const releaseNamedPath = path.join(options.outputDir, releaseDateName);
+      yield* fs.copyFile(versionedExe, releaseNamedPath);
+      copiedArtifacts.push(releaseNamedPath);
+    }
   }
 
   yield* Effect.log("[desktop-artifact] Done. Artifacts:").pipe(
