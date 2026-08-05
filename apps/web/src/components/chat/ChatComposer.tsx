@@ -2415,6 +2415,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (imageFiles.length === 0) return;
     event.preventDefault();
     void addComposerImages(imageFiles);
+    // Copying a link from a browser or chat app often puts the URL text and a
+    // preview image on the clipboard together. preventDefault above suppresses
+    // the native text insertion, so re-insert the text half instead of
+    // silently dropping it with the attachment.
+    const text = event.clipboardData.getData("text/plain");
+    if (text.length > 0) {
+      composerEditorRef.current?.insertText(text);
+    }
   };
 
   const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
