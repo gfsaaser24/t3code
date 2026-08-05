@@ -18,7 +18,7 @@
         },
         {
           "path": "apps/desktop/package.json",
-          "markers": ["\"productName\": \"T3-Turbo\""]
+          "markers": ["\"productName\": \"T3 Turbo\""]
         },
         {
           "path": "scripts/build-desktop-artifact.ts",
@@ -27,6 +27,10 @@
         {
           "path": "apps/desktop/src/app/DesktopEnvironment.test.ts",
           "markers": ["T3 Turbo", "gfsaaser24/t3code"]
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "markers": ["name=T3 Turbo v$version"]
         }
       ]
     },
@@ -257,7 +261,7 @@
           "path": "packages/contracts/src/settings.ts",
           "markers": [
             "export const TurboChatPaneLayout",
-            "turboChatPaneLayout: Schema.NullOr(TurboChatPaneLayout)"
+            "turboChatPaneLayout: CompatibleTurboChatPaneLayout"
           ]
         },
         {
@@ -336,7 +340,11 @@
         },
         {
           "path": ".github/workflows/deploy-relay.yml",
-          "markers": ["if: github.repository == 'pingdotgg/t3code'"]
+          "markers": [
+            "name: Detect Cloudflare configuration",
+            "if: steps.cloudflare_config.outputs.enabled == 'true'",
+            "RELAY_TUNNEL_ZONE_NAME"
+          ]
         }
       ]
     },

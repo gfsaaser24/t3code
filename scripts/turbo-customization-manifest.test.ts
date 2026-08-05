@@ -169,6 +169,12 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     nightly?.checks.some((check) => check.markers.includes("Do not publish T3 Turbo to NPM")),
   );
   assert.isTrue(product?.checks.some((check) => check.markers.includes("--publish never")));
+  const releaseWorkflow = NodeFS.readFileSync(
+    NodePath.join(repositoryRoot, ".github", "workflows", "release.yml"),
+    "utf8",
+  );
+  assert.notInclude(releaseWorkflow, "Publish CLI to npm");
+  assert.notInclude(releaseWorkflow, "npm publish");
 });
 
 it("verifies the rebased candidate before the nightly workflow bundles it", () => {
