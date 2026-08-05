@@ -119,13 +119,13 @@ In order, each proving one layer:
 
 Symptoms observed while standing up the first fork deployment, and what each actually means:
 
-| Symptom | Actual cause |
-| --- | --- |
-| Sign-in works, Connect toggle stays disabled, Clerk returns 404 on `.../tokens/t3-relay` | JWT template `t3-relay` missing (Step 3.2) |
-| Desktop app shows no sign-in entry at all; web at `127.0.0.1` works | Desktop scheme absent from Clerk `allowed_origins` (Step 3.5), or the build predates the `.env` (Step 5) |
-| CORS preflight failures on every Clerk request from `t3code://app` | Origin not allowed (Step 3.5). Never fix by stripping the `Origin` header |
-| Relay 500s: `replay_persistence_failed`, environments list fails | Migrations never applied, or Hyperdrive cannot reach the database (Step 2) |
-| Enabling Connect fails with "Could not check relay client availability" | Same as above — the relay's database layer is down |
-| Hosted origin gates on `/pair` | The deployed bundle was built without hosted flags, or the hostname serves something older (Step 6) |
-| "Invalid pairing token" in a browser | Pairing tokens are one-time and expire in minutes; the Connect flow never needs one. Generate fresh, or sign in to T3 Connect instead |
-| OAuth completes in the browser but never returns to the Windows app | Installer built before `t3code://` protocol registration existed on Windows — rebuild with a current `scripts/build-desktop-artifact.ts` |
+| Symptom                                                                                  | Actual cause                                                                                                                             |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Sign-in works, Connect toggle stays disabled, Clerk returns 404 on `.../tokens/t3-relay` | JWT template `t3-relay` missing (Step 3.2)                                                                                               |
+| Desktop app shows no sign-in entry at all; web at `127.0.0.1` works                      | Desktop scheme absent from Clerk `allowed_origins` (Step 3.5), or the build predates the `.env` (Step 5)                                 |
+| CORS preflight failures on every Clerk request from `t3code://app`                       | Origin not allowed (Step 3.5). Never fix by stripping the `Origin` header                                                                |
+| Relay 500s: `replay_persistence_failed`, environments list fails                         | Migrations never applied, or Hyperdrive cannot reach the database (Step 2)                                                               |
+| Enabling Connect fails with "Could not check relay client availability"                  | Same as above — the relay's database layer is down                                                                                       |
+| Hosted origin gates on `/pair`                                                           | The deployed bundle was built without hosted flags, or the hostname serves something older (Step 6)                                      |
+| "Invalid pairing token" in a browser                                                     | Pairing tokens are one-time and expire in minutes; the Connect flow never needs one. Generate fresh, or sign in to T3 Connect instead    |
+| OAuth completes in the browser but never returns to the Windows app                      | Installer built before `t3code://` protocol registration existed on Windows — rebuild with a current `scripts/build-desktop-artifact.ts` |
