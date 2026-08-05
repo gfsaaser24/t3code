@@ -381,6 +381,11 @@ export function useChatPaneActions(): ChatPaneActions {
   return actions;
 }
 
+/** For UI that lives above the chat route provider, such as the app sidebar. */
+export function useChatPaneActionsOptional(): ChatPaneActions | null {
+  return useContext(ChatPaneActionsContext);
+}
+
 export function ChatPaneScope({
   children,
   paneId,

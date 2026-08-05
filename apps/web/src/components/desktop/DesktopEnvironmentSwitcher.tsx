@@ -4,9 +4,11 @@ import type {
   DesktopOfficialT3ImportResult,
   EnvironmentId,
 } from "@t3tools/contracts";
+import { useNavigate } from "@tanstack/react-router";
 import { CloudIcon, DatabaseIcon, MonitorIcon } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
+import { useUpdateClientSettings } from "../../hooks/useSettings";
 import { setActiveEnvironmentId } from "../../state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import { Button } from "../ui/button";
@@ -30,7 +32,7 @@ import {
   SelectValue,
 } from "../ui/select";
 import { Spinner } from "../ui/spinner";
-import { useChatPaneActions } from "../../turbo/chatPanes/ChatPaneActionsContext";
+import { useChatPaneActionsOptional } from "../../turbo/chatPanes/ChatPaneActionsContext";
 import {
   applyDesktopEnvironmentSwitch,
   buildDesktopEnvironmentOptions,
@@ -66,7 +68,20 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
   const bridge = window.desktopBridge;
   const discoverImport = bridge?.discoverOfficialT3Import;
   const runImport = bridge?.runOfficialT3Import;
-  const { resetToHome } = useChatPaneActions();
+  // The switcher renders both inside the chat routes and above them (app
+  // sidebar), so the pane actions context may be absent. The fallback mirrors
+  // resetToHome: clear the persisted pane layout and land on home.
+  const paneActions = useChatPaneActionsOptional();
+  const navigate = useNavigate();
+  const updateClientSettings = useUpdateClientSettings();
+  const resetToHome = useCallback(() => {
+    if (paneActions) {
+      paneActions.resetToHome();
+      return;
+    }
+    updateClientSettings({ turboChatPaneLayout: null });
+    void navigate({ to: "/", replace: true });
+  }, [navigate, paneActions, updateClientSettings]);
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const [availability, setAvailability] = useState<DesktopOfficialT3ImportAvailability | null>(
