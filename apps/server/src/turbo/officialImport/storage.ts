@@ -1171,7 +1171,6 @@ export const copySettledProviderSessionRuntimeBindings = Effect.fn(
         }
         const isUnsettled =
           binding.status === "starting" ||
-          binding.status === "connecting" ||
           binding.status === "running" ||
           decodeSync(CountRowSchema, activeProjectedSession.get(sourceThreadId)).count > 0 ||
           decodeSync(CountRowSchema, activeTurns.get(sourceThreadId)).count > 0 ||
