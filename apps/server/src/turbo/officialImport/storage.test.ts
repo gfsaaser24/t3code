@@ -3,15 +3,21 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeUtil from "node:util";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as PlatformError from "effect/PlatformError";
 import { ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 
-import { migrationManifest } from "../../persistence/Migrations.ts";
+import { migrationManifest, runMigrations } from "../../persistence/Migrations.ts";
+import * as NodeSqliteClient from "../../persistence/NodeSqliteClient.ts";
+import { prepareImportCheckpointRefChanges } from "./checkpointRefs.ts";
 import { prepareOfficialImport } from "./execute.ts";
 import {
   RESTORE_CONFIRMATION,
@@ -21,6 +27,7 @@ import {
   copyCheckpointDiffBlobs,
   cutoverImport,
   deleteCanonicalThreadStreams,
+  deleteProviderSessionRuntimeBindings,
   fingerprintDatabase,
   prepareImportWorkspace,
   readCheckpointDiffBlobs,
@@ -28,16 +35,20 @@ import {
   readImportActivityState,
   readOrchestrationEvents,
   readProjectRows,
+  recoverOfficialImportTransactions,
   rebuildCopiedCommandReceipts,
   restoreImportBackup,
+  withOfficialImportLock,
 } from "./storage.ts";
 
 const NOW = "2026-08-04T12:00:00.000Z";
+const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 
 const schemaSql = `
   CREATE TABLE effect_sql_migrations (
     migration_id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL
+    name TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
   CREATE TABLE orchestration_events (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -213,6 +224,33 @@ const withDatabases = <A, E, R>(
     (directory) => Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
   );
 
+const withTemporaryDirectory = <A, E, R>(
+  prefix: string,
+  use: (directory: string) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  Effect.acquireUseRelease(
+    Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), prefix))),
+    use,
+    (directory) => Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
+  );
+
+const initializeDatabaseThroughMigration = (path: string, migrationId: number) =>
+  runMigrations({ toMigrationInclusive: migrationId }).pipe(
+    Effect.provide(NodeSqliteClient.layer({ filename: path })),
+    Effect.scoped,
+  );
+
+const git = (repositoryPath: string, args: ReadonlyArray<string>) =>
+  Effect.promise(() => execFileAsync("git", ["-C", repositoryPath, ...args]));
+
+const resolveGitRef = (repositoryPath: string, ref: string) =>
+  Effect.promise(() =>
+    execFileAsync("git", ["-C", repositoryPath, "rev-parse", ref]).then(
+      ({ stdout }) => stdout.trim(),
+      () => null,
+    ),
+  );
+
 it.effect("imports only into staging and never modifies the source database", () =>
   withDatabases(({ source, target }) =>
     Effect.gen(function* () {
@@ -281,13 +319,27 @@ it.effect("creates a recoverable backup and restores it only with confirmation",
         "attachments",
         "imported-attachment",
       );
-      yield* Effect.promise(() =>
-        NodeFSP.mkdir(NodePath.join(NodePath.dirname(target), "attachments"), { recursive: true }),
+      const stagedAttachmentPath = NodePath.join(
+        workspace.directory,
+        "attachments",
+        "imported-attachment",
       );
-      yield* Effect.promise(() => NodeFSP.writeFile(installedAttachmentPath, "imported"));
+      yield* Effect.promise(() =>
+        NodeFSP.mkdir(NodePath.dirname(stagedAttachmentPath), { recursive: true }),
+      );
+      yield* Effect.promise(() => NodeFSP.writeFile(stagedAttachmentPath, "imported"));
       const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
       yield* appendCanonicalEvents(workspace, events);
-      const cutover = yield* cutoverImport(workspace, [installedAttachmentPath]);
+      const cutover = yield* cutoverImport(workspace, {
+        attachments: [
+          {
+            sourcePath: stagedAttachmentPath,
+            stagedPath: stagedAttachmentPath,
+            targetPath: installedAttachmentPath,
+            allowReplace: false,
+          },
+        ],
+      });
       assert.equal(cutover.receipt.status, "complete");
       assert.equal((yield* readOrchestrationEvents(target)).length, 2);
       assert.notEqual(yield* fingerprintDatabase(target), targetBefore);
@@ -525,5 +577,336 @@ it.effect("blocks apply while a session, turn, or approval is active", () =>
         assert.equal((yield* readOrchestrationEvents(target)).length, 1);
       }),
     (directory) => Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("recovers an interrupted prepared cutover before the next startup", () =>
+  withDatabases(({ source, target }) =>
+    Effect.gen(function* () {
+      const targetBefore = yield* fingerprintDatabase(target);
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
+      yield* appendCanonicalEvents(workspace, events);
+      const cutover = yield* cutoverImport(workspace);
+      assert.notEqual(yield* fingerprintDatabase(target), targetBefore);
+
+      const completeReceipt = yield* Effect.promise(() =>
+        NodeFSP.readFile(cutover.receiptPath, "utf8"),
+      );
+      const preparedReceipt = completeReceipt.replace(
+        /"status"\s*:\s*"complete"/,
+        '"status":"prepared"',
+      );
+      assert.notEqual(preparedReceipt, completeReceipt);
+      yield* Effect.promise(() => NodeFSP.writeFile(cutover.receiptPath, preparedReceipt));
+
+      yield* recoverOfficialImportTransactions(target);
+
+      assert.equal(yield* fingerprintDatabase(target), targetBefore);
+      assert.include(
+        yield* Effect.promise(() => NodeFSP.readFile(cutover.receiptPath, "utf8")),
+        '"status":"rolled-back"',
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rolls a restore back when its complete receipt cannot be persisted", () =>
+  withDatabases(({ source, target }) =>
+    Effect.gen(function* () {
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
+      yield* appendCanonicalEvents(workspace, events);
+      const cutover = yield* cutoverImport(workspace);
+      const importedFingerprint = yield* fingerprintDatabase(target);
+
+      const fileSystem = yield* FileSystem.FileSystem;
+      let restoreReceiptWrites = 0;
+      const receiptFailure = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "writeFileString",
+        pathOrDescriptor: target,
+      });
+      const failingFileSystem = FileSystem.FileSystem.of({
+        ...fileSystem,
+        writeFileString: (path, contents, options) => {
+          if (String(path).includes(".restore-")) {
+            restoreReceiptWrites += 1;
+            if (restoreReceiptWrites === 2) return Effect.fail(receiptFailure);
+          }
+          return fileSystem.writeFileString(path, contents, options);
+        },
+      });
+
+      const result = yield* restoreImportBackup({
+        receiptPath: cutover.receiptPath,
+        confirmation: RESTORE_CONFIRMATION,
+      }).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(restoreReceiptWrites, 2);
+      assert.equal(yield* fingerprintDatabase(target), importedFingerprint);
+      assert.equal((yield* readOrchestrationEvents(target)).length, 2);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("backs up and restores conflicting attachments for replace mode", () =>
+  withDatabases(({ source, target }) =>
+    Effect.gen(function* () {
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const targetAttachment = NodePath.join(
+        NodePath.dirname(target),
+        "attachments",
+        "thread-target",
+        "attachment.txt",
+      );
+      const stagedAttachment = NodePath.join(
+        workspace.directory,
+        "attachments",
+        "thread-target",
+        "attachment.txt",
+      );
+      yield* Effect.promise(() =>
+        Promise.all([
+          NodeFSP.mkdir(NodePath.dirname(targetAttachment), { recursive: true }),
+          NodeFSP.mkdir(NodePath.dirname(stagedAttachment), { recursive: true }),
+        ]),
+      );
+      yield* Effect.promise(() => NodeFSP.writeFile(targetAttachment, "turbo-original"));
+      yield* Effect.promise(() => NodeFSP.writeFile(stagedAttachment, "official-replacement"));
+      const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
+      yield* appendCanonicalEvents(workspace, events);
+
+      const cutover = yield* cutoverImport(workspace, {
+        attachments: [
+          {
+            sourcePath: stagedAttachment,
+            stagedPath: stagedAttachment,
+            targetPath: targetAttachment,
+            allowReplace: true,
+          },
+        ],
+      });
+
+      assert.equal(
+        yield* Effect.promise(() => NodeFSP.readFile(targetAttachment, "utf8")),
+        "official-replacement",
+      );
+      const backupPath = cutover.receipt.attachmentChanges[0]?.backupPath;
+      assert.isString(backupPath);
+      assert.equal(
+        yield* Effect.promise(() => NodeFSP.readFile(backupPath!, "utf8")),
+        "turbo-original",
+      );
+
+      const restored = yield* restoreImportBackup({
+        receiptPath: cutover.receiptPath,
+        confirmation: RESTORE_CONFIRMATION,
+      });
+      assert.equal(
+        yield* Effect.promise(() => NodeFSP.readFile(targetAttachment, "utf8")),
+        "turbo-original",
+      );
+      assert.equal(
+        yield* Effect.promise(() =>
+          NodeFSP.readFile(restored.receipt.displacedAttachmentPaths[0]!, "utf8"),
+        ),
+        "official-replacement",
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("journals cloned checkpoint refs and restores their previous state", () =>
+  withDatabases(({ directory, source, target }) =>
+    Effect.gen(function* () {
+      const repositoryPath = NodePath.join(directory, "repository");
+      yield* Effect.promise(() => NodeFSP.mkdir(repositoryPath));
+      yield* git(repositoryPath, ["init"]);
+      yield* git(repositoryPath, ["config", "user.email", "import@test.invalid"]);
+      yield* git(repositoryPath, ["config", "user.name", "Import Test"]);
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(repositoryPath, "file.txt"), "checkpoint"),
+      );
+      yield* git(repositoryPath, ["add", "file.txt"]);
+      yield* git(repositoryPath, ["commit", "-m", "checkpoint"]);
+      const sourceRef = "refs/t3/checkpoints/source-thread/turn/1";
+      const targetRef = "refs/t3/checkpoints/cloned-thread/turn/1";
+      yield* git(repositoryPath, ["update-ref", sourceRef, "HEAD"]);
+      const changes = yield* prepareImportCheckpointRefChanges([
+        { repositoryPath, sourceRef, targetRef },
+      ]);
+      assert.equal(changes.length, 1);
+
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
+      yield* appendCanonicalEvents(workspace, events);
+      const cutover = yield* cutoverImport(workspace, { checkpointRefChanges: changes });
+
+      assert.equal(yield* resolveGitRef(repositoryPath, targetRef), changes[0]?.importedOid);
+      assert.deepEqual(cutover.receipt.checkpointRefChanges, changes);
+
+      yield* restoreImportBackup({
+        receiptPath: cutover.receiptPath,
+        confirmation: RESTORE_CONFIRMATION,
+      });
+      assert.equal(yield* resolveGitRef(repositoryPath, targetRef), null);
+      assert.equal(yield* resolveGitRef(repositoryPath, sourceRef), changes[0]?.importedOid);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("preserves retained Turbo provider bindings and clears imported bindings", () =>
+  withDatabases(({ source, target }) =>
+    Effect.gen(function* () {
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const staging = new NodeSqlite.DatabaseSync(workspace.targetStagingPath);
+      try {
+        staging
+          .prepare("INSERT INTO provider_session_runtime (thread_id, status) VALUES (?, ?)")
+          .run("thread-source", "stopped");
+      } finally {
+        staging.close();
+      }
+
+      assert.equal(
+        yield* deleteProviderSessionRuntimeBindings(workspace.targetStagingPath, [
+          ThreadId.make("thread-source"),
+        ]),
+        1,
+      );
+      yield* clearDerivedImportState(workspace.targetStagingPath);
+      const inspected = new NodeSqlite.DatabaseSync(workspace.targetStagingPath, {
+        readOnly: true,
+      });
+      try {
+        const rows = inspected
+          .prepare("SELECT thread_id AS threadId FROM provider_session_runtime ORDER BY thread_id")
+          .all();
+        assert.deepEqual(rows, [{ threadId: "thread-target" }]);
+      } finally {
+        inspected.close();
+      }
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("accepts an ordered migration prefix and migrates only the staging copy", () =>
+  withTemporaryDirectory("t3-official-import-prefix-", (directory) =>
+    Effect.gen(function* () {
+      const source = NodePath.join(directory, "source.sqlite");
+      const target = NodePath.join(directory, "target.sqlite");
+      createFixtureDatabase(source, { id: "source" });
+      yield* initializeDatabaseThroughMigration(target, 34);
+
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const targetDatabase = new NodeSqlite.DatabaseSync(target, { readOnly: true });
+      const stagingDatabase = new NodeSqlite.DatabaseSync(workspace.targetStagingPath, {
+        readOnly: true,
+      });
+      try {
+        assert.equal(
+          targetDatabase.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get()
+            ?.id,
+          34,
+        );
+        assert.equal(
+          stagingDatabase.prepare("SELECT MAX(migration_id) AS id FROM effect_sql_migrations").get()
+            ?.id,
+          migrationManifest.at(-1)?.[0],
+        );
+      } finally {
+        targetDatabase.close();
+        stagingDatabase.close();
+      }
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("imports into and restores an absent first-run Turbo database", () =>
+  withTemporaryDirectory("t3-official-import-first-run-", (directory) =>
+    Effect.gen(function* () {
+      const source = NodePath.join(directory, "source.sqlite");
+      const target = NodePath.join(directory, "turbo", "state.sqlite");
+      createFixtureDatabase(source, { id: "source" });
+
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      assert.equal(workspace.targetFingerprint, null);
+      assert.isFalse(
+        yield* Effect.promise(() =>
+          NodeFSP.access(target).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      );
+      const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
+      yield* appendCanonicalEvents(workspace, events);
+      const cutover = yield* cutoverImport(workspace);
+      assert.equal(cutover.receipt.backupDatabasePath, null);
+      assert.equal((yield* readOrchestrationEvents(target)).length, 1);
+
+      const restored = yield* restoreImportBackup({
+        receiptPath: cutover.receiptPath,
+        confirmation: RESTORE_CONFIRMATION,
+      });
+      assert.equal(restored.receipt.restoredFingerprint, null);
+      assert.isFalse(
+        yield* Effect.promise(() =>
+          NodeFSP.access(target).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      );
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("holds the filesystem import lock until the protected operation completes", () =>
+  withTemporaryDirectory("t3-official-import-lock-", (directory) =>
+    Effect.gen(function* () {
+      const target = NodePath.join(directory, "state.sqlite");
+      const acquired = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* withOfficialImportLock(
+        target,
+        Deferred.succeed(acquired, undefined).pipe(Effect.andThen(Deferred.await(release))),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(acquired);
+
+      const contender = yield* withOfficialImportLock(target, Effect.void).pipe(Effect.result);
+      assert.equal(contender._tag, "Failure");
+      if (contender._tag === "Failure") {
+        assert.equal(contender.failure._tag, "OfficialImportLockError");
+      }
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      yield* withOfficialImportLock(target, Effect.void);
+    }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

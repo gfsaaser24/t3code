@@ -1,4 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
 import {
@@ -22,7 +25,14 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 
 import { migrationManifest } from "../../persistence/Migrations.ts";
+import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
 import { OrchestrationCommandReceipt } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import {
+  ImportCheckpointRefChange,
+  OfficialImportCheckpointRefError,
+  applyImportCheckpointRefChanges,
+  rollbackImportCheckpointRefChanges,
+} from "./checkpointRefs.ts";
 
 const DERIVED_TABLES = [
   "projection_pending_approvals",
@@ -34,11 +44,27 @@ const DERIVED_TABLES = [
   "projection_thread_sessions",
   "projection_threads",
   "projection_turns",
-  "provider_session_runtime",
 ] as const;
 
+const TABLE_INTRODUCTION_MIGRATION: Readonly<Record<string, number>> = {
+  effect_sql_migrations: 0,
+  orchestration_events: 1,
+  orchestration_command_receipts: 2,
+  checkpoint_diff_blobs: 3,
+  provider_session_runtime: 4,
+  projection_projects: 5,
+  projection_threads: 5,
+  projection_thread_messages: 5,
+  projection_thread_activities: 5,
+  projection_thread_sessions: 5,
+  projection_turns: 5,
+  projection_pending_approvals: 5,
+  projection_state: 5,
+  projection_thread_proposed_plans: 13,
+};
+
 const REQUIRED_COLUMNS = {
-  effect_sql_migrations: ["migration_id", "name"],
+  effect_sql_migrations: ["migration_id", "name", "created_at"],
   orchestration_events: [
     "sequence",
     "event_id",
@@ -126,37 +152,75 @@ export const ImportCheckpointDiffBlob = Schema.Struct({
 });
 export type ImportCheckpointDiffBlob = typeof ImportCheckpointDiffBlob.Type;
 
+export const ImportAttachmentChange = Schema.Struct({
+  targetPath: Schema.String,
+  stagedPath: Schema.String,
+  backupPath: Schema.NullOr(Schema.String),
+  importedFingerprint: Schema.String,
+  previousFingerprint: Schema.NullOr(Schema.String),
+});
+export type ImportAttachmentChange = typeof ImportAttachmentChange.Type;
+
+export interface StagedImportAttachment {
+  readonly sourcePath: string;
+  readonly stagedPath: string;
+  readonly targetPath: string;
+  readonly allowReplace: boolean;
+}
+
 export const ImportCutoverReceipt = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   kind: Schema.Literal("t3-turbo-official-import"),
-  status: Schema.Literals(["prepared", "complete"]),
+  status: Schema.Literals(["prepared", "complete", "rolled-back"]),
   createdAt: IsoDateTime,
   sourceDatabasePath: Schema.String,
   targetDatabasePath: Schema.String,
-  backupDatabasePath: Schema.String,
+  stagingDatabasePath: Schema.String,
+  backupDatabasePath: Schema.NullOr(Schema.String),
   backupWalPath: Schema.NullOr(Schema.String),
   backupShmPath: Schema.NullOr(Schema.String),
   sourceFingerprint: Schema.String,
-  previousTargetFingerprint: Schema.String,
+  previousTargetFingerprint: Schema.NullOr(Schema.String),
   importedTargetFingerprint: Schema.String,
-  installedAttachmentPaths: Schema.Array(Schema.String),
+  attachmentChanges: Schema.Array(ImportAttachmentChange),
+  checkpointRefChanges: Schema.Array(ImportCheckpointRefChange),
 });
 export type ImportCutoverReceipt = typeof ImportCutoverReceipt.Type;
 
+export const ImportRestoreAttachmentChange = Schema.Struct({
+  targetPath: Schema.String,
+  importedDisplacedPath: Schema.String,
+  previousBackupPath: Schema.NullOr(Schema.String),
+  importedFingerprint: Schema.String,
+  previousFingerprint: Schema.NullOr(Schema.String),
+});
+export type ImportRestoreAttachmentChange = typeof ImportRestoreAttachmentChange.Type;
+
 export const ImportRestoreReceipt = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   kind: Schema.Literal("t3-turbo-official-import-restore"),
+  status: Schema.Literals(["prepared", "complete", "rolled-back"]),
   createdAt: IsoDateTime,
   targetDatabasePath: Schema.String,
-  restoredFromDatabasePath: Schema.String,
+  restoredFromDatabasePath: Schema.NullOr(Schema.String),
+  restoredStagingPath: Schema.NullOr(Schema.String),
   displacedDatabasePath: Schema.String,
+  attachmentChanges: Schema.Array(ImportRestoreAttachmentChange),
   displacedAttachmentPaths: Schema.Array(Schema.String),
-  restoredFingerprint: Schema.String,
+  checkpointRefChanges: Schema.Array(ImportCheckpointRefChange),
+  importedTargetFingerprint: Schema.String,
+  restoredFingerprint: Schema.NullOr(Schema.String),
 });
 export type ImportRestoreReceipt = typeof ImportRestoreReceipt.Type;
 
 const encodeCutoverReceipt = Schema.encodeSync(Schema.fromJsonString(ImportCutoverReceipt));
 const encodeRestoreReceipt = Schema.encodeSync(Schema.fromJsonString(ImportRestoreReceipt));
+const decodeCutoverReceipt = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ImportCutoverReceipt),
+);
+const decodeRestoreReceipt = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ImportRestoreReceipt),
+);
 
 export interface ImportWorkspace {
   readonly directory: string;
@@ -165,7 +229,7 @@ export interface ImportWorkspace {
   readonly sourceSnapshotPath: string;
   readonly targetStagingPath: string;
   readonly sourceFingerprint: string;
-  readonly targetFingerprint: string;
+  readonly targetFingerprint: string | null;
   readonly sourceActivity: ImportActivityState;
   readonly targetActivity: ImportActivityState;
 }
@@ -245,13 +309,32 @@ export class OfficialImportConfirmationError extends Schema.TaggedErrorClass<Off
   }
 }
 
+export class OfficialImportLockError extends Schema.TaggedErrorClass<OfficialImportLockError>()(
+  "OfficialImportLockError",
+  {
+    lockPath: Schema.String,
+    ownerPid: Schema.NullOr(Schema.Int),
+    reason: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Official import is already locked at ${this.lockPath}${this.ownerPid === null ? "" : ` by PID ${this.ownerPid}`}: ${this.reason}`;
+  }
+}
+
 export type OfficialImportStorageFailure =
   | OfficialImportStorageError
   | OfficialImportSchemaMismatchError
   | OfficialImportFingerprintMismatchError
   | OfficialImportActiveStateError
   | OfficialImportLiveServerError
-  | OfficialImportConfirmationError;
+  | OfficialImportConfirmationError
+  | OfficialImportLockError
+  | OfficialImportCheckpointRefError;
+
+const isOfficialImportStorageError = Schema.is(OfficialImportStorageError);
+const isOfficialImportSchemaMismatchError = Schema.is(OfficialImportSchemaMismatchError);
+const isOfficialImportLockError = Schema.is(OfficialImportLockError);
 
 export const RESTORE_CONFIRMATION = "RESTORE T3 TURBO FROM IMPORT BACKUP";
 
@@ -263,6 +346,16 @@ const MigrationRowsSchema = Schema.Array(
 );
 const CountRowSchema = Schema.Struct({ count: NonNegativeInt });
 const ImportRuntimeState = Schema.Struct({ version: Schema.Literal(1), pid: Schema.Int });
+const decodeImportRuntimeState = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(ImportRuntimeState),
+);
+const ImportLockOwner = Schema.Struct({
+  version: Schema.Literal(1),
+  pid: Schema.Int,
+  token: Schema.String,
+});
+const encodeImportLockOwner = Schema.encodeSync(Schema.fromJsonString(ImportLockOwner));
+const decodeImportLockOwner = Schema.decodeUnknownSync(Schema.fromJsonString(ImportLockOwner));
 
 const causeMessage = (cause: unknown): string =>
   Predicate.isError(cause) ? cause.message : String(cause);
@@ -283,6 +376,129 @@ const isProcessAlive = (pid: number): boolean => {
   }
 };
 
+const errorCode = (cause: unknown): string | undefined =>
+  cause instanceof Error && "code" in cause && typeof cause.code === "string"
+    ? cause.code
+    : undefined;
+
+interface ImportLockLease {
+  readonly lockPath: string;
+  readonly token: string;
+}
+
+const readImportLockOwner = async (lockPath: string) => {
+  try {
+    const encoded = await NodeFSP.readFile(NodePath.join(lockPath, "owner.json"), "utf8");
+    return decodeImportLockOwner(encoded);
+  } catch {
+    return null;
+  }
+};
+
+const acquireImportLock = Effect.fn("acquireOfficialImportLock")(function* (
+  targetDatabasePath: string,
+) {
+  const lockPath = `${targetDatabasePath}.official-import.lock`;
+  const token = NodeCrypto.randomUUID();
+  return yield* Effect.tryPromise({
+    try: async (): Promise<ImportLockLease> => {
+      await NodeFSP.mkdir(NodePath.dirname(targetDatabasePath), { recursive: true });
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        const temporaryPath = `${lockPath}.candidate-${process.pid}-${NodeCrypto.randomUUID()}`;
+        await NodeFSP.mkdir(temporaryPath, { recursive: false });
+        try {
+          await NodeFSP.writeFile(
+            NodePath.join(temporaryPath, "owner.json"),
+            `${encodeImportLockOwner({ version: 1, pid: process.pid, token })}\n`,
+            { flag: "wx", mode: 0o600 },
+          );
+          try {
+            await NodeFSP.rename(temporaryPath, lockPath);
+            return { lockPath, token };
+          } catch (cause) {
+            if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(errorCode(cause) ?? "")) {
+              throw cause;
+            }
+          }
+        } finally {
+          await NodeFSP.rm(temporaryPath, { recursive: true, force: true });
+        }
+
+        const owner = await readImportLockOwner(lockPath);
+        if (owner === null || isProcessAlive(owner.pid)) {
+          throw new OfficialImportLockError({
+            lockPath,
+            ownerPid: owner?.pid ?? null,
+            reason:
+              owner === null ? "lock owner metadata is unavailable" : "owner is still running",
+          });
+        }
+        const stalePath = `${lockPath}.stale-${NodeCrypto.randomUUID()}`;
+        try {
+          await NodeFSP.rename(lockPath, stalePath);
+          await NodeFSP.rm(stalePath, { recursive: true, force: true });
+        } catch (cause) {
+          if (!["ENOENT", "EEXIST", "ENOTEMPTY", "EPERM"].includes(errorCode(cause) ?? "")) {
+            throw cause;
+          }
+        }
+      }
+      throw new OfficialImportLockError({
+        lockPath,
+        ownerPid: null,
+        reason: "lock acquisition did not converge",
+      });
+    },
+    catch: (cause) =>
+      isOfficialImportLockError(cause)
+        ? cause
+        : new OfficialImportLockError({
+            lockPath,
+            ownerPid: null,
+            reason: causeMessage(cause),
+          }),
+  });
+});
+
+const releaseImportLock = Effect.fn("releaseOfficialImportLock")(function* (
+  lease: ImportLockLease,
+) {
+  yield* Effect.promise(async () => {
+    const owner = await readImportLockOwner(lease.lockPath);
+    if (owner?.token !== lease.token) return;
+    const releasedPath = `${lease.lockPath}.released-${NodeCrypto.randomUUID()}`;
+    try {
+      await NodeFSP.rename(lease.lockPath, releasedPath);
+      await NodeFSP.rm(releasedPath, { recursive: true, force: true });
+    } catch (cause) {
+      if (errorCode(cause) !== "ENOENT") throw cause;
+    }
+  });
+});
+
+export const withOfficialImportLock = <A, E, R>(
+  targetDatabasePath: string,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | OfficialImportLockError, R> =>
+  Effect.acquireUseRelease(
+    acquireImportLock(targetDatabasePath),
+    () => effect,
+    (lease) => releaseImportLock(lease).pipe(Effect.ignore),
+  );
+
+export const withOfficialImportLocks = <A, E, R>(
+  databasePaths: ReadonlyArray<string>,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | OfficialImportLockError, R> => {
+  const uniquePaths = Array.from(new Set(databasePaths)).toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  return uniquePaths.reduceRight<Effect.Effect<A, E | OfficialImportLockError, R>>(
+    (protectedEffect, databasePath) => withOfficialImportLock(databasePath, protectedEffect),
+    effect,
+  );
+};
+
 /** Fail closed when a live server still owns the database described by its runtime file. */
 export const assertNoLiveImportServer = Effect.fn("assertNoLiveImportServer")(function* (
   role: "source" | "target",
@@ -301,9 +517,9 @@ export const assertNoLiveImportServer = Effect.fn("assertNoLiveImportServer")(fu
   const encoded = yield* fs
     .readFileString(runtimeStatePath)
     .pipe(Effect.mapError(storageError("read import server ownership", runtimeStatePath)));
-  const runtime = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ImportRuntimeState))(
-    encoded,
-  ).pipe(Effect.mapError(storageError("validate import server ownership", runtimeStatePath)));
+  const runtime = yield* decodeImportRuntimeState(encoded).pipe(
+    Effect.mapError(storageError("validate import server ownership", runtimeStatePath)),
+  );
   if (isProcessAlive(runtime.pid)) {
     return yield* new OfficialImportLiveServerError({ role, runtimeStatePath, pid: runtime.pid });
   }
@@ -346,9 +562,47 @@ const tableColumns = (database: NodeSqlite.DatabaseSync, table: string): Readonl
     database.prepare(`PRAGMA table_info(${sqliteIdentifier(table)})`).all(),
   ).map(({ name }) => name);
 
-const validateDatabase = (database: NodeSqlite.DatabaseSync, path: string): void => {
+const validateDatabase = (
+  database: NodeSqlite.DatabaseSync,
+  path: string,
+  requireCurrent: boolean,
+): void => {
   const names = new Set(tableNames(database));
+  if (!names.has("effect_sql_migrations")) {
+    throw new OfficialImportSchemaMismatchError({
+      path,
+      reason: "missing table effect_sql_migrations",
+    });
+  }
+  const migrations = decodeSync(
+    MigrationRowsSchema,
+    database
+      .prepare(
+        'SELECT migration_id AS "migrationId", name FROM effect_sql_migrations ORDER BY migration_id',
+      )
+      .all(),
+  );
+  const orderedPrefix =
+    migrations.length <= migrationManifest.length &&
+    migrations.every((migration, index) => {
+      const expected = migrationManifest[index];
+      return migration.migrationId === expected?.[0] && migration.name === expected?.[1];
+    });
+  if (!orderedPrefix || migrations.length < 5) {
+    throw new OfficialImportSchemaMismatchError({
+      path,
+      reason: "migration history is not a supported ordered prefix of this build",
+    });
+  }
+  if (requireCurrent && migrations.length !== migrationManifest.length) {
+    throw new OfficialImportSchemaMismatchError({
+      path,
+      reason: "staging database was not migrated to the current schema",
+    });
+  }
+  const latestMigration = migrations.at(-1)?.migrationId ?? 0;
   for (const [table, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
+    if ((TABLE_INTRODUCTION_MIGRATION[table] ?? 0) > latestMigration) continue;
     if (!names.has(table)) {
       throw new OfficialImportSchemaMismatchError({ path, reason: `missing table ${table}` });
     }
@@ -361,45 +615,36 @@ const validateDatabase = (database: NodeSqlite.DatabaseSync, path: string): void
       });
     }
   }
-
-  const migrations = decodeSync(
-    MigrationRowsSchema,
-    database
-      .prepare(
-        'SELECT migration_id AS "migrationId", name FROM effect_sql_migrations ORDER BY migration_id',
-      )
-      .all(),
-  );
-  const exact =
-    migrations.length === migrationManifest.length &&
-    migrations.every((migration, index) => {
-      const expected = migrationManifest[index];
-      return migration.migrationId === expected?.[0] && migration.name === expected?.[1];
-    });
-  if (!exact) {
-    throw new OfficialImportSchemaMismatchError({
-      path,
-      reason: "migration history differs from this build",
-    });
-  }
 };
 
 export const validateCompatibleDatabase = Effect.fn("validateCompatibleDatabase")(
-  (path: string): Effect.Effect<void, OfficialImportStorageFailure> =>
+  (
+    path: string,
+    options?: { readonly requireCurrent?: boolean },
+  ): Effect.Effect<void, OfficialImportStorageFailure> =>
     Effect.try({
       try: () => {
         const database = new NodeSqlite.DatabaseSync(path, { readOnly: true });
         try {
-          validateDatabase(database, path);
+          validateDatabase(database, path, options?.requireCurrent === true);
         } finally {
           database.close();
         }
       },
       catch: (cause) =>
-        Schema.is(OfficialImportSchemaMismatchError)(cause)
+        isOfficialImportSchemaMismatchError(cause)
           ? cause
           : storageError("validate schema", path)(cause),
     }),
+);
+
+const migrateDatabaseToCurrent = Effect.fn("migrateOfficialImportDatabaseToCurrent")(
+  (path: string) =>
+    Effect.void.pipe(
+      Effect.provide(makeSqlitePersistenceLive(path)),
+      Effect.scoped,
+      Effect.mapError(storageError("migrate import staging database", path)),
+    ),
 );
 
 const updateHashValue = (hash: ReturnType<typeof NodeCrypto.createHash>, value: unknown): void => {
@@ -518,81 +763,98 @@ const makeWorkspaceDirectory = Effect.fn("makeWorkspaceDirectory")(function* (
  * Repeating an import always starts here and produces a fresh plan against a
  * fresh target staging database.
  */
-export const prepareImportWorkspace = Effect.fn("prepareImportWorkspace")(function* (input: {
-  readonly sourceDatabasePath: string;
-  readonly targetDatabasePath: string;
-}): Effect.fn.Return<
-  ImportWorkspace,
-  OfficialImportStorageFailure,
-  FileSystem.FileSystem | Path.Path
-> {
-  const path = yield* Path.Path;
-  const sourceDatabasePath = path.resolve(input.sourceDatabasePath);
-  const targetDatabasePath = path.resolve(input.targetDatabasePath);
-  if (sourceDatabasePath.toLowerCase() === targetDatabasePath.toLowerCase()) {
-    return yield* new OfficialImportStorageError({
-      operation: "prepare import",
-      path: sourceDatabasePath,
-      reason: "source and target database paths must be different",
-    });
-  }
+const prepareImportWorkspaceWithinLock = Effect.fn("prepareImportWorkspaceWithinLock")(
+  function* (input: {
+    readonly sourceDatabasePath: string;
+    readonly targetDatabasePath: string;
+  }): Effect.fn.Return<
+    ImportWorkspace,
+    OfficialImportStorageFailure,
+    FileSystem.FileSystem | Path.Path
+  > {
+    const path = yield* Path.Path;
+    const sourceDatabasePath = path.resolve(input.sourceDatabasePath);
+    const targetDatabasePath = path.resolve(input.targetDatabasePath);
+    if (sourceDatabasePath.toLowerCase() === targetDatabasePath.toLowerCase()) {
+      return yield* new OfficialImportStorageError({
+        operation: "prepare import",
+        path: sourceDatabasePath,
+        reason: "source and target database paths must be different",
+      });
+    }
 
-  yield* validateCompatibleDatabase(sourceDatabasePath);
-  yield* validateCompatibleDatabase(targetDatabasePath);
-  const directory = yield* makeWorkspaceDirectory(targetDatabasePath);
-  const fs = yield* FileSystem.FileSystem;
-  return yield* Effect.gen(function* () {
-    const sourceSnapshotPath = path.join(directory, "official-source.sqlite");
-    const targetStagingPath = path.join(directory, "turbo-target-staging.sqlite");
+    yield* validateCompatibleDatabase(sourceDatabasePath);
+    const fs = yield* FileSystem.FileSystem;
+    const targetExists = yield* fs
+      .exists(targetDatabasePath)
+      .pipe(Effect.mapError(storageError("inspect target database", targetDatabasePath)));
+    if (targetExists) yield* validateCompatibleDatabase(targetDatabasePath);
+    const directory = yield* makeWorkspaceDirectory(targetDatabasePath);
+    return yield* Effect.gen(function* () {
+      const sourceSnapshotPath = path.join(directory, "official-source.sqlite");
+      const targetStagingPath = path.join(directory, "turbo-target-staging.sqlite");
 
-    yield* snapshotDatabase(sourceDatabasePath, sourceSnapshotPath);
-    yield* snapshotDatabase(targetDatabasePath, targetStagingPath);
-    yield* validateCompatibleDatabase(sourceSnapshotPath);
-    yield* validateCompatibleDatabase(targetStagingPath);
+      yield* snapshotDatabase(sourceDatabasePath, sourceSnapshotPath);
+      if (targetExists) yield* snapshotDatabase(targetDatabasePath, targetStagingPath);
 
-    const [sourceFingerprint, liveSourceFingerprint, targetFingerprint, liveTargetFingerprint] =
-      yield* Effect.all([
+      const [sourceFingerprint, liveSourceFingerprint] = yield* Effect.all([
         fingerprintDatabase(sourceSnapshotPath),
         fingerprintDatabase(sourceDatabasePath),
-        fingerprintDatabase(targetStagingPath),
-        fingerprintDatabase(targetDatabasePath),
       ]);
-    if (sourceFingerprint !== liveSourceFingerprint) {
-      return yield* new OfficialImportFingerprintMismatchError({
-        role: "source",
-        expected: sourceFingerprint,
-        actual: liveSourceFingerprint,
-      });
-    }
-    if (targetFingerprint !== liveTargetFingerprint) {
-      return yield* new OfficialImportFingerprintMismatchError({
-        role: "target",
-        expected: targetFingerprint,
-        actual: liveTargetFingerprint,
-      });
-    }
+      if (sourceFingerprint !== liveSourceFingerprint) {
+        return yield* new OfficialImportFingerprintMismatchError({
+          role: "source",
+          expected: sourceFingerprint,
+          actual: liveSourceFingerprint,
+        });
+      }
+      let targetFingerprint: string | null = null;
+      if (targetExists) {
+        const [snapshotFingerprint, liveTargetFingerprint] = yield* Effect.all([
+          fingerprintDatabase(targetStagingPath),
+          fingerprintDatabase(targetDatabasePath),
+        ]);
+        if (snapshotFingerprint !== liveTargetFingerprint) {
+          return yield* new OfficialImportFingerprintMismatchError({
+            role: "target",
+            expected: snapshotFingerprint,
+            actual: liveTargetFingerprint,
+          });
+        }
+        targetFingerprint = snapshotFingerprint;
+      }
 
-    const [sourceActivity, targetActivity] = yield* Effect.all([
-      readImportActivityState(sourceSnapshotPath),
-      readImportActivityState(targetStagingPath),
-    ]);
-    return {
-      directory,
-      sourceDatabasePath,
-      targetDatabasePath,
-      sourceSnapshotPath,
-      targetStagingPath,
-      sourceFingerprint,
-      targetFingerprint,
-      sourceActivity,
-      targetActivity,
-    };
-  }).pipe(
-    Effect.onError(() =>
-      fs.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore),
-    ),
-  );
-});
+      yield* Effect.all([
+        migrateDatabaseToCurrent(sourceSnapshotPath),
+        migrateDatabaseToCurrent(targetStagingPath),
+      ]);
+      yield* Effect.all([
+        validateCompatibleDatabase(sourceSnapshotPath, { requireCurrent: true }),
+        validateCompatibleDatabase(targetStagingPath, { requireCurrent: true }),
+      ]);
+
+      const [sourceActivity, targetActivity] = yield* Effect.all([
+        readImportActivityState(sourceSnapshotPath),
+        readImportActivityState(targetStagingPath),
+      ]);
+      return {
+        directory,
+        sourceDatabasePath,
+        targetDatabasePath,
+        sourceSnapshotPath,
+        targetStagingPath,
+        sourceFingerprint,
+        targetFingerprint,
+        sourceActivity,
+        targetActivity,
+      };
+    }).pipe(
+      Effect.onError(() =>
+        fs.remove(directory, { recursive: true, force: true }).pipe(Effect.ignore),
+      ),
+    );
+  },
+);
 
 export const assertWorkspaceReadyForApply = Effect.fn("assertWorkspaceReadyForApply")(function* (
   workspace: ImportWorkspace,
@@ -601,11 +863,13 @@ export const assertWorkspaceReadyForApply = Effect.fn("assertWorkspaceReadyForAp
     assertNoLiveImportServer("source", workspace.sourceDatabasePath),
     assertNoLiveImportServer("target", workspace.targetDatabasePath),
   ]);
-  const [sourceFingerprint, targetFingerprint, sourceActivity, targetActivity] = yield* Effect.all([
+  const fs = yield* FileSystem.FileSystem;
+  const targetExists = yield* fs
+    .exists(workspace.targetDatabasePath)
+    .pipe(Effect.mapError(storageError("inspect target database", workspace.targetDatabasePath)));
+  const [sourceFingerprint, sourceActivity] = yield* Effect.all([
     fingerprintDatabase(workspace.sourceDatabasePath),
-    fingerprintDatabase(workspace.targetDatabasePath),
     readImportActivityState(workspace.sourceDatabasePath),
-    readImportActivityState(workspace.targetDatabasePath),
   ]);
   if (sourceFingerprint !== workspace.sourceFingerprint) {
     return yield* new OfficialImportFingerprintMismatchError({
@@ -614,15 +878,43 @@ export const assertWorkspaceReadyForApply = Effect.fn("assertWorkspaceReadyForAp
       actual: sourceFingerprint,
     });
   }
-  if (targetFingerprint !== workspace.targetFingerprint) {
+  if (workspace.targetFingerprint === null && targetExists) {
+    const targetFingerprint = yield* fingerprintDatabase(workspace.targetDatabasePath);
     return yield* new OfficialImportFingerprintMismatchError({
       role: "target",
-      expected: workspace.targetFingerprint,
+      expected: "absent",
       actual: targetFingerprint,
     });
   }
+  if (workspace.targetFingerprint !== null && !targetExists) {
+    return yield* new OfficialImportFingerprintMismatchError({
+      role: "target",
+      expected: workspace.targetFingerprint,
+      actual: "absent",
+    });
+  }
+  const targetActivity = targetExists
+    ? yield* readImportActivityState(workspace.targetDatabasePath)
+    : {
+        activeProviderSessions: 0,
+        activeProjectedSessions: 0,
+        activeTurns: 0,
+        pendingApprovals: 0,
+      };
+  if (workspace.targetFingerprint !== null) {
+    const targetFingerprint = yield* fingerprintDatabase(workspace.targetDatabasePath);
+    if (targetFingerprint !== workspace.targetFingerprint) {
+      return yield* new OfficialImportFingerprintMismatchError({
+        role: "target",
+        expected: workspace.targetFingerprint,
+        actual: targetFingerprint,
+      });
+    }
+  }
   yield* failWhenActive("source", workspace.sourceDatabasePath, sourceActivity);
-  yield* failWhenActive("target", workspace.targetDatabasePath, targetActivity);
+  if (targetExists) {
+    yield* failWhenActive("target", workspace.targetDatabasePath, targetActivity);
+  }
 });
 
 export const readOrchestrationEvents = Effect.fn("readOrchestrationEvents")(
@@ -763,6 +1055,35 @@ export const deleteCanonicalThreadStreams = Effect.fn("deleteCanonicalThreadStre
             }
             database.exec("COMMIT");
             return deletedEvents;
+          } catch (cause) {
+            database.exec("ROLLBACK");
+            throw cause;
+          }
+        }),
+);
+
+/** Imported/replaced threads intentionally start without resumable provider bindings. */
+export const deleteProviderSessionRuntimeBindings = Effect.fn(
+  "deleteProviderSessionRuntimeBindings",
+)(
+  (
+    stagingPath: string,
+    threadIds: ReadonlyArray<ThreadId>,
+  ): Effect.Effect<number, OfficialImportStorageError> =>
+    threadIds.length === 0
+      ? Effect.succeed(0)
+      : withDatabase(stagingPath, false, "clear imported provider bindings", (database) => {
+          const statement = database.prepare(
+            "DELETE FROM provider_session_runtime WHERE thread_id = ?",
+          );
+          let deleted = 0;
+          database.exec("BEGIN IMMEDIATE");
+          try {
+            for (const threadId of threadIds) {
+              deleted += Number(statement.run(threadId).changes);
+            }
+            database.exec("COMMIT");
+            return deleted;
           } catch (cause) {
             database.exec("ROLLBACK");
             throw cause;
@@ -933,7 +1254,7 @@ export const rebuildCopiedCommandReceipts = Effect.fn("rebuildCopiedCommandRecei
     }),
 );
 
-/** Remove all read models and provider bindings before replaying every canonical event. */
+/** Remove read models before replaying canonical events; retained provider bindings survive. */
 export const clearDerivedImportState = Effect.fn("clearDerivedImportState")(
   (stagingPath: string): Effect.Effect<void, OfficialImportStorageError> =>
     withDatabase(stagingPath, false, "clear derived import state", (database) => {
@@ -1013,111 +1334,232 @@ const moveDatabaseFiles = Effect.fn("moveDatabaseFiles")(function* (
   return yield* result.failure;
 });
 
+const fingerprintFile = async (path: string): Promise<string> =>
+  `sha256:${NodeCrypto.createHash("sha256")
+    .update(await NodeFSP.readFile(path))
+    .digest("hex")}`;
+
+const prepareAttachmentChanges = Effect.fn("prepareOfficialImportAttachmentChanges")(function* (
+  attachments: ReadonlyArray<StagedImportAttachment>,
+  suffix: string,
+) {
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const changes: Array<ImportAttachmentChange> = [];
+      for (const attachment of attachments) {
+        const importedFingerprint = await fingerprintFile(attachment.stagedPath);
+        let previousFingerprint: string | null = null;
+        try {
+          previousFingerprint = await fingerprintFile(attachment.targetPath);
+        } catch (cause) {
+          if (errorCode(cause) !== "ENOENT") throw cause;
+        }
+        if (previousFingerprint === importedFingerprint) continue;
+        if (previousFingerprint !== null && !attachment.allowReplace) {
+          throw new OfficialImportStorageError({
+            operation: "prepare attachment cutover",
+            path: attachment.targetPath,
+            reason: "a different target file already uses this attachment id",
+          });
+        }
+        changes.push({
+          targetPath: attachment.targetPath,
+          stagedPath: attachment.stagedPath,
+          backupPath:
+            previousFingerprint === null
+              ? null
+              : `${attachment.targetPath}.import-backup-${suffix}`,
+          importedFingerprint,
+          previousFingerprint,
+        });
+      }
+      return changes;
+    },
+    catch: (cause) =>
+      isOfficialImportStorageError(cause)
+        ? cause
+        : storageError(
+            "prepare attachment cutover",
+            attachments.at(0)?.targetPath ?? "unknown",
+          )(cause),
+  });
+});
+
+const applyAttachmentChanges = Effect.fn("applyOfficialImportAttachmentChanges")(function* (
+  changes: ReadonlyArray<ImportAttachmentChange>,
+) {
+  yield* Effect.tryPromise({
+    try: async () => {
+      for (const change of changes) {
+        await NodeFSP.mkdir(NodePath.dirname(change.targetPath), { recursive: true });
+        if (change.backupPath !== null) {
+          await NodeFSP.rename(change.targetPath, change.backupPath);
+        }
+        await NodeFSP.rename(change.stagedPath, change.targetPath);
+      }
+    },
+    catch: storageError("apply attachment cutover", changes.at(0)?.targetPath ?? "unknown"),
+  });
+});
+
+const rollbackAttachmentChanges = Effect.fn("rollbackOfficialImportAttachmentChanges")(function* (
+  changes: ReadonlyArray<ImportAttachmentChange>,
+) {
+  yield* Effect.tryPromise({
+    try: async () => {
+      for (const change of changes.toReversed()) {
+        let targetFingerprint: string | null = null;
+        try {
+          targetFingerprint = await fingerprintFile(change.targetPath);
+        } catch (cause) {
+          if (errorCode(cause) !== "ENOENT") throw cause;
+        }
+        if (targetFingerprint === change.importedFingerprint) {
+          await NodeFSP.mkdir(NodePath.dirname(change.stagedPath), { recursive: true });
+          try {
+            await NodeFSP.rename(change.targetPath, change.stagedPath);
+          } catch (cause) {
+            if (errorCode(cause) !== "EEXIST") throw cause;
+            await NodeFSP.rm(change.targetPath);
+          }
+          targetFingerprint = null;
+        }
+        if (targetFingerprint !== null && targetFingerprint !== change.previousFingerprint) {
+          throw new Error(`attachment changed after cutover: ${change.targetPath}`);
+        }
+        if (change.backupPath !== null) {
+          try {
+            await NodeFSP.rename(change.backupPath, change.targetPath);
+          } catch (cause) {
+            if (errorCode(cause) !== "ENOENT") throw cause;
+            if (targetFingerprint !== change.previousFingerprint) throw cause;
+          }
+        }
+      }
+    },
+    catch: storageError("roll back attachment cutover", changes.at(0)?.targetPath ?? "unknown"),
+  });
+});
+
+const rollbackPreparedCutover = Effect.fn("rollbackPreparedOfficialImportCutover")(function* (
+  receipt: ImportCutoverReceipt,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const targetExists = yield* fs.exists(receipt.targetDatabasePath);
+  if (targetExists) {
+    const targetFingerprint = yield* fingerprintDatabase(receipt.targetDatabasePath);
+    if (targetFingerprint === receipt.importedTargetFingerprint) {
+      const stagingExists = yield* fs.exists(receipt.stagingDatabasePath);
+      const destination = stagingExists
+        ? `${receipt.stagingDatabasePath}.recovered-${NodeCrypto.randomUUID()}`
+        : receipt.stagingDatabasePath;
+      yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
+      yield* moveDatabaseFiles(receipt.targetDatabasePath, destination);
+    } else if (targetFingerprint !== receipt.previousTargetFingerprint) {
+      return yield* new OfficialImportStorageError({
+        operation: "recover interrupted import",
+        path: receipt.targetDatabasePath,
+        reason: "target database no longer matches either journaled fingerprint",
+      });
+    }
+  }
+  if (receipt.backupDatabasePath !== null && (yield* fs.exists(receipt.backupDatabasePath))) {
+    if (yield* fs.exists(receipt.targetDatabasePath)) {
+      const current = yield* fingerprintDatabase(receipt.targetDatabasePath);
+      if (current !== receipt.previousTargetFingerprint) {
+        return yield* new OfficialImportStorageError({
+          operation: "recover interrupted import",
+          path: receipt.targetDatabasePath,
+          reason: "cannot restore the journaled backup over a changed target",
+        });
+      }
+    } else {
+      yield* moveDatabaseFiles(receipt.backupDatabasePath, receipt.targetDatabasePath);
+    }
+  }
+  yield* rollbackImportCheckpointRefChanges(receipt.checkpointRefChanges);
+  yield* rollbackAttachmentChanges(receipt.attachmentChanges);
+});
+
 /**
  * Replace the target only after source/target freshness and quiescence checks.
  * The old database and any WAL/SHM siblings are moved to a timestamped backup.
  */
-export const cutoverImport = Effect.fn("cutoverImport")(function* (
+export const cutoverImportWithinLock = Effect.fn("cutoverImportWithinLock")(function* (
   workspace: ImportWorkspace,
-  installedAttachmentPaths: ReadonlyArray<string> = [],
+  options: {
+    readonly attachments?: ReadonlyArray<StagedImportAttachment>;
+    readonly checkpointRefChanges?: ReadonlyArray<ImportCheckpointRefChange>;
+  } = {},
 ): Effect.fn.Return<
   { readonly receipt: ImportCutoverReceipt; readonly receiptPath: string },
   OfficialImportStorageFailure,
   FileSystem.FileSystem | Path.Path
 > {
   yield* assertWorkspaceReadyForApply(workspace);
-  yield* validateCompatibleDatabase(workspace.targetStagingPath);
+  yield* validateCompatibleDatabase(workspace.targetStagingPath, { requireCurrent: true });
   const importedTargetFingerprint = yield* fingerprintDatabase(workspace.targetStagingPath);
   const createdAt = DateTime.formatIso(yield* DateTime.now);
   const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
-  const backupDatabasePath = `${workspace.targetDatabasePath}.backup-${suffix}`;
+  const backupDatabasePath =
+    workspace.targetFingerprint === null
+      ? null
+      : `${workspace.targetDatabasePath}.backup-${suffix}`;
   const receiptPath = `${workspace.targetDatabasePath}.import-${suffix}.json`;
+  const attachmentChanges = yield* prepareAttachmentChanges(options.attachments ?? [], suffix);
   const preparedReceipt: ImportCutoverReceipt = {
-    version: 1,
+    version: 2,
     kind: "t3-turbo-official-import",
     status: "prepared",
     createdAt,
     sourceDatabasePath: workspace.sourceDatabasePath,
     targetDatabasePath: workspace.targetDatabasePath,
+    stagingDatabasePath: workspace.targetStagingPath,
     backupDatabasePath,
     backupWalPath: null,
     backupShmPath: null,
     sourceFingerprint: workspace.sourceFingerprint,
     previousTargetFingerprint: workspace.targetFingerprint,
     importedTargetFingerprint,
-    installedAttachmentPaths,
+    attachmentChanges,
+    checkpointRefChanges: options.checkpointRefChanges ?? [],
   };
 
-  const fs = yield* FileSystem.FileSystem;
-  const moved = yield* moveDatabaseFiles(workspace.targetDatabasePath, backupDatabasePath);
-  const installResult = yield* Effect.result(
-    fs.rename(workspace.targetStagingPath, workspace.targetDatabasePath),
+  yield* writeJsonAtomic(receiptPath, encodeCutoverReceipt(preparedReceipt)).pipe(
+    Effect.mapError(storageError("persist prepared import receipt", receiptPath)),
   );
-  if (installResult._tag === "Failure") {
-    const restoreResult = yield* Effect.result(
-      moveDatabaseFiles(backupDatabasePath, workspace.targetDatabasePath),
-    );
-    if (restoreResult._tag === "Failure") {
-      return yield* new OfficialImportStorageError({
-        operation: "roll back failed import install",
-        path: workspace.targetDatabasePath,
-        reason: `${causeMessage(installResult.failure)}; backup restore also failed: ${causeMessage(restoreResult.failure)}`,
-      });
-    }
+  const result = yield* Effect.result(
+    Effect.gen(function* () {
+      yield* applyAttachmentChanges(attachmentChanges);
+      yield* applyImportCheckpointRefChanges(preparedReceipt.checkpointRefChanges);
+      const moved =
+        backupDatabasePath === null
+          ? null
+          : yield* moveDatabaseFiles(workspace.targetDatabasePath, backupDatabasePath);
+      yield* moveDatabaseFiles(workspace.targetStagingPath, workspace.targetDatabasePath);
+      const receipt: ImportCutoverReceipt = {
+        ...preparedReceipt,
+        status: "complete",
+        backupWalPath: moved?.walPath ?? null,
+        backupShmPath: moved?.shmPath ?? null,
+      };
+      yield* writeJsonAtomic(receiptPath, encodeCutoverReceipt(receipt)).pipe(
+        Effect.mapError(storageError("persist complete import receipt", receiptPath)),
+      );
+      return { receipt, receiptPath };
+    }),
+  );
+  if (result._tag === "Success") return result.success;
+  const rollback = yield* Effect.result(rollbackPreparedCutover(preparedReceipt));
+  if (rollback._tag === "Failure") {
     return yield* new OfficialImportStorageError({
-      operation: "atomically install imported database",
+      operation: "roll back interrupted import",
       path: workspace.targetDatabasePath,
-      reason: causeMessage(installResult.failure),
+      reason: `${causeMessage(result.failure)}; rollback also failed: ${causeMessage(rollback.failure)}`,
     });
   }
-
-  const receipt: ImportCutoverReceipt = {
-    ...preparedReceipt,
-    status: "complete",
-    backupWalPath: moved.walPath,
-    backupShmPath: moved.shmPath,
-  };
-  const receiptResult = yield* Effect.result(
-    writeJsonAtomic(receiptPath, encodeCutoverReceipt(receipt)),
-  );
-  if (receiptResult._tag === "Success") return { receipt, receiptPath };
-
-  // Receipt persistence is part of cutover. If it fails, put the imported
-  // database back in the guarded workspace and restore the exact old target.
-  const failedImportedPath = `${workspace.targetStagingPath}.receipt-failed-${NodeCrypto.randomUUID()}`;
-  const displaceImportedResult = yield* Effect.result(
-    moveDatabaseFiles(workspace.targetDatabasePath, failedImportedPath),
-  );
-  if (displaceImportedResult._tag === "Failure") {
-    return yield* new OfficialImportStorageError({
-      operation: "roll back import after receipt failure",
-      path: workspace.targetDatabasePath,
-      reason: `${causeMessage(receiptResult.failure)}; imported database could not be displaced: ${causeMessage(displaceImportedResult.failure)}`,
-    });
-  }
-
-  const restoreResult = yield* Effect.result(
-    moveDatabaseFiles(backupDatabasePath, workspace.targetDatabasePath),
-  );
-  if (restoreResult._tag === "Failure") {
-    const retainImportedResult = yield* Effect.result(
-      moveDatabaseFiles(failedImportedPath, workspace.targetDatabasePath),
-    );
-    return yield* new OfficialImportStorageError({
-      operation: "roll back import after receipt failure",
-      path: workspace.targetDatabasePath,
-      reason:
-        retainImportedResult._tag === "Success"
-          ? `${causeMessage(receiptResult.failure)}; old target restore failed, so the complete imported database was retained: ${causeMessage(restoreResult.failure)}`
-          : `${causeMessage(receiptResult.failure)}; old target restore failed: ${causeMessage(restoreResult.failure)}; imported database recovery also failed: ${causeMessage(retainImportedResult.failure)}`,
-    });
-  }
-
-  return yield* new OfficialImportStorageError({
-    operation: "persist import recovery receipt",
-    path: receiptPath,
-    reason: causeMessage(receiptResult.failure),
-  });
+  return yield* result.failure;
 });
 
 const readCompleteCutoverReceipt = Effect.fn("readCompleteCutoverReceipt")(function* (
@@ -1127,9 +1569,9 @@ const readCompleteCutoverReceipt = Effect.fn("readCompleteCutoverReceipt")(funct
   const encoded = yield* fs
     .readFileString(receiptPath)
     .pipe(Effect.mapError(storageError("read import receipt", receiptPath)));
-  const receipt = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ImportCutoverReceipt))(
-    encoded,
-  ).pipe(Effect.mapError(storageError("decode import receipt", receiptPath)));
+  const receipt = yield* decodeCutoverReceipt(encoded).pipe(
+    Effect.mapError(storageError("decode import receipt", receiptPath)),
+  );
   if (receipt.status !== "complete") {
     return yield* new OfficialImportStorageError({
       operation: "decode import receipt",
@@ -1145,95 +1587,317 @@ const readCompleteCutoverReceipt = Effect.fn("readCompleteCutoverReceipt")(funct
  * call prepareImportWorkspace and produce a fresh plan; stale plans are never
  * replayed implicitly.
  */
-export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (input: {
-  readonly receiptPath: string;
-  readonly confirmation: string;
-}): Effect.fn.Return<
-  { readonly receipt: ImportRestoreReceipt; readonly receiptPath: string },
-  OfficialImportStorageFailure,
-  FileSystem.FileSystem | Path.Path
-> {
-  if (input.confirmation !== RESTORE_CONFIRMATION) {
-    return yield* new OfficialImportConfirmationError({ expected: RESTORE_CONFIRMATION });
-  }
-  const cutoverReceipt = yield* readCompleteCutoverReceipt(input.receiptPath);
-  const path = yield* Path.Path;
-  yield* validateCompatibleDatabase(cutoverReceipt.backupDatabasePath);
-  yield* assertNoLiveImportServer("target", cutoverReceipt.targetDatabasePath);
-  const currentActivity = yield* readImportActivityState(cutoverReceipt.targetDatabasePath);
-  yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
+const applyRestoreAttachmentChanges = Effect.fn("applyOfficialImportRestoreAttachmentChanges")(
+  function* (changes: ReadonlyArray<ImportRestoreAttachmentChange>) {
+    yield* Effect.tryPromise({
+      try: async () => {
+        for (const change of changes) {
+          try {
+            const current = await fingerprintFile(change.targetPath);
+            if (current !== change.importedFingerprint) {
+              throw new Error(`imported attachment changed before restore: ${change.targetPath}`);
+            }
+            await NodeFSP.rename(change.targetPath, change.importedDisplacedPath);
+          } catch (cause) {
+            if (errorCode(cause) !== "ENOENT") throw cause;
+          }
+          if (change.previousBackupPath !== null) {
+            await NodeFSP.rename(change.previousBackupPath, change.targetPath);
+          }
+        }
+      },
+      catch: storageError("restore imported attachments", changes.at(0)?.targetPath ?? "unknown"),
+    });
+  },
+);
 
-  const createdAt = DateTime.formatIso(yield* DateTime.now);
-  const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
-  const restoredStagingPath = `${cutoverReceipt.targetDatabasePath}.restore-staging-${suffix}`;
-  const displacedDatabasePath = `${cutoverReceipt.targetDatabasePath}.restore-backup-${suffix}`;
-  const restoreReceiptPath = `${cutoverReceipt.targetDatabasePath}.restore-${suffix}.json`;
-  yield* snapshotDatabase(cutoverReceipt.backupDatabasePath, restoredStagingPath);
-  yield* validateCompatibleDatabase(restoredStagingPath);
-  const restoredFingerprint = yield* fingerprintDatabase(restoredStagingPath);
-  const attachmentRoot = path.resolve(
-    path.dirname(cutoverReceipt.targetDatabasePath),
-    "attachments",
-  );
-  for (const attachmentPath of cutoverReceipt.installedAttachmentPaths) {
-    const relative = path.relative(attachmentRoot, path.resolve(attachmentPath));
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+const rollbackRestoreAttachmentChanges = Effect.fn(
+  "rollbackOfficialImportRestoreAttachmentChanges",
+)(function* (changes: ReadonlyArray<ImportRestoreAttachmentChange>) {
+  yield* Effect.tryPromise({
+    try: async () => {
+      for (const change of changes.toReversed()) {
+        let targetFingerprint: string | null = null;
+        try {
+          targetFingerprint = await fingerprintFile(change.targetPath);
+        } catch (cause) {
+          if (errorCode(cause) !== "ENOENT") throw cause;
+        }
+        if (
+          change.previousBackupPath !== null &&
+          targetFingerprint === change.previousFingerprint
+        ) {
+          await NodeFSP.rename(change.targetPath, change.previousBackupPath);
+          targetFingerprint = null;
+        }
+        try {
+          await NodeFSP.rename(change.importedDisplacedPath, change.targetPath);
+          targetFingerprint = change.importedFingerprint;
+        } catch (cause) {
+          if (errorCode(cause) !== "ENOENT") throw cause;
+        }
+        if (targetFingerprint !== change.importedFingerprint) {
+          throw new Error(`cannot recover imported attachment: ${change.targetPath}`);
+        }
+      }
+    },
+    catch: storageError(
+      "roll back imported attachment restore",
+      changes.at(0)?.targetPath ?? "unknown",
+    ),
+  });
+});
+
+const rollbackPreparedRestore = Effect.fn("rollbackPreparedOfficialImportRestore")(function* (
+  receipt: ImportRestoreReceipt,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* fs.exists(receipt.displacedDatabasePath)) {
+    if (yield* fs.exists(receipt.targetDatabasePath)) {
+      const targetFingerprint = yield* fingerprintDatabase(receipt.targetDatabasePath);
+      if (targetFingerprint !== receipt.restoredFingerprint) {
+        return yield* new OfficialImportStorageError({
+          operation: "recover interrupted import restore",
+          path: receipt.targetDatabasePath,
+          reason: "restored target changed before the restore receipt committed",
+        });
+      }
+      const destination =
+        receipt.restoredStagingPath !== null && !(yield* fs.exists(receipt.restoredStagingPath))
+          ? receipt.restoredStagingPath
+          : `${receipt.targetDatabasePath}.restore-recovered-${NodeCrypto.randomUUID()}`;
+      yield* moveDatabaseFiles(receipt.targetDatabasePath, destination);
+    }
+    yield* moveDatabaseFiles(receipt.displacedDatabasePath, receipt.targetDatabasePath);
+  } else {
+    const current = yield* fingerprintDatabase(receipt.targetDatabasePath);
+    if (current !== receipt.importedTargetFingerprint) {
       return yield* new OfficialImportStorageError({
-        operation: "validate imported attachment receipt",
-        path: attachmentPath,
-        reason: "attachment path is outside the target attachments directory",
+        operation: "recover interrupted import restore",
+        path: receipt.targetDatabasePath,
+        reason: "current imported target is unavailable",
       });
     }
   }
+  yield* applyImportCheckpointRefChanges(receipt.checkpointRefChanges);
+  yield* rollbackRestoreAttachmentChanges(receipt.attachmentChanges);
+});
 
-  return yield* Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const displacedAttachments: Array<readonly [string, string]> = [];
-    for (const attachmentPath of cutoverReceipt.installedAttachmentPaths) {
-      if (!(yield* fs.exists(attachmentPath))) continue;
-      const backupPath = `${attachmentPath}.restore-backup-${suffix}`;
-      const result = yield* Effect.result(fs.rename(attachmentPath, backupPath));
-      if (result._tag === "Failure") {
-        for (const [originalPath, displacedPath] of displacedAttachments.toReversed()) {
-          yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
-        }
-        return yield* result.failure;
-      }
-      displacedAttachments.push([attachmentPath, backupPath]);
+export const restoreImportBackupWithinLock = Effect.fn("restoreImportBackupWithinLock")(
+  function* (input: {
+    readonly receiptPath: string;
+    readonly confirmation: string;
+  }): Effect.fn.Return<
+    { readonly receipt: ImportRestoreReceipt; readonly receiptPath: string },
+    OfficialImportStorageFailure,
+    FileSystem.FileSystem | Path.Path
+  > {
+    if (input.confirmation !== RESTORE_CONFIRMATION) {
+      return yield* new OfficialImportConfirmationError({ expected: RESTORE_CONFIRMATION });
     }
-    const moveTargetResult = yield* Effect.result(
-      moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath),
+    const cutoverReceipt = yield* readCompleteCutoverReceipt(input.receiptPath);
+    const path = yield* Path.Path;
+    if (cutoverReceipt.backupDatabasePath !== null) {
+      yield* validateCompatibleDatabase(cutoverReceipt.backupDatabasePath);
+    }
+    yield* assertNoLiveImportServer("target", cutoverReceipt.targetDatabasePath);
+    const currentActivity = yield* readImportActivityState(cutoverReceipt.targetDatabasePath);
+    yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
+    const currentFingerprint = yield* fingerprintDatabase(cutoverReceipt.targetDatabasePath);
+    if (currentFingerprint !== cutoverReceipt.importedTargetFingerprint) {
+      return yield* new OfficialImportFingerprintMismatchError({
+        role: "target",
+        expected: cutoverReceipt.importedTargetFingerprint,
+        actual: currentFingerprint,
+      });
+    }
+
+    const createdAt = DateTime.formatIso(yield* DateTime.now);
+    const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
+    const restoredStagingPath = `${cutoverReceipt.targetDatabasePath}.restore-staging-${suffix}`;
+    const displacedDatabasePath = `${cutoverReceipt.targetDatabasePath}.restore-backup-${suffix}`;
+    const restoreReceiptPath = `${cutoverReceipt.targetDatabasePath}.restore-${suffix}.json`;
+    if (cutoverReceipt.backupDatabasePath !== null) {
+      yield* snapshotDatabase(cutoverReceipt.backupDatabasePath, restoredStagingPath);
+      yield* validateCompatibleDatabase(restoredStagingPath);
+    }
+    const restoredFingerprint =
+      cutoverReceipt.backupDatabasePath === null
+        ? null
+        : yield* fingerprintDatabase(restoredStagingPath);
+    const attachmentRoot = path.resolve(
+      path.dirname(cutoverReceipt.targetDatabasePath),
+      "attachments",
     );
-    if (moveTargetResult._tag === "Failure") {
-      for (const [originalPath, displacedPath] of displacedAttachments.toReversed()) {
-        yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
+    for (const change of cutoverReceipt.attachmentChanges) {
+      const relative = path.relative(attachmentRoot, path.resolve(change.targetPath));
+      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+        return yield* new OfficialImportStorageError({
+          operation: "validate imported attachment receipt",
+          path: change.targetPath,
+          reason: "attachment path is outside the target attachments directory",
+        });
       }
-      return yield* moveTargetResult.failure;
     }
-    const restoreResult = yield* Effect.result(
-      fs.rename(restoredStagingPath, cutoverReceipt.targetDatabasePath),
-    );
-    if (restoreResult._tag === "Failure") {
-      yield* moveDatabaseFiles(displacedDatabasePath, cutoverReceipt.targetDatabasePath);
-      for (const [originalPath, displacedPath] of displacedAttachments.toReversed()) {
-        yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
-      }
-      return yield* restoreResult.failure;
-    }
-    const receipt: ImportRestoreReceipt = {
-      version: 1,
+    const attachmentChanges = cutoverReceipt.attachmentChanges.map((change) => ({
+      targetPath: change.targetPath,
+      importedDisplacedPath: `${change.targetPath}.restore-backup-${suffix}`,
+      previousBackupPath: change.backupPath,
+      importedFingerprint: change.importedFingerprint,
+      previousFingerprint: change.previousFingerprint,
+    }));
+    const preparedReceipt: ImportRestoreReceipt = {
+      version: 2,
       kind: "t3-turbo-official-import-restore",
+      status: "prepared",
       createdAt,
       targetDatabasePath: cutoverReceipt.targetDatabasePath,
       restoredFromDatabasePath: cutoverReceipt.backupDatabasePath,
+      restoredStagingPath: cutoverReceipt.backupDatabasePath === null ? null : restoredStagingPath,
       displacedDatabasePath,
-      displacedAttachmentPaths: displacedAttachments.map(([, backupPath]) => backupPath),
+      attachmentChanges,
+      displacedAttachmentPaths: attachmentChanges.map((change) => change.importedDisplacedPath),
+      checkpointRefChanges: cutoverReceipt.checkpointRefChanges,
+      importedTargetFingerprint: cutoverReceipt.importedTargetFingerprint,
       restoredFingerprint,
     };
-    yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(receipt));
-    return { receipt, receiptPath: restoreReceiptPath };
-  }).pipe(
-    Effect.mapError(storageError("restore import backup", cutoverReceipt.targetDatabasePath)),
+    yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(preparedReceipt)).pipe(
+      Effect.mapError(storageError("persist prepared restore receipt", restoreReceiptPath)),
+    );
+    const result = yield* Effect.result(
+      Effect.gen(function* () {
+        yield* applyRestoreAttachmentChanges(attachmentChanges);
+        yield* rollbackImportCheckpointRefChanges(cutoverReceipt.checkpointRefChanges);
+        yield* moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath);
+        if (cutoverReceipt.backupDatabasePath !== null) {
+          yield* moveDatabaseFiles(restoredStagingPath, cutoverReceipt.targetDatabasePath);
+        }
+        const receipt: ImportRestoreReceipt = { ...preparedReceipt, status: "complete" };
+        yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(receipt)).pipe(
+          Effect.mapError(storageError("persist complete restore receipt", restoreReceiptPath)),
+        );
+        return { receipt, receiptPath: restoreReceiptPath };
+      }),
+    );
+    if (result._tag === "Success") return result.success;
+    const rollback = yield* Effect.result(rollbackPreparedRestore(preparedReceipt));
+    if (rollback._tag === "Failure") {
+      return yield* new OfficialImportStorageError({
+        operation: "roll back import restore",
+        path: cutoverReceipt.targetDatabasePath,
+        reason: `${causeMessage(result.failure)}; rollback also failed: ${causeMessage(rollback.failure)}`,
+      });
+    }
+    return yield* result.failure;
+  },
+);
+
+export const recoverOfficialImportTransactionsWithinLock = Effect.fn(
+  "recoverOfficialImportTransactionsWithinLock",
+)(function* (targetDatabasePath: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const resolvedTarget = path.resolve(targetDatabasePath);
+  const directory = path.dirname(resolvedTarget);
+  const basename = path.basename(resolvedTarget);
+  const entries = yield* fs
+    .readDirectory(directory)
+    .pipe(Effect.mapError(storageError("scan official import receipts", directory)));
+  for (const entry of entries.toSorted()) {
+    const isCutover = entry.startsWith(`${basename}.import-`) && entry.endsWith(".json");
+    const isRestore = entry.startsWith(`${basename}.restore-`) && entry.endsWith(".json");
+    if (!isCutover && !isRestore) continue;
+    const receiptPath = path.join(directory, entry);
+    const encoded = yield* fs
+      .readFileString(receiptPath)
+      .pipe(Effect.mapError(storageError("read official import recovery receipt", receiptPath)));
+    if (isCutover) {
+      const receipt = yield* decodeCutoverReceipt(encoded).pipe(
+        Effect.mapError(storageError("decode official import recovery receipt", receiptPath)),
+      );
+      if (
+        path.resolve(receipt.targetDatabasePath) !== resolvedTarget ||
+        receipt.status !== "prepared"
+      ) {
+        continue;
+      }
+      yield* rollbackPreparedCutover(receipt);
+      yield* writeJsonAtomic(
+        receiptPath,
+        encodeCutoverReceipt({ ...receipt, status: "rolled-back" }),
+      ).pipe(Effect.mapError(storageError("complete import recovery receipt", receiptPath)));
+      continue;
+    }
+    const receipt = yield* decodeRestoreReceipt(encoded).pipe(
+      Effect.mapError(storageError("decode official import restore receipt", receiptPath)),
+    );
+    if (
+      path.resolve(receipt.targetDatabasePath) !== resolvedTarget ||
+      receipt.status !== "prepared"
+    ) {
+      continue;
+    }
+    yield* rollbackPreparedRestore(receipt);
+    yield* writeJsonAtomic(
+      receiptPath,
+      encodeRestoreReceipt({ ...receipt, status: "rolled-back" }),
+    ).pipe(Effect.mapError(storageError("complete import restore recovery", receiptPath)));
+  }
+});
+
+export const recoverOfficialImportTransactions = Effect.fn("recoverOfficialImportTransactions")(
+  function* (targetDatabasePath: string) {
+    const path = yield* Path.Path;
+    const resolvedTarget = path.resolve(targetDatabasePath);
+    return yield* withOfficialImportLock(
+      resolvedTarget,
+      recoverOfficialImportTransactionsWithinLock(resolvedTarget),
+    );
+  },
+);
+
+export const prepareImportWorkspace = Effect.fn("prepareImportWorkspace")(function* (input: {
+  readonly sourceDatabasePath: string;
+  readonly targetDatabasePath: string;
+}) {
+  const path = yield* Path.Path;
+  const resolvedTarget = path.resolve(input.targetDatabasePath);
+  return yield* withOfficialImportLock(
+    resolvedTarget,
+    recoverOfficialImportTransactionsWithinLock(resolvedTarget).pipe(
+      Effect.andThen(prepareImportWorkspaceWithinLock(input)),
+    ),
+  );
+});
+
+export const cutoverImport = Effect.fn("cutoverImport")(function* (
+  workspace: ImportWorkspace,
+  options: {
+    readonly attachments?: ReadonlyArray<StagedImportAttachment>;
+    readonly checkpointRefChanges?: ReadonlyArray<ImportCheckpointRefChange>;
+  } = {},
+) {
+  return yield* withOfficialImportLocks(
+    [workspace.sourceDatabasePath, workspace.targetDatabasePath],
+    recoverOfficialImportTransactionsWithinLock(workspace.targetDatabasePath).pipe(
+      Effect.andThen(cutoverImportWithinLock(workspace, options)),
+    ),
+  );
+});
+
+export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (input: {
+  readonly receiptPath: string;
+  readonly confirmation: string;
+}) {
+  if (input.confirmation !== RESTORE_CONFIRMATION) {
+    return yield* new OfficialImportConfirmationError({ expected: RESTORE_CONFIRMATION });
+  }
+  const receipt = yield* readCompleteCutoverReceipt(input.receiptPath);
+  return yield* withOfficialImportLock(
+    receipt.targetDatabasePath,
+    recoverOfficialImportTransactionsWithinLock(receipt.targetDatabasePath).pipe(
+      Effect.andThen(restoreImportBackupWithinLock(input)),
+    ),
   );
 });
 

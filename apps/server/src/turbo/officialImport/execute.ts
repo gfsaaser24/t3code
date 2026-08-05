@@ -1,5 +1,4 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
@@ -20,6 +19,10 @@ import * as Schema from "effect/Schema";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import type { OrchestrationCommandReceipt } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
+  prepareImportCheckpointRefChanges,
+  type ImportCheckpointRefInput,
+} from "./checkpointRefs.ts";
+import {
   OfficialImportCollisionChoice,
   OfficialImportIdMap,
   OfficialImportPlanSchema,
@@ -37,14 +40,17 @@ import {
   assertWorkspaceReadyForApply,
   clearDerivedImportState,
   copyCheckpointDiffBlobs,
-  cutoverImport,
+  cutoverImportWithinLock,
   deleteCanonicalThreadStreams,
-  fingerprintDatabase,
+  deleteProviderSessionRuntimeBindings,
   prepareImportWorkspace,
   readCommandReceipts,
   readOrchestrationEvents,
+  recoverOfficialImportTransactionsWithinLock,
   rebuildCopiedCommandReceipts,
   removeImportWorkspace,
+  withOfficialImportLocks,
+  type StagedImportAttachment,
   type ImportWorkspace,
   type OfficialImportStorageFailure,
 } from "./storage.ts";
@@ -56,7 +62,7 @@ export const ImportWorkspaceSchema = Schema.Struct({
   sourceSnapshotPath: Schema.String,
   targetStagingPath: Schema.String,
   sourceFingerprint: Schema.String,
-  targetFingerprint: Schema.String,
+  targetFingerprint: Schema.NullOr(Schema.String),
   sourceActivity: ImportActivityState,
   targetActivity: ImportActivityState,
 });
@@ -116,6 +122,8 @@ export class OfficialImportAttachmentError extends Schema.TaggedErrorClass<Offic
     return `${this.operation} failed for attachment ${NodePath.basename(this.targetPath)}: ${this.reason}`;
   }
 }
+
+const isOfficialImportAttachmentError = Schema.is(OfficialImportAttachmentError);
 
 export type OfficialImportExecutionFailure =
   | OfficialImportDatasetError
@@ -247,12 +255,6 @@ const selectEventsToImport = (input: {
   return selected.toSorted((left, right) => left.sequence - right.sequence);
 };
 
-interface StagedAttachment {
-  readonly sourcePath: string;
-  readonly stagedPath: string;
-  readonly targetPath: string;
-}
-
 const fileExists = async (path: string): Promise<boolean> => {
   try {
     await NodeFSP.access(path);
@@ -262,16 +264,12 @@ const fileExists = async (path: string): Promise<boolean> => {
   }
 };
 
-const hashFile = async (path: string): Promise<string> =>
-  `sha256:${NodeCrypto.createHash("sha256")
-    .update(await NodeFSP.readFile(path))
-    .digest("hex")}`;
-
 const collectAttachmentPairs = (input: {
   readonly sourceEvents: ReadonlyArray<OrchestrationEvent>;
   readonly transformedEvents: ReadonlyArray<OrchestrationEvent>;
   readonly workspace: ImportWorkspace;
-}): ReadonlyArray<StagedAttachment> => {
+  readonly plan: OfficialImportPlan;
+}): ReadonlyArray<StagedImportAttachment> => {
   const sourceAttachmentsDir = NodePath.join(
     NodePath.dirname(input.workspace.sourceDatabasePath),
     "attachments",
@@ -281,7 +279,10 @@ const collectAttachmentPairs = (input: {
     "attachments",
   );
   const stagingAttachmentsDir = NodePath.join(input.workspace.directory, "attachments");
-  const pairs = new Map<string, StagedAttachment>();
+  const pairs = new Map<string, StagedImportAttachment>();
+  const actionByThreadId = new Map<string, OfficialImportPlan["threads"][number]["action"]>(
+    input.plan.threads.map((thread) => [thread.sourceThreadId, thread.action] as const),
+  );
 
   for (let index = 0; index < input.sourceEvents.length; index += 1) {
     const sourceEvent = input.sourceEvents[index];
@@ -308,14 +309,48 @@ const collectAttachmentPairs = (input: {
         sourcePath: NodePath.join(sourceAttachmentsDir, sourceRelativePath),
         stagedPath: NodePath.join(stagingAttachmentsDir, targetRelativePath),
         targetPath: NodePath.join(targetAttachmentsDir, targetRelativePath),
+        allowReplace: actionByThreadId.get(sourceEvent.aggregateId) === "replace",
       });
     }
   }
   return Array.from(pairs.values());
 };
 
+const collectCheckpointRefInputs = (input: {
+  readonly source: OfficialImportDataset;
+  readonly sourceEvents: ReadonlyArray<OrchestrationEvent>;
+  readonly transformedEvents: ReadonlyArray<OrchestrationEvent>;
+}): ReadonlyArray<ImportCheckpointRefInput> => {
+  const threadById = new Map<string, OfficialImportDataset["threads"][number]>(
+    input.source.threads.map((thread) => [thread.threadId, thread]),
+  );
+  const projectById = new Map(input.source.projects.map((project) => [project.projectId, project]));
+  const refs: Array<ImportCheckpointRefInput> = [];
+  for (let index = 0; index < input.sourceEvents.length; index += 1) {
+    const sourceEvent = input.sourceEvents[index];
+    const transformedEvent = input.transformedEvents[index];
+    if (
+      sourceEvent?.type !== "thread.turn-diff-completed" ||
+      transformedEvent?.type !== "thread.turn-diff-completed" ||
+      sourceEvent.payload.checkpointRef === transformedEvent.payload.checkpointRef
+    ) {
+      continue;
+    }
+    const thread = threadById.get(sourceEvent.aggregateId);
+    const project = thread ? projectById.get(thread.projectId) : undefined;
+    const created = thread?.events.find((event) => event.type === "thread.created");
+    if (!thread || !project || created?.type !== "thread.created") continue;
+    refs.push({
+      repositoryPath: created.payload.worktreePath ?? project.workspaceRoot,
+      sourceRef: sourceEvent.payload.checkpointRef,
+      targetRef: transformedEvent.payload.checkpointRef,
+    });
+  }
+  return refs;
+};
+
 const stageAttachments = Effect.fn("stageOfficialImportAttachments")(function* (
-  attachments: ReadonlyArray<StagedAttachment>,
+  attachments: ReadonlyArray<StagedImportAttachment>,
 ) {
   yield* Effect.tryPromise({
     try: async () => {
@@ -328,21 +363,6 @@ const stageAttachments = Effect.fn("stageOfficialImportAttachments")(function* (
             reason: "source file is missing",
           });
         }
-        if (await fileExists(attachment.targetPath)) {
-          const [sourceHash, targetHash] = await Promise.all([
-            hashFile(attachment.sourcePath),
-            hashFile(attachment.targetPath),
-          ]);
-          if (sourceHash !== targetHash) {
-            throw new OfficialImportAttachmentError({
-              operation: "check target collision",
-              sourcePath: attachment.sourcePath,
-              targetPath: attachment.targetPath,
-              reason: "a different target file already uses this attachment id",
-            });
-          }
-          continue;
-        }
         await NodeFSP.mkdir(NodePath.dirname(attachment.stagedPath), { recursive: true });
         await NodeFSP.copyFile(
           attachment.sourcePath,
@@ -352,7 +372,7 @@ const stageAttachments = Effect.fn("stageOfficialImportAttachments")(function* (
       }
     },
     catch: (cause) =>
-      Schema.is(OfficialImportAttachmentError)(cause)
+      isOfficialImportAttachmentError(cause)
         ? cause
         : new OfficialImportAttachmentError({
             operation: "stage",
@@ -362,44 +382,6 @@ const stageAttachments = Effect.fn("stageOfficialImportAttachments")(function* (
           }),
   });
 });
-
-const installAttachments = Effect.fn("installOfficialImportAttachments")(function* (
-  attachments: ReadonlyArray<StagedAttachment>,
-) {
-  return yield* Effect.tryPromise({
-    try: async () => {
-      const installed: Array<string> = [];
-      try {
-        for (const attachment of attachments) {
-          if (!(await fileExists(attachment.stagedPath))) continue;
-          await NodeFSP.mkdir(NodePath.dirname(attachment.targetPath), { recursive: true });
-          await NodeFSP.copyFile(
-            attachment.stagedPath,
-            attachment.targetPath,
-            NodeFS.constants.COPYFILE_EXCL,
-          );
-          installed.push(attachment.targetPath);
-        }
-        return installed;
-      } catch (cause) {
-        await Promise.all(installed.map((path) => NodeFSP.rm(path, { force: true })));
-        throw cause;
-      }
-    },
-    catch: (cause) =>
-      new OfficialImportAttachmentError({
-        operation: "install",
-        sourcePath: attachments.at(0)?.sourcePath ?? "unknown",
-        targetPath: attachments.at(0)?.targetPath ?? "unknown",
-        reason: String(cause),
-      }),
-  });
-});
-
-const cleanupInstalledAttachments = (paths: ReadonlyArray<string>) =>
-  Effect.promise(() => Promise.all(paths.map((path) => NodeFSP.rm(path, { force: true })))).pipe(
-    Effect.ignore,
-  );
 
 const remapReceipts = (
   receipts: ReadonlyArray<OrchestrationCommandReceipt>,
@@ -411,98 +393,111 @@ const remapReceipts = (
   }));
 
 /** Apply a previously reviewed plan to staging, verify projections, then atomically cut over. */
+const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialImportWithinLock")(
+  function* (
+    prepared: PreparedOfficialImport,
+  ): Effect.fn.Return<
+    OfficialImportApplyResult,
+    OfficialImportExecutionFailure,
+    FileSystem.FileSystem | Path.Path
+  > {
+    const unresolved = prepared.plan.threads
+      .filter((thread) => thread.action === "needs-choice")
+      .map((thread) => thread.sourceThreadId);
+    if (unresolved.length > 0) {
+      return yield* new OfficialImportUnresolvedCollisionsError({ threadIds: unresolved });
+    }
+
+    yield* assertWorkspaceReadyForApply(prepared.workspace);
+    const [sourceEvents, targetEvents, sourceReceipts] = yield* Effect.all([
+      readOrchestrationEvents(prepared.workspace.sourceSnapshotPath),
+      readOrchestrationEvents(prepared.workspace.targetStagingPath),
+      readCommandReceipts(prepared.workspace.sourceSnapshotPath),
+    ]);
+    const source = buildOfficialImportDataset(sourceEvents);
+    const target = buildOfficialImportDataset(targetEvents);
+    yield* Effect.sync(() => assertOfficialImportPlanFresh(prepared.plan, source, target));
+
+    const selectedSourceEvents = selectEventsToImport({ source, plan: prepared.plan });
+    const transformedEvents = selectedSourceEvents.map((event) =>
+      transformOfficialImportEvent(event, prepared.plan.idMap),
+    );
+    const attachments = collectAttachmentPairs({
+      sourceEvents: selectedSourceEvents,
+      transformedEvents,
+      workspace: prepared.workspace,
+      plan: prepared.plan,
+    });
+    yield* stageAttachments(attachments);
+    const checkpointRefChanges = yield* prepareImportCheckpointRefChanges(
+      collectCheckpointRefInputs({ source, sourceEvents: selectedSourceEvents, transformedEvents }),
+    );
+
+    const replacedThreadIds = prepared.plan.threads.flatMap((thread) =>
+      thread.action === "replace" && thread.matchedTargetThreadId !== null
+        ? [thread.matchedTargetThreadId]
+        : [],
+    );
+    yield* deleteCanonicalThreadStreams(prepared.workspace.targetStagingPath, replacedThreadIds);
+    const importedThreadIds = prepared.plan.threads.flatMap((thread) =>
+      thread.action === "import" || thread.action === "replace" || thread.action === "clone"
+        ? [thread.targetThreadId]
+        : [],
+    );
+    yield* deleteProviderSessionRuntimeBindings(
+      prepared.workspace.targetStagingPath,
+      importedThreadIds,
+    );
+    const sequenceMap = yield* appendCanonicalEvents(prepared.workspace, transformedEvents);
+    const copiedReceiptCount = yield* rebuildCopiedCommandReceipts(
+      prepared.workspace.targetStagingPath,
+      remapReceipts(sourceReceipts, prepared.plan.idMap),
+      sequenceMap,
+    );
+
+    const copiedThreadIds = new Map(
+      prepared.plan.threads.flatMap((thread) =>
+        thread.action === "noop" || thread.action === "skip" || thread.action === "needs-choice"
+          ? []
+          : [[thread.sourceThreadId, thread.targetThreadId] as const],
+      ),
+    );
+    const copiedCheckpointDiffCount = yield* copyCheckpointDiffBlobs({
+      sourcePath: prepared.workspace.sourceSnapshotPath,
+      stagingPath: prepared.workspace.targetStagingPath,
+      threadIdMap: copiedThreadIds,
+    });
+    yield* clearDerivedImportState(prepared.workspace.targetStagingPath);
+    yield* rebuildOfficialImportProjections({
+      databasePath: prepared.workspace.targetStagingPath,
+      sandboxBaseDir: NodePath.join(prepared.workspace.directory, "projection-sandbox"),
+    });
+
+    const cutover = yield* cutoverImportWithinLock(prepared.workspace, {
+      attachments,
+      checkpointRefChanges,
+    });
+    yield* removeImportWorkspace(prepared.workspace).pipe(Effect.ignore);
+
+    return {
+      version: 1,
+      kind: "t3-turbo-official-import-result",
+      receiptPath: cutover.receiptPath,
+      importedEventCount: transformedEvents.length,
+      copiedReceiptCount,
+      copiedCheckpointDiffCount,
+      copiedAttachmentCount: cutover.receipt.attachmentChanges.length,
+    };
+  },
+);
+
 export const applyPreparedOfficialImport = Effect.fn("applyPreparedOfficialImport")(function* (
   prepared: PreparedOfficialImport,
-): Effect.fn.Return<
-  OfficialImportApplyResult,
-  OfficialImportExecutionFailure,
-  FileSystem.FileSystem | Path.Path
-> {
-  const unresolved = prepared.plan.threads
-    .filter((thread) => thread.action === "needs-choice")
-    .map((thread) => thread.sourceThreadId);
-  if (unresolved.length > 0) {
-    return yield* new OfficialImportUnresolvedCollisionsError({ threadIds: unresolved });
-  }
-
-  yield* assertWorkspaceReadyForApply(prepared.workspace);
-  const [sourceEvents, targetEvents, sourceReceipts] = yield* Effect.all([
-    readOrchestrationEvents(prepared.workspace.sourceSnapshotPath),
-    readOrchestrationEvents(prepared.workspace.targetStagingPath),
-    readCommandReceipts(prepared.workspace.sourceSnapshotPath),
-  ]);
-  const source = buildOfficialImportDataset(sourceEvents);
-  const target = buildOfficialImportDataset(targetEvents);
-  yield* Effect.sync(() => assertOfficialImportPlanFresh(prepared.plan, source, target));
-
-  const selectedSourceEvents = selectEventsToImport({ source, plan: prepared.plan });
-  const transformedEvents = selectedSourceEvents.map((event) =>
-    transformOfficialImportEvent(event, prepared.plan.idMap),
-  );
-  const attachments = collectAttachmentPairs({
-    sourceEvents: selectedSourceEvents,
-    transformedEvents,
-    workspace: prepared.workspace,
-  });
-  yield* stageAttachments(attachments);
-
-  const replacedThreadIds = prepared.plan.threads.flatMap((thread) =>
-    thread.action === "replace" && thread.matchedTargetThreadId !== null
-      ? [thread.matchedTargetThreadId]
-      : [],
-  );
-  yield* deleteCanonicalThreadStreams(prepared.workspace.targetStagingPath, replacedThreadIds);
-  const sequenceMap = yield* appendCanonicalEvents(prepared.workspace, transformedEvents);
-  const copiedReceiptCount = yield* rebuildCopiedCommandReceipts(
-    prepared.workspace.targetStagingPath,
-    remapReceipts(sourceReceipts, prepared.plan.idMap),
-    sequenceMap,
-  );
-
-  const copiedThreadIds = new Map(
-    prepared.plan.threads.flatMap((thread) =>
-      thread.action === "noop" || thread.action === "skip" || thread.action === "needs-choice"
-        ? []
-        : [[thread.sourceThreadId, thread.targetThreadId] as const],
+) {
+  return yield* withOfficialImportLocks(
+    [prepared.workspace.sourceDatabasePath, prepared.workspace.targetDatabasePath],
+    recoverOfficialImportTransactionsWithinLock(prepared.workspace.targetDatabasePath).pipe(
+      Effect.andThen(applyPreparedOfficialImportWithinLock(prepared)),
     ),
   );
-  const copiedCheckpointDiffCount = yield* copyCheckpointDiffBlobs({
-    sourcePath: prepared.workspace.sourceSnapshotPath,
-    stagingPath: prepared.workspace.targetStagingPath,
-    threadIdMap: copiedThreadIds,
-  });
-  yield* clearDerivedImportState(prepared.workspace.targetStagingPath);
-  yield* rebuildOfficialImportProjections({
-    databasePath: prepared.workspace.targetStagingPath,
-    sandboxBaseDir: NodePath.join(prepared.workspace.directory, "projection-sandbox"),
-  });
-
-  const installedAttachments = yield* installAttachments(attachments);
-  const cutoverResult = yield* Effect.result(
-    cutoverImport(prepared.workspace, installedAttachments),
-  );
-  if (cutoverResult._tag === "Failure") {
-    const liveTargetFingerprint = yield* Effect.result(
-      fingerprintDatabase(prepared.workspace.targetDatabasePath),
-    );
-    if (
-      liveTargetFingerprint._tag === "Success" &&
-      liveTargetFingerprint.success === prepared.workspace.targetFingerprint
-    ) {
-      yield* cleanupInstalledAttachments(installedAttachments);
-    }
-    return yield* cutoverResult.failure;
-  }
-  const cutover = cutoverResult.success;
-  yield* removeImportWorkspace(prepared.workspace).pipe(Effect.ignore);
-
-  return {
-    version: 1,
-    kind: "t3-turbo-official-import-result",
-    receiptPath: cutover.receiptPath,
-    importedEventCount: transformedEvents.length,
-    copiedReceiptCount,
-    copiedCheckpointDiffCount,
-    copiedAttachmentCount: installedAttachments.length,
-  };
 });
