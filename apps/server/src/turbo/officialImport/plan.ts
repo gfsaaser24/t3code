@@ -321,8 +321,16 @@ const safeAttachmentThreadSegment = (threadId: ThreadId): string => {
 };
 
 const defaultAllocateIdentity: AllocateOfficialImportIdentity = (input) => {
+  const digest = sha256(
+    canonicalJson({
+      kind: input.kind,
+      sourceId: input.sourceId,
+      targetThreadId: input.targetThreadId ?? null,
+      checkpointTurnCount: input.checkpointTurnCount ?? null,
+    }),
+  );
   if (input.kind === "attachment" && input.targetThreadId) {
-    return `${safeAttachmentThreadSegment(input.targetThreadId)}-${NodeCrypto.randomUUID()}`;
+    return `${safeAttachmentThreadSegment(input.targetThreadId)}-${digest.slice(0, 32)}`;
   }
   if (
     input.kind === "checkpoint-ref" &&
@@ -332,7 +340,7 @@ const defaultAllocateIdentity: AllocateOfficialImportIdentity = (input) => {
     const threadSegment = Buffer.from(input.targetThreadId, "utf8").toString("base64url");
     return `refs/t3/checkpoints/${threadSegment}/turn/${input.checkpointTurnCount}`;
   }
-  return NodeCrypto.randomUUID();
+  return `official-import-${input.kind}-${digest.slice(0, 32)}`;
 };
 
 type MutableIdMap = {
@@ -372,7 +380,7 @@ const allocateMapped = <Id extends string>(input: {
   }
 };
 
-const identity = <Id extends string>(value: string): Id => value as Id;
+const makeIdentity = <Id extends string>(value: string): Id => value as Id;
 
 const remap = <Id extends string>(map: Readonly<Record<string, Id>>, value: Id): Id =>
   map[value] ?? value;
@@ -463,6 +471,18 @@ export const transformOfficialImportEvent = (
         payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
       };
     case "thread.unarchived":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
+    case "thread.pinned":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
+    case "thread.unpinned":
       return {
         ...event,
         ...base,
@@ -665,85 +685,48 @@ export const transformOfficialImportEvent = (
   }
 };
 
-const allocateCloneEventIdentities = (input: {
-  readonly events: ReadonlyArray<OrchestrationEvent>;
-  readonly sourceThreadId: ThreadId;
-  readonly targetThreadId: ThreadId;
-  readonly idMap: OfficialImportIdMap;
-  readonly allocate: AllocateOfficialImportIdentity;
-}): void => {
-  const idMap = asMutableIdMap(input.idMap);
-  const allocate = input.allocate;
-  const mapEvent = (sourceId: EventId) =>
-    allocateMapped({ map: idMap.eventIds, sourceId, kind: "event", allocate, make: EventId.make });
-  const mapCommand = (sourceId: CommandId) =>
-    allocateMapped({
-      map: idMap.commandIds,
-      sourceId,
-      kind: "command",
-      allocate,
-      make: CommandId.make,
-    });
-  const mapMessage = (sourceId: MessageId) =>
-    allocateMapped({
-      map: idMap.messageIds,
-      sourceId,
-      kind: "message",
-      allocate,
-      make: MessageId.make,
-    });
-  const mapTurn = (sourceId: TurnId) =>
-    allocateMapped({ map: idMap.turnIds, sourceId, kind: "turn", allocate, make: TurnId.make });
-  const mapApproval = (sourceId: ApprovalRequestId) =>
-    allocateMapped({
-      map: idMap.approvalRequestIds,
-      sourceId,
-      kind: "approval-request",
-      allocate,
-      make: ApprovalRequestId.make,
-    });
-  const mapPlan = (sourceId: OrchestrationProposedPlanId) =>
-    allocateMapped({
-      map: idMap.proposedPlanIds,
-      sourceId,
-      kind: "proposed-plan",
-      allocate,
-      make: OrchestrationProposedPlanId.make,
-    });
-  const mapActivity = (sourceId: EventId) =>
-    allocateMapped({
-      map: idMap.activityIds,
-      sourceId,
-      kind: "activity",
-      allocate,
-      make: EventId.make,
-    });
-  const mapAttachment = (sourceId: ChatAttachmentId) =>
-    allocateMapped({
-      map: idMap.attachmentIds,
-      sourceId,
-      kind: "attachment",
-      allocate,
-      targetThreadId: input.targetThreadId,
-      make: identity<ChatAttachmentId>,
-    });
-  const mapCheckpoint = (sourceId: CheckpointRef, checkpointTurnCount: number) =>
-    allocateMapped({
-      map: idMap.checkpointRefs,
-      sourceId,
-      kind: "checkpoint-ref",
-      allocate,
-      targetThreadId: input.targetThreadId,
-      checkpointTurnCount,
-      make: CheckpointRef.make,
-    });
+type OfficialImportEventIdentity =
+  | { readonly kind: "event"; readonly sourceId: EventId }
+  | { readonly kind: "command"; readonly sourceId: CommandId }
+  | { readonly kind: "message"; readonly sourceId: MessageId }
+  | { readonly kind: "turn"; readonly sourceId: TurnId }
+  | { readonly kind: "activity"; readonly sourceId: EventId }
+  | { readonly kind: "approval-request"; readonly sourceId: ApprovalRequestId }
+  | { readonly kind: "proposed-plan"; readonly sourceId: OrchestrationProposedPlanId }
+  | { readonly kind: "attachment"; readonly sourceId: ChatAttachmentId }
+  | {
+      readonly kind: "checkpoint-ref";
+      readonly sourceId: CheckpointRef;
+      readonly checkpointTurnCount: number;
+    };
 
-  for (const event of input.events) {
-    mapEvent(event.eventId);
-    if (event.commandId) mapCommand(event.commandId);
-    if (event.causationEventId) mapEvent(event.causationEventId);
-    if (event.correlationId) mapCommand(event.correlationId);
-    if (event.metadata.requestId) mapApproval(event.metadata.requestId);
+type OfficialImportEventIdentityKind = OfficialImportEventIdentity["kind"];
+type OfficialImportIdentityCounts = Record<OfficialImportEventIdentityKind, Map<string, number>>;
+
+const emptyIdentityCounts = (): OfficialImportIdentityCounts => ({
+  event: new Map(),
+  command: new Map(),
+  message: new Map(),
+  turn: new Map(),
+  activity: new Map(),
+  "approval-request": new Map(),
+  "proposed-plan": new Map(),
+  attachment: new Map(),
+  "checkpoint-ref": new Map(),
+});
+
+const visitOfficialImportEventIdentities = (
+  events: ReadonlyArray<OrchestrationEvent>,
+  visit: (identity: OfficialImportEventIdentity) => void,
+): void => {
+  for (const event of events) {
+    visit({ kind: "event", sourceId: event.eventId });
+    if (event.commandId) visit({ kind: "command", sourceId: event.commandId });
+    if (event.causationEventId) visit({ kind: "event", sourceId: event.causationEventId });
+    if (event.correlationId) visit({ kind: "command", sourceId: event.correlationId });
+    if (event.metadata.requestId) {
+      visit({ kind: "approval-request", sourceId: event.metadata.requestId });
+    }
     switch (event.type) {
       case "project.created":
       case "project.meta-updated":
@@ -752,6 +735,8 @@ const allocateCloneEventIdentities = (input: {
       case "thread.deleted":
       case "thread.archived":
       case "thread.unarchived":
+      case "thread.pinned":
+      case "thread.unpinned":
       case "thread.settled":
       case "thread.unsettled":
       case "thread.snoozed":
@@ -763,39 +748,57 @@ const allocateCloneEventIdentities = (input: {
       case "thread.session-stop-requested":
         break;
       case "thread.meta-updated":
-        if (event.payload.titleRegeneration) mapCommand(event.payload.titleRegeneration.requestId);
+        if (event.payload.titleRegeneration) {
+          visit({ kind: "command", sourceId: event.payload.titleRegeneration.requestId });
+        }
         break;
       case "thread.message-sent":
-        mapMessage(event.payload.messageId);
-        if (event.payload.turnId) mapTurn(event.payload.turnId);
-        event.payload.attachments?.forEach((attachment) => mapAttachment(attachment.id));
+        visit({ kind: "message", sourceId: event.payload.messageId });
+        if (event.payload.turnId) visit({ kind: "turn", sourceId: event.payload.turnId });
+        event.payload.attachments?.forEach((attachment) =>
+          visit({ kind: "attachment", sourceId: attachment.id }),
+        );
         break;
       case "thread.turn-start-requested":
-        mapMessage(event.payload.messageId);
-        if (event.payload.sourceProposedPlan) mapPlan(event.payload.sourceProposedPlan.planId);
+        visit({ kind: "message", sourceId: event.payload.messageId });
+        if (event.payload.sourceProposedPlan) {
+          visit({ kind: "proposed-plan", sourceId: event.payload.sourceProposedPlan.planId });
+        }
         break;
       case "thread.turn-interrupt-requested":
-        if (event.payload.turnId) mapTurn(event.payload.turnId);
+        if (event.payload.turnId) visit({ kind: "turn", sourceId: event.payload.turnId });
         break;
       case "thread.approval-response-requested":
       case "thread.user-input-response-requested":
-        mapApproval(event.payload.requestId);
+        visit({ kind: "approval-request", sourceId: event.payload.requestId });
         break;
       case "thread.session-set":
-        if (event.payload.session.activeTurnId) mapTurn(event.payload.session.activeTurnId);
+        if (event.payload.session.activeTurnId) {
+          visit({ kind: "turn", sourceId: event.payload.session.activeTurnId });
+        }
         break;
       case "thread.proposed-plan-upserted":
-        mapPlan(event.payload.proposedPlan.id);
-        if (event.payload.proposedPlan.turnId) mapTurn(event.payload.proposedPlan.turnId);
+        visit({ kind: "proposed-plan", sourceId: event.payload.proposedPlan.id });
+        if (event.payload.proposedPlan.turnId) {
+          visit({ kind: "turn", sourceId: event.payload.proposedPlan.turnId });
+        }
         break;
       case "thread.turn-diff-completed":
-        mapTurn(event.payload.turnId);
-        mapCheckpoint(event.payload.checkpointRef, event.payload.checkpointTurnCount);
-        if (event.payload.assistantMessageId) mapMessage(event.payload.assistantMessageId);
+        visit({ kind: "turn", sourceId: event.payload.turnId });
+        visit({
+          kind: "checkpoint-ref",
+          sourceId: event.payload.checkpointRef,
+          checkpointTurnCount: event.payload.checkpointTurnCount,
+        });
+        if (event.payload.assistantMessageId) {
+          visit({ kind: "message", sourceId: event.payload.assistantMessageId });
+        }
         break;
       case "thread.activity-appended":
-        mapActivity(event.payload.activity.id);
-        if (event.payload.activity.turnId) mapTurn(event.payload.activity.turnId);
+        visit({ kind: "activity", sourceId: event.payload.activity.id });
+        if (event.payload.activity.turnId) {
+          visit({ kind: "turn", sourceId: event.payload.activity.turnId });
+        }
         break;
       default: {
         const unhandled: never = event;
@@ -803,6 +806,128 @@ const allocateCloneEventIdentities = (input: {
       }
     }
   }
+};
+
+const collectOfficialImportIdentityCounts = (
+  events: ReadonlyArray<OrchestrationEvent>,
+): OfficialImportIdentityCounts => {
+  const counts = emptyIdentityCounts();
+  visitOfficialImportEventIdentities(events, ({ kind, sourceId }) => {
+    const kindCounts = counts[kind];
+    kindCounts.set(sourceId, (kindCounts.get(sourceId) ?? 0) + 1);
+  });
+  return counts;
+};
+
+const identityCollidesOutside = (
+  allTargetCounts: OfficialImportIdentityCounts,
+  excludedTargetCounts: OfficialImportIdentityCounts | undefined,
+  kind: OfficialImportEventIdentityKind,
+  sourceId: string,
+): boolean =>
+  (allTargetCounts[kind].get(sourceId) ?? 0) > (excludedTargetCounts?.[kind].get(sourceId) ?? 0);
+
+const allocateEventIdentities = (input: {
+  readonly events: ReadonlyArray<OrchestrationEvent>;
+  readonly targetThreadId?: ThreadId;
+  readonly idMap: OfficialImportIdMap;
+  readonly allocate: AllocateOfficialImportIdentity;
+  readonly shouldAllocate: (kind: OfficialImportEventIdentityKind, sourceId: string) => boolean;
+}): void => {
+  const idMap = asMutableIdMap(input.idMap);
+  const targetThreadId = input.targetThreadId;
+  const shared = { allocate: input.allocate, ...(targetThreadId ? { targetThreadId } : {}) };
+  visitOfficialImportEventIdentities(input.events, (identity) => {
+    if (!input.shouldAllocate(identity.kind, identity.sourceId)) return;
+    switch (identity.kind) {
+      case "event":
+        allocateMapped({
+          ...shared,
+          map: idMap.eventIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: EventId.make,
+        });
+        break;
+      case "command":
+        allocateMapped({
+          ...shared,
+          map: idMap.commandIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: CommandId.make,
+        });
+        break;
+      case "message":
+        allocateMapped({
+          ...shared,
+          map: idMap.messageIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: MessageId.make,
+        });
+        break;
+      case "turn":
+        allocateMapped({
+          ...shared,
+          map: idMap.turnIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: TurnId.make,
+        });
+        break;
+      case "activity":
+        allocateMapped({
+          ...shared,
+          map: idMap.activityIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: EventId.make,
+        });
+        break;
+      case "approval-request":
+        allocateMapped({
+          ...shared,
+          map: idMap.approvalRequestIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: ApprovalRequestId.make,
+        });
+        break;
+      case "proposed-plan":
+        allocateMapped({
+          ...shared,
+          map: idMap.proposedPlanIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: OrchestrationProposedPlanId.make,
+        });
+        break;
+      case "attachment":
+        allocateMapped({
+          ...shared,
+          map: idMap.attachmentIds,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          make: makeIdentity<ChatAttachmentId>,
+        });
+        break;
+      case "checkpoint-ref":
+        allocateMapped({
+          ...shared,
+          map: idMap.checkpointRefs,
+          sourceId: identity.sourceId,
+          kind: identity.kind,
+          checkpointTurnCount: identity.checkpointTurnCount,
+          make: CheckpointRef.make,
+        });
+        break;
+      default: {
+        const unhandled: never = identity;
+        return unhandled;
+      }
+    }
+  });
 };
 
 const indexUnique = <Item, Id extends string>(
@@ -829,8 +954,8 @@ const threadFingerprint = (thread: OfficialImportThreadStream): string =>
 
 export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImportPlan => {
   const allocate = input.allocateIdentity ?? defaultAllocateIdentity;
-  const idMap = copyIdMap(input.existingIdMap ?? emptyIdMap());
-  const mutableIdMap = asMutableIdMap(idMap);
+  let idMap = copyIdMap(input.existingIdMap ?? emptyIdMap());
+  let mutableIdMap = asMutableIdMap(idMap);
   const targetProjectsById = indexUnique(
     input.target.projects,
     (project) => project.projectId,
@@ -843,6 +968,15 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
   );
   indexUnique(input.source.projects, (project) => project.projectId, "duplicate-project-id");
   indexUnique(input.source.threads, (thread) => thread.threadId, "duplicate-thread-id");
+  const targetIdentityCounts = collectOfficialImportIdentityCounts([
+    ...input.target.projects.flatMap((project) => project.events),
+    ...input.target.threads.flatMap((thread) => thread.events),
+  ]);
+  const targetThreadIdentityCounts = new Map(
+    input.target.threads.map(
+      (thread) => [thread.threadId, collectOfficialImportIdentityCounts(thread.events)] as const,
+    ),
+  );
 
   const targetProjectsByRoot = new Map<string, OfficialImportProjectStream>();
   for (const project of input.target.projects) {
@@ -879,6 +1013,15 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
       });
     }
     mutableIdMap.projectIds[sourceProject.projectId] = targetProjectId;
+    if (!targetProject) {
+      allocateEventIdentities({
+        events: sourceProject.events,
+        idMap,
+        allocate,
+        shouldAllocate: (kind, sourceId) =>
+          identityCollidesOutside(targetIdentityCounts, undefined, kind, sourceId),
+      });
+    }
     projects.push({
       sourceProjectId: sourceProject.projectId,
       targetProjectId,
@@ -892,10 +1035,23 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
 
   const provisionalThreads: Array<OfficialImportThreadPlan> = [];
   for (const sourceThread of input.source.threads) {
+    const idMapBeforeCollisionAllocation = copyIdMap(idMap);
     const priorTargetId = idMap.threadIds[sourceThread.threadId];
     const targetThread =
       (priorTargetId ? targetThreadsById.get(priorTargetId) : undefined) ??
       targetThreadsById.get(sourceThread.threadId);
+    const excludedTargetCounts = targetThread
+      ? targetThreadIdentityCounts.get(targetThread.threadId)
+      : undefined;
+    const collisionTargetThreadId = targetThread?.threadId ?? sourceThread.threadId;
+    allocateEventIdentities({
+      events: sourceThread.events,
+      targetThreadId: collisionTargetThreadId,
+      idMap,
+      allocate,
+      shouldAllocate: (kind, sourceId) =>
+        identityCollidesOutside(targetIdentityCounts, excludedTargetCounts, kind, sourceId),
+    });
     const comparisonEvents = targetThread
       ? sourceThread.events.map((event) => transformOfficialImportEvent(event, idMap))
       : sourceThread.events;
@@ -920,6 +1076,8 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
       case "divergent":
         action = choice ?? "needs-choice";
         if (action === "clone") {
+          idMap = idMapBeforeCollisionAllocation;
+          mutableIdMap = asMutableIdMap(idMap);
           targetThreadId = allocateMapped({
             map: mutableIdMap.threadIds,
             sourceId: sourceThread.threadId,
@@ -930,7 +1088,20 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
         }
         break;
     }
+    if (action === "noop" || action === "skip" || action === "needs-choice") {
+      idMap = idMapBeforeCollisionAllocation;
+      mutableIdMap = asMutableIdMap(idMap);
+    }
     mutableIdMap.threadIds[sourceThread.threadId] = targetThreadId;
+    if (action === "clone" || targetThreadId !== sourceThread.threadId) {
+      allocateEventIdentities({
+        events: sourceThread.events,
+        targetThreadId,
+        idMap,
+        allocate,
+        shouldAllocate: () => true,
+      });
+    }
     provisionalThreads.push({
       sourceThreadId: sourceThread.threadId,
       matchedTargetThreadId: targetThread?.threadId ?? null,
@@ -943,23 +1114,6 @@ export const planOfficialImport = (input: PlanOfficialImportInput): OfficialImpo
       sourceHeadFingerprint: headFingerprint(sourceThread.events),
       targetFingerprint: targetThread ? threadFingerprint(targetThread) : null,
       targetHeadFingerprint: targetThread ? headFingerprint(targetThread.events) : null,
-    });
-  }
-
-  for (const threadPlan of provisionalThreads) {
-    const isClone =
-      threadPlan.action === "clone" || threadPlan.targetThreadId !== threadPlan.sourceThreadId;
-    if (!isClone) continue;
-    const sourceThread = input.source.threads.find(
-      (thread) => thread.threadId === threadPlan.sourceThreadId,
-    );
-    if (!sourceThread) continue;
-    allocateCloneEventIdentities({
-      events: sourceThread.events,
-      sourceThreadId: sourceThread.threadId,
-      targetThreadId: threadPlan.targetThreadId,
-      idMap,
-      allocate,
     });
   }
 

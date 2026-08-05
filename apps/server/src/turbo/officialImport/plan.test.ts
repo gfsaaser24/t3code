@@ -213,9 +213,139 @@ describe("official import stream planning", () => {
       targetThreadId: reservedThreadId,
     });
   });
+
+  it("deterministically rekeys colliding child identities for a non-cloned import", () => {
+    const makeEvents = (threadId: string, projectId: string) => [
+      decodeEvent({
+        ...threadCreated({
+          sequence: 1,
+          eventId: "event-collision-created",
+          threadId,
+          projectId,
+        }),
+        commandId: "command-collision-created",
+        correlationId: "command-collision-created",
+      }),
+      decodeEvent({
+        ...baseEvent({
+          sequence: 2,
+          eventId: "event-collision-message",
+          threadId,
+          commandId: "command-collision-message",
+        }),
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId: "message-collision",
+          role: "user",
+          text: "hello",
+          turnId: "turn-collision",
+          streaming: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      }),
+      decodeEvent({
+        ...baseEvent({ sequence: 3, eventId: "event-collision-diff", threadId }),
+        type: "thread.turn-diff-completed",
+        payload: {
+          threadId,
+          turnId: "turn-collision",
+          checkpointTurnCount: 1,
+          checkpointRef: "refs/t3/checkpoints/collision/turn/1",
+          status: "ready",
+          files: [],
+          assistantMessageId: "message-collision",
+          completedAt: timestamp,
+        },
+      }),
+    ];
+    const sourceEvents = makeEvents("thread-source", "project-source");
+    const collidingTargetEvents = makeEvents("thread-other", "project-target").map(
+      (event, index) => ({ ...event, sequence: 100 + index }),
+    );
+    const source = dataset(
+      [project("project-source", "/code/example")],
+      [thread("thread-source", "project-source", sourceEvents)],
+    );
+    const target = dataset(
+      [project("project-target", "/code/example")],
+      [thread("thread-other", "project-target", collidingTargetEvents)],
+    );
+
+    const plan = planOfficialImport({ source, target });
+    expect(plan.threads[0]).toMatchObject({ action: "import", targetThreadId: "thread-source" });
+    expect(plan.idMap.eventIds["event-collision-created"]).not.toBe("event-collision-created");
+    expect(plan.idMap.commandIds["command-collision-created"]).not.toBe(
+      "command-collision-created",
+    );
+    expect(plan.idMap.messageIds["message-collision"]).not.toBe("message-collision");
+    expect(plan.idMap.checkpointRefs["refs/t3/checkpoints/collision/turn/1"]).not.toBe(
+      "refs/t3/checkpoints/collision/turn/1",
+    );
+
+    const repeatedPlan = planOfficialImport({ source, target });
+    expect(repeatedPlan.idMap.eventIds).toEqual(plan.idMap.eventIds);
+    expect(repeatedPlan.idMap.commandIds).toEqual(plan.idMap.commandIds);
+    expect(repeatedPlan.idMap.messageIds).toEqual(plan.idMap.messageIds);
+    expect(repeatedPlan.idMap.checkpointRefs).toEqual(plan.idMap.checkpointRefs);
+
+    const transformed = sourceEvents.map((event) =>
+      transformOfficialImportEvent(event, plan.idMap),
+    );
+    const rerun = planOfficialImport({
+      source,
+      target: dataset(target.projects, [
+        ...target.threads,
+        thread("thread-source", "project-target", transformed),
+      ]),
+    });
+    expect(rerun.threads[0]).toMatchObject({ action: "noop", classification: "equal" });
+  });
 });
 
 describe("official import clone identity graph", () => {
+  it("remaps pinned and unpinned thread payloads for clones", () => {
+    const sourceThreadId = "thread-source";
+    const sourceEvents = [
+      threadCreated({ sequence: 1, eventId: "event-created" }),
+      decodeEvent({
+        ...baseEvent({ sequence: 2, eventId: "event-pinned", threadId: sourceThreadId }),
+        type: "thread.pinned",
+        payload: { threadId: sourceThreadId, pinnedAt: timestamp, updatedAt: timestamp },
+      }),
+      decodeEvent({
+        ...baseEvent({ sequence: 3, eventId: "event-unpinned", threadId: sourceThreadId }),
+        type: "thread.unpinned",
+        payload: { threadId: sourceThreadId, updatedAt: timestamp },
+      }),
+    ];
+    const plan = planOfficialImport({
+      source: dataset(
+        [project("project-source", "/code/example")],
+        [thread(sourceThreadId, "project-source", sourceEvents)],
+      ),
+      target: dataset(
+        [project("project-source", "/code/example")],
+        [
+          thread(sourceThreadId, "project-source", [
+            threadCreated({ sequence: 10, eventId: "event-target", title: "Turbo" }),
+          ]),
+        ],
+      ),
+      collisionChoices: { [sourceThreadId]: "clone" },
+    });
+    const transformed = sourceEvents.map((event) =>
+      transformOfficialImportEvent(event, plan.idMap),
+    );
+    const targetThreadId = plan.threads[0]!.targetThreadId;
+    expect(
+      transformed
+        .filter((event) => event.type === "thread.pinned" || event.type === "thread.unpinned")
+        .every((event) => event.payload.threadId === targetThreadId),
+    ).toBe(true);
+  });
+
   it("rekeys every schema-known T3 identity and preserves provider-owned opaque data", () => {
     const sourceThreadId = "thread-source";
     const sourceEvents = [

@@ -40,6 +40,7 @@ import {
   assertWorkspaceReadyForApply,
   clearDerivedImportState,
   copyCheckpointDiffBlobs,
+  copySettledProviderSessionRuntimeBindings,
   cutoverImportWithinLock,
   deleteCanonicalThreadStreams,
   deleteProviderSessionRuntimeBindings,
@@ -83,6 +84,9 @@ export const OfficialImportApplyResult = Schema.Struct({
   importedEventCount: NonNegativeInt,
   copiedReceiptCount: NonNegativeInt,
   copiedCheckpointDiffCount: NonNegativeInt,
+  copiedProviderBindingCount: NonNegativeInt,
+  skippedInvalidProviderBindingCount: NonNegativeInt,
+  skippedUnsettledProviderBindingCount: NonNegativeInt,
   copiedAttachmentCount: NonNegativeInt,
 });
 export type OfficialImportApplyResult = typeof OfficialImportApplyResult.Type;
@@ -448,6 +452,18 @@ const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialIm
       prepared.workspace.targetStagingPath,
       importedThreadIds,
     );
+    const providerBindingCopies = new Map(
+      prepared.plan.threads.flatMap((thread) =>
+        thread.action === "import" || thread.action === "replace"
+          ? [[thread.sourceThreadId, thread.targetThreadId] as const]
+          : [],
+      ),
+    );
+    const providerBindingResult = yield* copySettledProviderSessionRuntimeBindings({
+      sourcePath: prepared.workspace.sourceSnapshotPath,
+      stagingPath: prepared.workspace.targetStagingPath,
+      threadIdMap: providerBindingCopies,
+    });
     const sequenceMap = yield* appendCanonicalEvents(prepared.workspace, transformedEvents);
     const copiedReceiptCount = yield* rebuildCopiedCommandReceipts(
       prepared.workspace.targetStagingPath,
@@ -486,6 +502,9 @@ const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialIm
       importedEventCount: transformedEvents.length,
       copiedReceiptCount,
       copiedCheckpointDiffCount,
+      copiedProviderBindingCount: providerBindingResult.copiedBindingCount,
+      skippedInvalidProviderBindingCount: providerBindingResult.skippedInvalidBindingCount,
+      skippedUnsettledProviderBindingCount: providerBindingResult.skippedUnsettledBindingCount,
       copiedAttachmentCount: cutover.receipt.attachmentChanges.length,
     };
   },

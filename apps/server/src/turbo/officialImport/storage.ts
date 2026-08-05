@@ -15,6 +15,7 @@ import {
   OrchestrationEventMetadata,
   OrchestrationEventType,
   ProjectId,
+  ProviderDriverKind,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -23,9 +24,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 
 import { migrationManifest } from "../../persistence/Migrations.ts";
 import { makeSqlitePersistenceLive } from "../../persistence/Layers/Sqlite.ts";
+import * as ProviderSessionRuntimePersistence from "../../persistence/ProviderSessionRuntime.ts";
 import { OrchestrationCommandReceipt } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   ImportCheckpointRefChange,
@@ -104,7 +107,15 @@ const REQUIRED_COLUMNS = {
 
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const EventMetadataFromJsonString = Schema.fromJsonString(OrchestrationEventMetadata);
-const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
+const encodeUnknownJsonString = Schema.encodeUnknownSync(UnknownFromJsonString);
+const ImportProviderSessionRuntimeRow =
+  ProviderSessionRuntimePersistence.ProviderSessionRuntime.mapFields(
+    Struct.assign({
+      providerName: ProviderDriverKind,
+      resumeCursor: Schema.NullOr(UnknownFromJsonString),
+      runtimePayload: Schema.NullOr(UnknownFromJsonString),
+    }),
+  );
 
 const PersistedEventSchema = Schema.Struct({
   sequence: NonNegativeInt,
@@ -151,6 +162,13 @@ export const ImportCheckpointDiffBlob = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type ImportCheckpointDiffBlob = typeof ImportCheckpointDiffBlob.Type;
+
+export const ImportProviderBindingCopyResult = Schema.Struct({
+  copiedBindingCount: NonNegativeInt,
+  skippedInvalidBindingCount: NonNegativeInt,
+  skippedUnsettledBindingCount: NonNegativeInt,
+});
+export type ImportProviderBindingCopyResult = typeof ImportProviderBindingCopyResult.Type;
 
 export const ImportAttachmentChange = Schema.Struct({
   targetPath: Schema.String,
@@ -1062,7 +1080,7 @@ export const deleteCanonicalThreadStreams = Effect.fn("deleteCanonicalThreadStre
         }),
 );
 
-/** Imported/replaced threads intentionally start without resumable provider bindings. */
+/** Clear selected target bindings before safe source bindings are reinstalled. */
 export const deleteProviderSessionRuntimeBindings = Effect.fn(
   "deleteProviderSessionRuntimeBindings",
 )(
@@ -1090,6 +1108,138 @@ export const deleteProviderSessionRuntimeBindings = Effect.fn(
           }
         }),
 );
+
+/** Copy only fully valid, quiescent source continuation bindings into staging. */
+export const copySettledProviderSessionRuntimeBindings = Effect.fn(
+  "copySettledProviderSessionRuntimeBindings",
+)(function* (input: {
+  readonly sourcePath: string;
+  readonly stagingPath: string;
+  readonly threadIdMap: ReadonlyMap<ThreadId, ThreadId>;
+}): Effect.fn.Return<ImportProviderBindingCopyResult, OfficialImportStorageError> {
+  if (input.threadIdMap.size === 0) {
+    return {
+      copiedBindingCount: 0,
+      skippedInvalidBindingCount: 0,
+      skippedUnsettledBindingCount: 0,
+    };
+  }
+
+  const prepared = yield* withDatabase(
+    input.sourcePath,
+    true,
+    "read settled provider bindings",
+    (database) => {
+      const selectBinding = database.prepare(
+        `SELECT
+           thread_id AS threadId,
+           provider_name AS providerName,
+           provider_instance_id AS providerInstanceId,
+           adapter_key AS adapterKey,
+           runtime_mode AS runtimeMode,
+           status,
+           last_seen_at AS lastSeenAt,
+           resume_cursor_json AS resumeCursor,
+           runtime_payload_json AS runtimePayload
+         FROM provider_session_runtime
+         WHERE thread_id = ?`,
+      );
+      const activeProjectedSession = database.prepare(
+        `SELECT COUNT(*) AS count FROM projection_thread_sessions
+         WHERE thread_id = ? AND status IN ('starting', 'connecting', 'running')`,
+      );
+      const activeTurns = database.prepare(
+        `SELECT COUNT(*) AS count FROM projection_turns
+         WHERE thread_id = ? AND state IN ('pending', 'running')`,
+      );
+      const pendingApprovals = database.prepare(
+        `SELECT COUNT(*) AS count FROM projection_pending_approvals
+         WHERE thread_id = ? AND status = 'pending'`,
+      );
+      const bindings: Array<ProviderSessionRuntimePersistence.ProviderSessionRuntime> = [];
+      let skippedInvalidBindingCount = 0;
+      let skippedUnsettledBindingCount = 0;
+      for (const [sourceThreadId, targetThreadId] of input.threadIdMap) {
+        const raw = selectBinding.get(sourceThreadId);
+        if (raw === undefined) continue;
+        let binding: ProviderSessionRuntimePersistence.ProviderSessionRuntime;
+        try {
+          binding = decodeSync(ImportProviderSessionRuntimeRow, raw);
+        } catch {
+          skippedInvalidBindingCount += 1;
+          continue;
+        }
+        const isUnsettled =
+          binding.status === "starting" ||
+          binding.status === "connecting" ||
+          binding.status === "running" ||
+          decodeSync(CountRowSchema, activeProjectedSession.get(sourceThreadId)).count > 0 ||
+          decodeSync(CountRowSchema, activeTurns.get(sourceThreadId)).count > 0 ||
+          decodeSync(CountRowSchema, pendingApprovals.get(sourceThreadId)).count > 0;
+        if (isUnsettled) {
+          skippedUnsettledBindingCount += 1;
+          continue;
+        }
+        bindings.push({ ...binding, threadId: targetThreadId });
+      }
+      return { bindings, skippedInvalidBindingCount, skippedUnsettledBindingCount };
+    },
+  );
+
+  const copiedBindingCount = yield* withDatabase(
+    input.stagingPath,
+    false,
+    "copy settled provider bindings",
+    (database) => {
+      const upsert = database.prepare(
+        `INSERT INTO provider_session_runtime (
+           thread_id, provider_name, provider_instance_id, adapter_key, runtime_mode,
+           status, last_seen_at, resume_cursor_json, runtime_payload_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(thread_id) DO UPDATE SET
+           provider_name = excluded.provider_name,
+           provider_instance_id = excluded.provider_instance_id,
+           adapter_key = excluded.adapter_key,
+           runtime_mode = excluded.runtime_mode,
+           status = excluded.status,
+           last_seen_at = excluded.last_seen_at,
+           resume_cursor_json = excluded.resume_cursor_json,
+           runtime_payload_json = excluded.runtime_payload_json`,
+      );
+      let copied = 0;
+      database.exec("BEGIN IMMEDIATE");
+      try {
+        for (const binding of prepared.bindings) {
+          upsert.run(
+            binding.threadId,
+            binding.providerName,
+            binding.providerInstanceId,
+            binding.adapterKey,
+            binding.runtimeMode,
+            binding.status,
+            binding.lastSeenAt,
+            binding.resumeCursor === null ? null : encodeUnknownJsonString(binding.resumeCursor),
+            binding.runtimePayload === null
+              ? null
+              : encodeUnknownJsonString(binding.runtimePayload),
+          );
+          copied += 1;
+        }
+        database.exec("COMMIT");
+        return copied;
+      } catch (cause) {
+        database.exec("ROLLBACK");
+        throw cause;
+      }
+    },
+  );
+
+  return {
+    copiedBindingCount,
+    skippedInvalidBindingCount: prepared.skippedInvalidBindingCount,
+    skippedUnsettledBindingCount: prepared.skippedUnsettledBindingCount,
+  };
+});
 
 /** Copy selected checkpoint diffs into staging while remapping their thread ids. */
 export const copyCheckpointDiffBlobs = Effect.fn("copyCheckpointDiffBlobs")(function* (input: {

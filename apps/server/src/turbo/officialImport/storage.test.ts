@@ -25,6 +25,7 @@ import {
   assertNoLiveImportServer,
   clearDerivedImportState,
   copyCheckpointDiffBlobs,
+  copySettledProviderSessionRuntimeBindings,
   cutoverImport,
   deleteCanonicalThreadStreams,
   deleteProviderSessionRuntimeBindings,
@@ -112,7 +113,17 @@ const schemaSql = `
     last_applied_sequence INTEGER NOT NULL
   );
   CREATE TABLE projection_thread_proposed_plans (plan_id TEXT PRIMARY KEY);
-  CREATE TABLE provider_session_runtime (thread_id TEXT PRIMARY KEY, status TEXT NOT NULL);
+  CREATE TABLE provider_session_runtime (
+    thread_id TEXT PRIMARY KEY,
+    provider_name TEXT NOT NULL DEFAULT 'codex',
+    provider_instance_id TEXT,
+    adapter_key TEXT NOT NULL DEFAULT 'codex',
+    runtime_mode TEXT NOT NULL DEFAULT 'full-access',
+    status TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL DEFAULT '2026-08-04T12:00:00.000Z',
+    resume_cursor_json TEXT,
+    runtime_payload_json TEXT
+  );
 `;
 
 const makeProjectCreatedPayload = (projectId: string, workspaceRoot: string) =>
@@ -770,29 +781,136 @@ it.effect("journals cloned checkpoint refs and restores their previous state", (
   ).pipe(Effect.provide(NodeServices.layer)),
 );
 
-it.effect("preserves retained Turbo provider bindings and clears imported bindings", () =>
+it.effect("copies settled import and replace bindings while clearing clone bindings", () =>
   withDatabases(({ source, target }) =>
     Effect.gen(function* () {
+      const sourceDatabase = new NodeSqlite.DatabaseSync(source);
+      const targetDatabase = new NodeSqlite.DatabaseSync(target);
+      try {
+        const insertSource = sourceDatabase.prepare(
+          `INSERT INTO provider_session_runtime
+             (thread_id, provider_name, provider_instance_id, adapter_key, runtime_mode, status,
+              last_seen_at, resume_cursor_json, runtime_payload_json)
+           VALUES (?, 'codex', 'codex', 'codex', 'full-access', 'stopped', ?, ?, ?)`,
+        );
+        insertSource.run(
+          "thread-replace",
+          NOW,
+          '{"sessionId":"replace-source"}',
+          '{"cwd":"/source"}',
+        );
+        insertSource.run("thread-clone", NOW, '{"sessionId":"clone-source"}', null);
+        targetDatabase
+          .prepare(
+            `UPDATE provider_session_runtime
+             SET provider_name = 'cursor', adapter_key = 'cursor', runtime_payload_json = ?
+             WHERE thread_id = 'thread-target'`,
+          )
+          .run('{"retained":true}');
+        const insertTarget = targetDatabase.prepare(
+          `INSERT INTO provider_session_runtime (thread_id, provider_name, status)
+           VALUES (?, 'cursor', 'stopped')`,
+        );
+        insertTarget.run("thread-replace");
+        insertTarget.run("thread-clone");
+      } finally {
+        sourceDatabase.close();
+        targetDatabase.close();
+      }
+
       const workspace = yield* prepareImportWorkspace({
         sourceDatabasePath: source,
         targetDatabasePath: target,
       });
-      const staging = new NodeSqlite.DatabaseSync(workspace.targetStagingPath);
-      try {
-        staging
-          .prepare("INSERT INTO provider_session_runtime (thread_id, status) VALUES (?, ?)")
-          .run("thread-source", "stopped");
-      } finally {
-        staging.close();
-      }
-
       assert.equal(
         yield* deleteProviderSessionRuntimeBindings(workspace.targetStagingPath, [
-          ThreadId.make("thread-source"),
+          ThreadId.make("thread-imported"),
+          ThreadId.make("thread-replace"),
+          ThreadId.make("thread-clone"),
         ]),
-        1,
+        2,
       );
+      const copied = yield* copySettledProviderSessionRuntimeBindings({
+        sourcePath: workspace.sourceSnapshotPath,
+        stagingPath: workspace.targetStagingPath,
+        threadIdMap: new Map([
+          [ThreadId.make("thread-source"), ThreadId.make("thread-imported")],
+          [ThreadId.make("thread-replace"), ThreadId.make("thread-replace")],
+        ]),
+      });
+      assert.deepEqual(copied, {
+        copiedBindingCount: 2,
+        skippedInvalidBindingCount: 0,
+        skippedUnsettledBindingCount: 0,
+      });
       yield* clearDerivedImportState(workspace.targetStagingPath);
+      const inspected = new NodeSqlite.DatabaseSync(workspace.targetStagingPath, {
+        readOnly: true,
+      });
+      try {
+        const rows = inspected
+          .prepare(
+            `SELECT thread_id AS threadId, provider_name AS providerName,
+                    resume_cursor_json AS resumeCursor, runtime_payload_json AS runtimePayload
+             FROM provider_session_runtime ORDER BY thread_id`,
+          )
+          .all();
+        assert.deepEqual(rows, [
+          {
+            threadId: "thread-imported",
+            providerName: "codex",
+            resumeCursor: null,
+            runtimePayload: null,
+          },
+          {
+            threadId: "thread-replace",
+            providerName: "codex",
+            resumeCursor: '{"sessionId":"replace-source"}',
+            runtimePayload: '{"cwd":"/source"}',
+          },
+          {
+            threadId: "thread-target",
+            providerName: "cursor",
+            resumeCursor: null,
+            runtimePayload: '{"retained":true}',
+          },
+        ]);
+      } finally {
+        inspected.close();
+      }
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("skips invalid provider bindings without disturbing retained Turbo bindings", () =>
+  withDatabases(({ source, target }) =>
+    Effect.gen(function* () {
+      const sourceDatabase = new NodeSqlite.DatabaseSync(source);
+      try {
+        sourceDatabase
+          .prepare(
+            `INSERT INTO provider_session_runtime
+               (thread_id, provider_name, adapter_key, runtime_mode, status, last_seen_at)
+             VALUES ('thread-invalid', 'codex', 'codex', 'full-access', 'unknown', ?)`,
+          )
+          .run(NOW);
+      } finally {
+        sourceDatabase.close();
+      }
+      const workspace = yield* prepareImportWorkspace({
+        sourceDatabasePath: source,
+        targetDatabasePath: target,
+      });
+      const copied = yield* copySettledProviderSessionRuntimeBindings({
+        sourcePath: workspace.sourceSnapshotPath,
+        stagingPath: workspace.targetStagingPath,
+        threadIdMap: new Map([[ThreadId.make("thread-invalid"), ThreadId.make("thread-invalid")]]),
+      });
+      assert.deepEqual(copied, {
+        copiedBindingCount: 0,
+        skippedInvalidBindingCount: 1,
+        skippedUnsettledBindingCount: 0,
+      });
       const inspected = new NodeSqlite.DatabaseSync(workspace.targetStagingPath, {
         readOnly: true,
       });
