@@ -382,6 +382,31 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.notInclude(workflow, "vp run dist:desktop:artifact --");
 });
 
+it("pushes the candidate tag safely before creating or updating its release", () => {
+  const workflow = readTurboWorkflow();
+  const publish = workflow.slice(
+    workflow.indexOf("  publish:"),
+    workflow.indexOf("  report_repair:"),
+  );
+  const tagPush = publish.indexOf('"refs/remotes/turbo/candidate:refs/tags/$turbo_tag"');
+  const releaseCreate = publish.indexOf('gh release create "$turbo_tag" release-assets/*');
+  const branchAdvance = publish.indexOf('"refs/remotes/turbo/candidate:refs/heads/$TURBO_BRANCH"');
+
+  assert.include(publish, "gh auth setup-git");
+  assert.include(publish, 'git ls-remote --exit-code --refs origin "refs/tags/$turbo_tag"');
+  assert.include(publish, 'existing_sha="$(git rev-parse "$retry_ref^{commit}")"');
+  assert.include(publish, '[[ "$existing_sha" != "$candidate_sha" ]]');
+  assert.include(publish, '--force-with-lease="refs/tags/$turbo_tag:"');
+  assert.include(publish, "--verify-tag");
+  assert.include(publish, 'gh release upload "$turbo_tag" release-assets/* --clobber');
+  assert.include(publish, 'gh release edit "$turbo_tag" --notes-file');
+  assert.notInclude(publish, '--target "$staging_branch"');
+  assert.notInclude(publish, "automation/turbo-nightly-");
+  assert.isAtLeast(tagPush, 0);
+  assert.isAbove(releaseCreate, tagPush);
+  assert.isAbove(branchAdvance, releaseCreate);
+});
+
 it("measures relay and portal status from the manifest-registered branch ref", () => {
   const workflow = readTurboWorkflow();
 

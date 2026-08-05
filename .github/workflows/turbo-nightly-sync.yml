@@ -568,23 +568,32 @@ jobs:
           # the nightly prerelease channel. The fork repository isolates this
           # release from the official build with the same version.
           turbo_tag="$TURBO_TAG"
-          staging_branch="automation/turbo-nightly-${{ github.run_id }}"
           candidate_sha="$(git rev-parse refs/remotes/turbo/candidate)"
-          git push origin \
-            "refs/remotes/turbo/candidate:refs/heads/$staging_branch"
-          if gh release view "$turbo_tag" >/dev/null 2>&1; then
-            retry_ref="refs/t3-turbo/retry-tags/$turbo_tag"
+          retry_ref="refs/t3-turbo/retry-tags/$turbo_tag"
+          if git ls-remote --exit-code --refs origin "refs/tags/$turbo_tag" >/dev/null; then
             git fetch --no-tags origin "+refs/tags/$turbo_tag:$retry_ref"
             existing_sha="$(git rev-parse "$retry_ref^{commit}")"
             if [[ "$existing_sha" != "$candidate_sha" ]]; then
-              echo "Existing release $turbo_tag points at a different source commit." >&2
+              echo "Existing tag $turbo_tag points at a different source commit." >&2
               exit 1
             fi
+          else
+            lookup_status=$?
+            if [[ $lookup_status -ne 2 ]]; then
+              echo "Unable to inspect existing tag $turbo_tag." >&2
+              exit "$lookup_status"
+            fi
+            git push \
+              --force-with-lease="refs/tags/$turbo_tag:" \
+              origin \
+              "refs/remotes/turbo/candidate:refs/tags/$turbo_tag"
+          fi
+          if gh release view "$turbo_tag" >/dev/null 2>&1; then
             gh release upload "$turbo_tag" release-assets/* --clobber
             gh release edit "$turbo_tag" --notes-file "$RUNNER_TEMP/turbo-success-report.md"
           else
             gh release create "$turbo_tag" release-assets/* \
-              --target "$staging_branch" \
+              --verify-tag \
               --title "T3 Turbo $CUTOFF_LABEL.exe" \
               --notes-file "$RUNNER_TEMP/turbo-success-report.md" \
               --prerelease
@@ -608,13 +617,6 @@ jobs:
           name: turbo-success-report-${{ needs.sync_source.outputs.tag }}
           path: ${{ runner.temp }}/turbo-success-report.md
           if-no-files-found: error
-      - name: Clean up the run-specific staging branch
-        if: always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: git push origin --delete "automation/turbo-nightly-${{ github.run_id }}"
 
   report_repair:
     name: Open or update nightly repair issue

@@ -277,7 +277,8 @@ may show SmartScreen. No Azure signing, Clerk, relay, or official T3 credentials
 - The publish script targets `gfsaaser24/t3code`; packaging rejects `pingdotgg/t3code`
   case-insensitively.
 - The workflow never downloads, republishes, or modifies an official T3 installer.
-- Release retries are accepted only when the existing tag points at the same candidate commit.
+- The candidate tag is pushed with an expect-absent lease before release creation. Release retries
+  are accepted only when the existing tag points at the same candidate commit.
 - Branch advancement uses `--force-with-lease`, so an unexpected concurrent branch change stops
   the update instead of overwriting it.
 
