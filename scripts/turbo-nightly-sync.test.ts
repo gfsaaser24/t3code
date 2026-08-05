@@ -381,7 +381,7 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.notInclude(workflow, "vp run dist:desktop:artifact --");
 });
 
-it("uses public fork runners without deploying the official relay", () => {
+it("uses public fork runners and gates the self-host relay on configuration", () => {
   const ciWorkflow = readWorkflow("ci.yml");
   const relayWorkflow = readWorkflow("deploy-relay.yml");
 
@@ -390,7 +390,8 @@ it("uses public fork runners without deploying the official relay", () => {
   assert.include(ciWorkflow, "|| 'macos-26'");
   assert.include(ciWorkflow, "group: ci-${{ github.event.pull_request.number || github.ref }}");
   assert.include(ciWorkflow, "cancel-in-progress: true");
-  assert.include(relayWorkflow, "if: github.repository == 'pingdotgg/t3code'");
+  assert.include(relayWorkflow, "name: Detect Cloudflare configuration");
+  assert.include(relayWorkflow, "if: steps.cloudflare_config.outputs.enabled == 'true'");
 });
 
 it("reports only exact paths changed by upstream and Turbo", () => {
