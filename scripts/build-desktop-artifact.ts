@@ -1449,7 +1449,9 @@ export function resolveDesktopRuntimeDependencies(
 }
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
-  return /-nightly\.\d{8}\.\d+(?:\.turbo\.\d+)?$/.test(version) ? "nightly" : "latest";
+  return /-nightly\.\d{8}\.\d+(?:\.turbo\.(?:\d{8}\.\d+|\d+))?$/u.test(version)
+    ? "nightly"
+    : "latest";
 }
 
 /**

@@ -90,7 +90,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42.turbo.3"), "nightly");
-    assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
+    assert.equal(
+      resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42.turbo.20260804.3"),
+      "nightly",
+    );
+  });
+
+  it("keeps stable and malformed versions on the latest updater channel", () => {
+    for (const version of [
+      "0.0.17",
+      "0.0.17-nightly.20260413",
+      "0.0.17-nightly.20260413.42.turbo",
+      "0.0.17-nightly.20260413.42.turbo.2026080.3",
+      "0.0.17-nightly.20260413.42.turbo.3.4",
+      "0.0.17-nightly.20260413.42.turbo.20260804.3.1",
+    ]) {
+      assert.equal(resolveDesktopUpdateChannel(version), "latest");
+    }
   });
 
   it("uses the T3 Turbo product and stage package identity", () => {
