@@ -400,6 +400,7 @@ const remapReceipts = (
 const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialImportWithinLock")(
   function* (
     prepared: PreparedOfficialImport,
+    options?: { readonly allowActive?: boolean },
   ): Effect.fn.Return<
     OfficialImportApplyResult,
     OfficialImportExecutionFailure,
@@ -412,7 +413,7 @@ const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialIm
       return yield* new OfficialImportUnresolvedCollisionsError({ threadIds: unresolved });
     }
 
-    yield* assertWorkspaceReadyForApply(prepared.workspace);
+    yield* assertWorkspaceReadyForApply(prepared.workspace, options);
     const [sourceEvents, targetEvents, sourceReceipts] = yield* Effect.all([
       readOrchestrationEvents(prepared.workspace.sourceSnapshotPath),
       readOrchestrationEvents(prepared.workspace.targetStagingPath),
@@ -464,7 +465,11 @@ const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialIm
       stagingPath: prepared.workspace.targetStagingPath,
       threadIdMap: providerBindingCopies,
     });
-    const sequenceMap = yield* appendCanonicalEvents(prepared.workspace, transformedEvents);
+    const sequenceMap = yield* appendCanonicalEvents(
+      prepared.workspace,
+      transformedEvents,
+      options,
+    );
     const copiedReceiptCount = yield* rebuildCopiedCommandReceipts(
       prepared.workspace.targetStagingPath,
       remapReceipts(sourceReceipts, prepared.plan.idMap),
@@ -492,6 +497,7 @@ const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialIm
     const cutover = yield* cutoverImportWithinLock(prepared.workspace, {
       attachments,
       checkpointRefChanges,
+      ...(options?.allowActive === undefined ? {} : { allowActive: options.allowActive }),
     });
     yield* removeImportWorkspace(prepared.workspace).pipe(Effect.ignore);
 
@@ -512,11 +518,12 @@ const applyPreparedOfficialImportWithinLock = Effect.fn("applyPreparedOfficialIm
 
 export const applyPreparedOfficialImport = Effect.fn("applyPreparedOfficialImport")(function* (
   prepared: PreparedOfficialImport,
+  options?: { readonly allowActive?: boolean },
 ) {
   return yield* withOfficialImportLocks(
     [prepared.workspace.sourceDatabasePath, prepared.workspace.targetDatabasePath],
     recoverOfficialImportTransactionsWithinLock(prepared.workspace.targetDatabasePath).pipe(
-      Effect.andThen(applyPreparedOfficialImportWithinLock(prepared)),
+      Effect.andThen(applyPreparedOfficialImportWithinLock(prepared, options)),
     ),
   );
 });

@@ -66,6 +66,12 @@ const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Print the complete JSON document."),
   Flag.withDefault(false),
 );
+const allowActiveFlag = Flag.boolean("allow-active").pipe(
+  Flag.withDescription(
+    "Proceed even when a database still records an active session, turn, or approval. Use only when both apps are fully closed — e.g. a stale session left behind by an uninstalled official T3 Code.",
+  ),
+  Flag.withDefault(false),
+);
 
 const safeTimestamp = (iso: string) => iso.replaceAll(/[-:.]/g, "");
 
@@ -196,11 +202,12 @@ const applyCommand = Command.make("apply", {
   plan: Flag.string("plan").pipe(Flag.withDescription("Reviewed plan JSON created by `plan`.")),
   out: outputFlag,
   json: jsonFlag,
+  allowActive: allowActiveFlag,
 }).pipe(
   Command.withDescription(
     "Apply a fresh reviewed plan to staging and atomically install it into T3 Turbo.",
   ),
-  Command.withHandler(({ plan, out, json }) =>
+  Command.withHandler(({ plan, out, json, allowActive }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const encodedPlan = yield* fs.readFileString(plan);
@@ -209,7 +216,7 @@ const applyCommand = Command.make("apply", {
         NodePath.dirname(prepared.workspace.targetDatabasePath),
       );
       yield* persistLastPlan(targetBaseDir, prepared);
-      const result = yield* applyPreparedOfficialImport(prepared);
+      const result = yield* applyPreparedOfficialImport(prepared, { allowActive });
       const encodedResult = yield* encodeApplyResult(result);
       // Stdout carries log lines too (e.g. migration notices), so typed
       // consumers read the result from --out instead of the stream.
@@ -229,6 +236,7 @@ const runCommand = Command.make("run", {
   choices: choicesFlag,
   out: outputFlag,
   json: jsonFlag,
+  allowActive: allowActiveFlag,
 }).pipe(
   Command.withDescription(
     "Create a fresh plan and immediately apply it when no collision needs review.",
@@ -243,7 +251,9 @@ const runCommand = Command.make("run", {
           : yield* defaultPlanPath(flags.targetBaseDir, prepared.createdAt);
         yield* writeStringAtomic(planPath, encodedPlan);
         yield* persistLastPlan(flags.targetBaseDir, prepared);
-        const result = yield* applyPreparedOfficialImport(prepared);
+        const result = yield* applyPreparedOfficialImport(prepared, {
+          allowActive: flags.allowActive,
+        });
         const encodedResult = yield* encodeApplyResult(result);
         yield* Console.log(
           flags.json

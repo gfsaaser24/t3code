@@ -876,6 +876,7 @@ const prepareImportWorkspaceWithinLock = Effect.fn("prepareImportWorkspaceWithin
 
 export const assertWorkspaceReadyForApply = Effect.fn("assertWorkspaceReadyForApply")(function* (
   workspace: ImportWorkspace,
+  options?: { readonly allowActive?: boolean },
 ): Effect.fn.Return<void, OfficialImportStorageFailure, FileSystem.FileSystem | Path.Path> {
   yield* Effect.all([
     assertNoLiveImportServer("source", workspace.sourceDatabasePath),
@@ -929,9 +930,14 @@ export const assertWorkspaceReadyForApply = Effect.fn("assertWorkspaceReadyForAp
       });
     }
   }
-  yield* failWhenActive("source", workspace.sourceDatabasePath, sourceActivity);
-  if (targetExists) {
-    yield* failWhenActive("target", workspace.targetDatabasePath, targetActivity);
+  // A session or turn recorded as active in a database whose app is closed
+  // (or uninstalled) can never finish; allowActive lets a deliberate caller
+  // proceed anyway. Fingerprint and live-server checks above still apply.
+  if (options?.allowActive !== true) {
+    yield* failWhenActive("source", workspace.sourceDatabasePath, sourceActivity);
+    if (targetExists) {
+      yield* failWhenActive("target", workspace.targetDatabasePath, targetActivity);
+    }
   }
 });
 
@@ -1297,12 +1303,13 @@ const inferActorKind = (
 export const appendCanonicalEvents = Effect.fn("appendCanonicalEvents")(function* (
   workspace: ImportWorkspace,
   events: ReadonlyArray<OrchestrationEvent>,
+  options?: { readonly allowActive?: boolean },
 ): Effect.fn.Return<
   ReadonlyMap<number, number>,
   OfficialImportStorageFailure,
   FileSystem.FileSystem | Path.Path
 > {
-  yield* assertWorkspaceReadyForApply(workspace);
+  yield* assertWorkspaceReadyForApply(workspace, options);
   return yield* withDatabase(
     workspace.targetStagingPath,
     false,
@@ -1640,13 +1647,14 @@ export const cutoverImportWithinLock = Effect.fn("cutoverImportWithinLock")(func
   options: {
     readonly attachments?: ReadonlyArray<StagedImportAttachment>;
     readonly checkpointRefChanges?: ReadonlyArray<ImportCheckpointRefChange>;
+    readonly allowActive?: boolean;
   } = {},
 ): Effect.fn.Return<
   { readonly receipt: ImportCutoverReceipt; readonly receiptPath: string },
   OfficialImportStorageFailure,
   FileSystem.FileSystem | Path.Path
 > {
-  yield* assertWorkspaceReadyForApply(workspace);
+  yield* assertWorkspaceReadyForApply(workspace, options);
   yield* validateCompatibleDatabase(workspace.targetStagingPath, { requireCurrent: true });
   const importedTargetFingerprint = yield* fingerprintDatabase(workspace.targetStagingPath);
   const createdAt = DateTime.formatIso(yield* DateTime.now);
