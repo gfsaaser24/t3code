@@ -48,6 +48,15 @@ describe("resolveMarkdownFileLinkTarget", () => {
     );
   });
 
+  it("resolves relative windows-style backslash paths against cwd", () => {
+    expect(
+      resolveMarkdownFileLinkTarget("docs\\operations\\guide.md", "/Users/julius/project"),
+    ).toBe("/Users/julius/project/docs/operations/guide.md");
+    expect(resolveMarkdownFileLinkTarget("src\\runner.ts:71", "/Users/julius/project")).toBe(
+      "/Users/julius/project/src/runner.ts:71",
+    );
+  });
+
   it("does not treat filename line references as external schemes", () => {
     expect(resolveMarkdownFileLinkTarget("script.ts:10", "/Users/julius/project")).toBe(
       "/Users/julius/project/script.ts:10",
