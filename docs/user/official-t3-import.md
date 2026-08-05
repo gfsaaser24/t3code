@@ -18,5 +18,10 @@ The dialog also shows repeatable `t3 import official` commands. Use `plan` to in
 without changing the Turbo database, `run` to plan and apply an import, and `restore` with the
 receipt path if you need to recover the pre-import database backup.
 
+On Windows, `scripts/import-official-t3.ps1` runs the whole flow from outside the app without a
+`t3` command on PATH: it stops Turbo, plans with a printed summary, applies with a recovery
+backup, and restarts Turbo. Pass `-PlanOnly` to review without changes, and `-AllowActive` when a
+closed or uninstalled app left a stale active session recorded in its database.
+
 Import is local-desktop only. Relay and remote clients see the imported data after the Turbo
 backend reconnects; they do not copy database files themselves.

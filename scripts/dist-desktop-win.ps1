@@ -24,5 +24,8 @@ $env:T3CODE_CLERK_CLI_OAUTH_CLIENT_ID = "ARXuuQgu9MQ3PjcI"
 $env:T3CODE_RELAY_URL = "https://relay.t3turbo.pro"
 
 Set-Location (Join-Path $PSScriptRoot "..")
+# pnpm logs its command banner to stderr; under "Stop" Windows PowerShell 5.1
+# would turn that into a terminating error before the build even starts.
+$ErrorActionPreference = "Continue"
 pnpm dist:desktop:win
 exit $LASTEXITCODE
