@@ -1,7 +1,10 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Path from "effect/Path";
 import * as NodeOS from "node:os";
-import { assert, it } from "vite-plus/test";
 
-import { hydratePosixHome } from "./os-jank.ts";
+import { hydratePosixHome, resolveBaseDir } from "./os-jank.ts";
 
 it("hydrates HOME for minimal service environments from the user account", () => {
   const env: NodeJS.ProcessEnv = {};
@@ -38,3 +41,17 @@ it("preserves an explicitly configured HOME", () => {
 
   assert.equal(env.HOME, "/custom/home");
 });
+
+it.effect("defaults standalone Turbo state to ~/.t3-turbo", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const [unsetBaseDir, blankBaseDir] = yield* Effect.all([
+      resolveBaseDir(undefined),
+      resolveBaseDir("   "),
+    ]);
+    const expected = path.join(NodeOS.homedir(), ".t3-turbo");
+
+    assert.equal(unsetBaseDir, expected);
+    assert.equal(blankBaseDir, expected);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
