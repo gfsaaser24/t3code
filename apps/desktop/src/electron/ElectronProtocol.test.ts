@@ -3,17 +3,15 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { handleMock, netFetchMock, unhandleMock, onBeforeSendHeadersMock } = vi.hoisted(() => ({
+const { handleMock, netFetchMock, unhandleMock } = vi.hoisted(() => ({
   handleMock: vi.fn(),
   netFetchMock: vi.fn(),
   unhandleMock: vi.fn(),
-  onBeforeSendHeadersMock: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   net: { fetch: netFetchMock },
   protocol: { handle: handleMock, unhandle: unhandleMock },
-  session: { defaultSession: { webRequest: { onBeforeSendHeaders: onBeforeSendHeadersMock } } },
 }));
 
 import * as ElectronProtocol from "./ElectronProtocol.ts";
@@ -23,7 +21,6 @@ describe("ElectronProtocol", () => {
     handleMock.mockReset();
     netFetchMock.mockReset();
     unhandleMock.mockReset();
-    onBeforeSendHeadersMock.mockReset();
   });
 
   it.effect("proxies the stable renderer origin to the current app server", () =>
@@ -88,30 +85,6 @@ describe("ElectronProtocol", () => {
       assert.isNull(forwardedHeaders.get("referer"));
       assert.isNull(forwardedHeaders.get("sec-fetch-site"));
       assert.deepEqual(unhandleMock.mock.calls, [["t3code-dev"]]);
-
-      // Clerk requests must lose their Origin header (Clerk rejects requests
-      // carrying both Origin and Authorization), while everything else in the
-      // request is preserved. The interceptor is removed with the scope.
-      const [filter, listener] = onBeforeSendHeadersMock.mock.calls[0] ?? [];
-      assert.deepEqual(filter, { urls: ["https://clerk.t3.codes/*"] });
-      let rewritten: { requestHeaders?: Record<string, string> } | undefined;
-      (listener as (details: unknown, callback: (response: unknown) => void) => void)(
-        {
-          requestHeaders: {
-            Origin: "t3code-dev://app",
-            Authorization: "Bearer token",
-            Accept: "application/json",
-          },
-        },
-        (response: unknown) => {
-          rewritten = response as { requestHeaders?: Record<string, string> };
-        },
-      );
-      assert.deepEqual(rewritten?.requestHeaders, {
-        Authorization: "Bearer token",
-        Accept: "application/json",
-      });
-      assert.deepEqual(onBeforeSendHeadersMock.mock.calls.at(-1), [null]);
     }).pipe(Effect.provide(ElectronProtocol.layer)),
   );
 
