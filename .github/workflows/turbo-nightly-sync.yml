@@ -590,7 +590,10 @@ jobs:
           fi
           if gh release view "$turbo_tag" >/dev/null 2>&1; then
             gh release upload "$turbo_tag" release-assets/* --clobber
-            gh release edit "$turbo_tag" --notes-file "$RUNNER_TEMP/turbo-success-report.md"
+            gh release edit "$turbo_tag" \
+              --notes-file "$RUNNER_TEMP/turbo-success-report.md" \
+              --draft=false \
+              --prerelease
           else
             gh release create "$turbo_tag" release-assets/* \
               --verify-tag \

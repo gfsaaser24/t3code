@@ -389,7 +389,9 @@ it("pushes the candidate tag safely before creating or updating its release", ()
     workflow.indexOf("  report_repair:"),
   );
   const tagPush = publish.indexOf('"refs/remotes/turbo/candidate:refs/tags/$turbo_tag"');
+  const releaseEditStart = publish.indexOf('gh release edit "$turbo_tag"');
   const releaseCreate = publish.indexOf('gh release create "$turbo_tag" release-assets/*');
+  const releaseEdit = publish.slice(releaseEditStart, releaseCreate);
   const branchAdvance = publish.indexOf('"refs/remotes/turbo/candidate:refs/heads/$TURBO_BRANCH"');
 
   assert.include(publish, "gh auth setup-git");
@@ -399,11 +401,15 @@ it("pushes the candidate tag safely before creating or updating its release", ()
   assert.include(publish, '--force-with-lease="refs/tags/$turbo_tag:"');
   assert.include(publish, "--verify-tag");
   assert.include(publish, 'gh release upload "$turbo_tag" release-assets/* --clobber');
-  assert.include(publish, 'gh release edit "$turbo_tag" --notes-file');
+  assert.include(releaseEdit, '--notes-file "$RUNNER_TEMP/turbo-success-report.md"');
+  assert.include(releaseEdit, "--draft=false");
+  assert.include(releaseEdit, "--prerelease");
   assert.notInclude(publish, '--target "$staging_branch"');
   assert.notInclude(publish, "automation/turbo-nightly-");
   assert.isAtLeast(tagPush, 0);
+  assert.isAbove(releaseEditStart, tagPush);
   assert.isAbove(releaseCreate, tagPush);
+  assert.isAbove(branchAdvance, releaseEditStart);
   assert.isAbove(branchAdvance, releaseCreate);
 });
 
