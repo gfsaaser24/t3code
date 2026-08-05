@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import * as NodeSqlite from "node:sqlite";
 
 import {
@@ -402,7 +402,7 @@ export const validateCompatibleDatabase = Effect.fn("validateCompatibleDatabase"
     }),
 );
 
-const updateHashValue = (hash: ReturnType<typeof createHash>, value: unknown): void => {
+const updateHashValue = (hash: ReturnType<typeof NodeCrypto.createHash>, value: unknown): void => {
   if (Predicate.isNull(value)) {
     hash.update("n:0:");
     return;
@@ -426,7 +426,7 @@ const updateHashValue = (hash: ReturnType<typeof createHash>, value: unknown): v
 };
 
 const fingerprintOpenDatabase = (database: NodeSqlite.DatabaseSync): string => {
-  const hash = createHash("sha256");
+  const hash = NodeCrypto.createHash("sha256");
   const names = tableNames(database);
   for (const table of names) {
     const columns = tableColumns(database, table);
@@ -955,7 +955,7 @@ const safeTimestamp = (isoDateTime: string): string => isoDateTime.replaceAll(/[
 
 const writeJsonAtomic = Effect.fn("writeJsonAtomic")(function* (path: string, encoded: string) {
   const fs = yield* FileSystem.FileSystem;
-  const temporaryPath = `${path}.tmp-${randomUUID()}`;
+  const temporaryPath = `${path}.tmp-${NodeCrypto.randomUUID()}`;
   yield* fs.writeFileString(temporaryPath, `${encoded}\n`, {
     flag: "wx",
     mode: 0o600,
@@ -1007,7 +1007,7 @@ const moveDatabaseFiles = Effect.fn("moveDatabaseFiles")(function* (
   });
   const result = yield* Effect.result(move);
   if (result._tag === "Success") return result.success;
-  for (const [source, destination] of moved.reverse()) {
+  for (const [source, destination] of moved.toReversed()) {
     yield* rename(destination, source).pipe(Effect.ignore);
   }
   return yield* result.failure;
@@ -1029,7 +1029,7 @@ export const cutoverImport = Effect.fn("cutoverImport")(function* (
   yield* validateCompatibleDatabase(workspace.targetStagingPath);
   const importedTargetFingerprint = yield* fingerprintDatabase(workspace.targetStagingPath);
   const createdAt = DateTime.formatIso(yield* DateTime.now);
-  const suffix = `${safeTimestamp(createdAt)}-${randomUUID().slice(0, 8)}`;
+  const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
   const backupDatabasePath = `${workspace.targetDatabasePath}.backup-${suffix}`;
   const receiptPath = `${workspace.targetDatabasePath}.import-${suffix}.json`;
   const preparedReceipt: ImportCutoverReceipt = {
@@ -1084,7 +1084,7 @@ export const cutoverImport = Effect.fn("cutoverImport")(function* (
 
   // Receipt persistence is part of cutover. If it fails, put the imported
   // database back in the guarded workspace and restore the exact old target.
-  const failedImportedPath = `${workspace.targetStagingPath}.receipt-failed-${randomUUID()}`;
+  const failedImportedPath = `${workspace.targetStagingPath}.receipt-failed-${NodeCrypto.randomUUID()}`;
   const displaceImportedResult = yield* Effect.result(
     moveDatabaseFiles(workspace.targetDatabasePath, failedImportedPath),
   );
@@ -1164,7 +1164,7 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
   yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
 
   const createdAt = DateTime.formatIso(yield* DateTime.now);
-  const suffix = `${safeTimestamp(createdAt)}-${randomUUID().slice(0, 8)}`;
+  const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
   const restoredStagingPath = `${cutoverReceipt.targetDatabasePath}.restore-staging-${suffix}`;
   const displacedDatabasePath = `${cutoverReceipt.targetDatabasePath}.restore-backup-${suffix}`;
   const restoreReceiptPath = `${cutoverReceipt.targetDatabasePath}.restore-${suffix}.json`;
@@ -1194,7 +1194,7 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
       const backupPath = `${attachmentPath}.restore-backup-${suffix}`;
       const result = yield* Effect.result(fs.rename(attachmentPath, backupPath));
       if (result._tag === "Failure") {
-        for (const [originalPath, displacedPath] of displacedAttachments.reverse()) {
+        for (const [originalPath, displacedPath] of displacedAttachments.toReversed()) {
           yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
         }
         return yield* result.failure;
@@ -1205,7 +1205,7 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
       moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath),
     );
     if (moveTargetResult._tag === "Failure") {
-      for (const [originalPath, displacedPath] of displacedAttachments.reverse()) {
+      for (const [originalPath, displacedPath] of displacedAttachments.toReversed()) {
         yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
       }
       return yield* moveTargetResult.failure;
@@ -1215,7 +1215,7 @@ export const restoreImportBackup = Effect.fn("restoreImportBackup")(function* (i
     );
     if (restoreResult._tag === "Failure") {
       yield* moveDatabaseFiles(displacedDatabasePath, cutoverReceipt.targetDatabasePath);
-      for (const [originalPath, displacedPath] of displacedAttachments.reverse()) {
+      for (const [originalPath, displacedPath] of displacedAttachments.toReversed()) {
         yield* fs.rename(displacedPath, originalPath).pipe(Effect.ignore);
       }
       return yield* restoreResult.failure;

@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -200,15 +200,17 @@ const withDatabases = <A, E, R>(
   }) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   Effect.acquireUseRelease(
-    Effect.promise(() => mkdtemp(join(tmpdir(), "t3-official-import-storage-"))),
+    Effect.promise(() =>
+      NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-official-import-storage-")),
+    ),
     (directory) => {
-      const source = join(directory, "source.sqlite");
-      const target = join(directory, "target.sqlite");
+      const source = NodePath.join(directory, "source.sqlite");
+      const target = NodePath.join(directory, "target.sqlite");
       createFixtureDatabase(source, { id: "source" });
       createFixtureDatabase(target, { id: "target" });
       return use({ directory, source, target });
     },
-    (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    (directory) => Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
   );
 
 it.effect("imports only into staging and never modifies the source database", () =>
@@ -274,9 +276,15 @@ it.effect("creates a recoverable backup and restores it only with confirmation",
         sourceDatabasePath: source,
         targetDatabasePath: target,
       });
-      const installedAttachmentPath = join(dirname(target), "attachments", "imported-attachment");
-      yield* Effect.promise(() => mkdir(join(dirname(target), "attachments"), { recursive: true }));
-      yield* Effect.promise(() => writeFile(installedAttachmentPath, "imported"));
+      const installedAttachmentPath = NodePath.join(
+        NodePath.dirname(target),
+        "attachments",
+        "imported-attachment",
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.mkdir(NodePath.join(NodePath.dirname(target), "attachments"), { recursive: true }),
+      );
+      yield* Effect.promise(() => NodeFSP.writeFile(installedAttachmentPath, "imported"));
       const events = yield* readOrchestrationEvents(workspace.sourceSnapshotPath);
       yield* appendCanonicalEvents(workspace, events);
       const cutover = yield* cutoverImport(workspace, [installedAttachmentPath]);
@@ -298,13 +306,13 @@ it.effect("creates a recoverable backup and restores it only with confirmation",
       assert.equal(restored.receipt.displacedAttachmentPaths.length, 1);
       assert.isTrue(
         yield* Effect.promise(() =>
-          access(installedAttachmentPath).then(
+          NodeFSP.access(installedAttachmentPath).then(
             () => false,
             () => true,
           ),
         ),
       );
-      yield* Effect.promise(() => access(restored.receipt.displacedAttachmentPaths[0]!));
+      yield* Effect.promise(() => NodeFSP.access(restored.receipt.displacedAttachmentPaths[0]!));
       assert.equal(yield* fingerprintDatabase(target), targetBefore);
       assert.equal((yield* readOrchestrationEvents(target)).length, 1);
     }),
@@ -352,9 +360,9 @@ it.effect("restores the exact target when writing the recovery receipt fails", (
 it.effect("blocks apply when a runtime descriptor belongs to a live process", () =>
   withDatabases(({ directory, source }) =>
     Effect.gen(function* () {
-      const runtimeStatePath = join(directory, "server-runtime.json");
+      const runtimeStatePath = NodePath.join(directory, "server-runtime.json");
       yield* Effect.promise(() =>
-        writeFile(runtimeStatePath, `{"version":1,"pid":${process.pid}}`),
+        NodeFSP.writeFile(runtimeStatePath, `{"version":1,"pid":${process.pid}}`),
       );
 
       const result = yield* Effect.result(assertNoLiveImportServer("source", source));
@@ -371,7 +379,7 @@ it.effect("removes a fresh import workspace when preparation fails after snapsho
   withDatabases(({ directory, source, target }) =>
     Effect.gen(function* () {
       const existingWorkspaceName = ".t3-turbo-import-user-kept";
-      yield* Effect.promise(() => mkdir(join(directory, existingWorkspaceName)));
+      yield* Effect.promise(() => NodeFSP.mkdir(NodePath.join(directory, existingWorkspaceName)));
       const database = new NodeSqlite.DatabaseSync(source);
       try {
         database
@@ -397,7 +405,7 @@ it.effect("removes a fresh import workspace when preparation fails after snapsho
         prepareOfficialImport({ sourceDatabasePath: source, targetDatabasePath: target }),
       );
       assert.equal(exit._tag, "Failure");
-      const leftovers = (yield* Effect.promise(() => readdir(directory))).filter((entry) =>
+      const leftovers = (yield* Effect.promise(() => NodeFSP.readdir(directory))).filter((entry) =>
         entry.startsWith(".t3-turbo-import-"),
       );
       assert.deepEqual(leftovers, [existingWorkspaceName]);
@@ -489,11 +497,13 @@ it.effect("replaces selected thread streams without renumbering and remaps check
 
 it.effect("blocks apply while a session, turn, or approval is active", () =>
   Effect.acquireUseRelease(
-    Effect.promise(() => mkdtemp(join(tmpdir(), "t3-official-import-active-"))),
+    Effect.promise(() =>
+      NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-official-import-active-")),
+    ),
     (directory) =>
       Effect.gen(function* () {
-        const source = join(directory, "source.sqlite");
-        const target = join(directory, "target.sqlite");
+        const source = NodePath.join(directory, "source.sqlite");
+        const target = NodePath.join(directory, "target.sqlite");
         createFixtureDatabase(source, { id: "source", active: true });
         createFixtureDatabase(target, { id: "target" });
         const workspace = yield* prepareImportWorkspace({
@@ -514,6 +524,6 @@ it.effect("blocks apply while a session, turn, or approval is active", () =>
         }
         assert.equal((yield* readOrchestrationEvents(target)).length, 1);
       }),
-    (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    (directory) => Effect.promise(() => NodeFSP.rm(directory, { recursive: true, force: true })),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

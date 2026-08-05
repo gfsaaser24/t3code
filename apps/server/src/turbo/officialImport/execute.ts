@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { createHash } from "node:crypto";
-import { constants as FsConstants } from "node:fs";
-import { access, copyFile, mkdir, readFile, rm } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 
 import {
   IsoDateTime,
@@ -113,7 +113,7 @@ export class OfficialImportAttachmentError extends Schema.TaggedErrorClass<Offic
   },
 ) {
   override get message(): string {
-    return `${this.operation} failed for attachment ${basename(this.targetPath)}: ${this.reason}`;
+    return `${this.operation} failed for attachment ${NodePath.basename(this.targetPath)}: ${this.reason}`;
   }
 }
 
@@ -255,7 +255,7 @@ interface StagedAttachment {
 
 const fileExists = async (path: string): Promise<boolean> => {
   try {
-    await access(path);
+    await NodeFSP.access(path);
     return true;
   } catch {
     return false;
@@ -263,8 +263,8 @@ const fileExists = async (path: string): Promise<boolean> => {
 };
 
 const hashFile = async (path: string): Promise<string> =>
-  `sha256:${createHash("sha256")
-    .update(await readFile(path))
+  `sha256:${NodeCrypto.createHash("sha256")
+    .update(await NodeFSP.readFile(path))
     .digest("hex")}`;
 
 const collectAttachmentPairs = (input: {
@@ -272,9 +272,15 @@ const collectAttachmentPairs = (input: {
   readonly transformedEvents: ReadonlyArray<OrchestrationEvent>;
   readonly workspace: ImportWorkspace;
 }): ReadonlyArray<StagedAttachment> => {
-  const sourceAttachmentsDir = join(dirname(input.workspace.sourceDatabasePath), "attachments");
-  const targetAttachmentsDir = join(dirname(input.workspace.targetDatabasePath), "attachments");
-  const stagingAttachmentsDir = join(input.workspace.directory, "attachments");
+  const sourceAttachmentsDir = NodePath.join(
+    NodePath.dirname(input.workspace.sourceDatabasePath),
+    "attachments",
+  );
+  const targetAttachmentsDir = NodePath.join(
+    NodePath.dirname(input.workspace.targetDatabasePath),
+    "attachments",
+  );
+  const stagingAttachmentsDir = NodePath.join(input.workspace.directory, "attachments");
   const pairs = new Map<string, StagedAttachment>();
 
   for (let index = 0; index < input.sourceEvents.length; index += 1) {
@@ -299,9 +305,9 @@ const collectAttachmentPairs = (input: {
       const sourceRelativePath = attachmentRelativePath(sourceAttachment);
       const targetRelativePath = attachmentRelativePath(transformedAttachment);
       pairs.set(targetRelativePath, {
-        sourcePath: join(sourceAttachmentsDir, sourceRelativePath),
-        stagedPath: join(stagingAttachmentsDir, targetRelativePath),
-        targetPath: join(targetAttachmentsDir, targetRelativePath),
+        sourcePath: NodePath.join(sourceAttachmentsDir, sourceRelativePath),
+        stagedPath: NodePath.join(stagingAttachmentsDir, targetRelativePath),
+        targetPath: NodePath.join(targetAttachmentsDir, targetRelativePath),
       });
     }
   }
@@ -337,8 +343,12 @@ const stageAttachments = Effect.fn("stageOfficialImportAttachments")(function* (
           }
           continue;
         }
-        await mkdir(dirname(attachment.stagedPath), { recursive: true });
-        await copyFile(attachment.sourcePath, attachment.stagedPath, FsConstants.COPYFILE_EXCL);
+        await NodeFSP.mkdir(NodePath.dirname(attachment.stagedPath), { recursive: true });
+        await NodeFSP.copyFile(
+          attachment.sourcePath,
+          attachment.stagedPath,
+          NodeFS.constants.COPYFILE_EXCL,
+        );
       }
     },
     catch: (cause) =>
@@ -362,13 +372,17 @@ const installAttachments = Effect.fn("installOfficialImportAttachments")(functio
       try {
         for (const attachment of attachments) {
           if (!(await fileExists(attachment.stagedPath))) continue;
-          await mkdir(dirname(attachment.targetPath), { recursive: true });
-          await copyFile(attachment.stagedPath, attachment.targetPath, FsConstants.COPYFILE_EXCL);
+          await NodeFSP.mkdir(NodePath.dirname(attachment.targetPath), { recursive: true });
+          await NodeFSP.copyFile(
+            attachment.stagedPath,
+            attachment.targetPath,
+            NodeFS.constants.COPYFILE_EXCL,
+          );
           installed.push(attachment.targetPath);
         }
         return installed;
       } catch (cause) {
-        await Promise.all(installed.map((path) => rm(path, { force: true })));
+        await Promise.all(installed.map((path) => NodeFSP.rm(path, { force: true })));
         throw cause;
       }
     },
@@ -383,7 +397,7 @@ const installAttachments = Effect.fn("installOfficialImportAttachments")(functio
 });
 
 const cleanupInstalledAttachments = (paths: ReadonlyArray<string>) =>
-  Effect.promise(() => Promise.all(paths.map((path) => rm(path, { force: true })))).pipe(
+  Effect.promise(() => Promise.all(paths.map((path) => NodeFSP.rm(path, { force: true })))).pipe(
     Effect.ignore,
   );
 
@@ -460,7 +474,7 @@ export const applyPreparedOfficialImport = Effect.fn("applyPreparedOfficialImpor
   yield* clearDerivedImportState(prepared.workspace.targetStagingPath);
   yield* rebuildOfficialImportProjections({
     databasePath: prepared.workspace.targetStagingPath,
-    sandboxBaseDir: join(prepared.workspace.directory, "projection-sandbox"),
+    sandboxBaseDir: NodePath.join(prepared.workspace.directory, "projection-sandbox"),
   });
 
   const installedAttachments = yield* installAttachments(attachments);
