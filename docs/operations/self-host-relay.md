@@ -125,10 +125,10 @@ and [DNS records](https://developers.cloudflare.com/api/resources/dns/subresourc
    See [Supabase's connection guide](https://supabase.com/docs/guides/database/connecting-to-postgres)
    for the current dashboard location and pooler formats.
 
-4. Before the first relay deploy, open **SQL Editor** in Supabase and run every
-   `infra/relay/migrations/postgres/*/migration.sql` file in directory-name order. Run each file as
-   a separate query, stop on the first error, and apply future migration files before deploying
-   relay code that depends on them.
+4. Before the first relay deploy, apply the relay migrations — see
+   [Apply database migrations](#apply-database-migrations). The Supabase **SQL Editor** can run
+   each `migration.sql` in directory-name order by hand, but prefer the bookkeeping procedure so
+   later deploys can tell which migrations are already applied.
 
 `DATABASE_*` takes precedence over the upstream managed-PlanetScale deployment. The legacy
 `PLANETSCALE_ORGANIZATION`, `PLANETSCALE_API_TOKEN_ID`, and `PLANETSCALE_API_TOKEN` settings do not
