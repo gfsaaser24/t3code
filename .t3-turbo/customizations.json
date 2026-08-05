@@ -18,9 +18,12 @@
           "markers": [
             "const APP_BASE_NAME = \"T3 Turbo\";",
             "const APP_RELEASE_REPOSITORY = \"gfsaaser24/t3code\";",
-            "path.join(homeDirectory, \".t3-turbo\")",
             "\"com.gabef.t3turbo\""
           ]
+        },
+        {
+          "path": "apps/desktop/src/app/DesktopStatePaths.ts",
+          "markers": ["input.joinPath(input.homeDirectory, \".t3-turbo\")"]
         },
         {
           "path": "apps/desktop/package.json",
