@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { DraftId } from "../../composerDraftStore";
 import type { ThreadRouteTarget } from "../../threadRoutes";
-import { ChatPaneId, type ChatPane, type ChatPaneLayout } from "./chatPaneLayout";
+import { chatPaneWeight, ChatPaneId, type ChatPane, type ChatPaneLayout } from "./chatPaneLayout";
 
 const decodePersistedChatPaneLayout = Schema.decodeUnknownOption(TurboChatPaneLayout);
 
@@ -54,10 +54,20 @@ export function restoreChatPaneLayout(persisted: unknown): ChatPaneLayout | null
     }
     paneIds.add(persistedPane.id);
     targetKeys.add(key);
-    panes.push({ id: ChatPaneId.make(persistedPane.id), target });
+    panes.push({
+      id: ChatPaneId.make(persistedPane.id),
+      target,
+      ...(persistedPane.weight === undefined ? {} : { weight: persistedPane.weight }),
+    });
   }
 
-  const firstPane = panes[0];
+  // Dropping duplicate panes can leave the surviving weights summing to
+  // anything, so rescale them to average 1. Widths are relative either way;
+  // this just keeps stored values in the band the schema accepts, so a
+  // later partial write cannot compound into an extreme split.
+  const normalized = normalizePaneWeights(panes);
+
+  const firstPane = normalized[0];
   if (!firstPane) {
     return null;
   }
@@ -67,9 +77,21 @@ export function restoreChatPaneLayout(persisted: unknown): ChatPaneLayout | null
 
   return {
     version: 1,
-    panes: [firstPane, ...panes.slice(1)],
+    panes: [firstPane, ...normalized.slice(1)],
     focusedPaneId,
   };
+}
+
+function normalizePaneWeights(panes: ReadonlyArray<ChatPane>): ReadonlyArray<ChatPane> {
+  if (panes.length === 0 || panes.every((pane) => pane.weight === undefined)) {
+    return panes;
+  }
+  const total = panes.reduce((sum, pane) => sum + chatPaneWeight(pane), 0);
+  if (total <= 0) {
+    return panes.map(({ weight: _dropped, ...pane }) => pane);
+  }
+  const scale = panes.length / total;
+  return panes.map((pane) => ({ ...pane, weight: chatPaneWeight(pane) * scale }));
 }
 
 export function persistChatPaneLayout(layout: ChatPaneLayout): PersistedChatPaneLayout {
@@ -78,6 +100,9 @@ export function persistChatPaneLayout(layout: ChatPaneLayout): PersistedChatPane
     panes: layout.panes.map((pane) => ({
       id: pane.id,
       target: toPersistedTarget(pane.target),
+      // Equal shares stay unwritten so a single-pane layout round-trips to the
+      // same shape it had before resizing existed.
+      ...(pane.weight === undefined ? {} : { weight: pane.weight }),
     })),
     focusedPaneId: layout.focusedPaneId,
   };
