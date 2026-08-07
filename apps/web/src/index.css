@@ -137,6 +137,43 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* T3 Turbo: HeroUI Pro type scale. Denser than Tailwind's default by one
+     step at the small end (base 15px, sm 13px, xs 11px) and the line heights
+     are expressed as ratios so they stay correct if a size is retuned.
+     Tailwind's own text utilities read these, so the whole shell moves
+     together instead of drifting per surface. */
+  --text-xs: 0.6875rem;
+  --text-xs--line-height: calc(1 / 0.6875);
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: calc(1.25 / 0.8125);
+  --text-base: 0.9375rem;
+  --text-base--line-height: calc(1.5 / 0.9375);
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: calc(1.75 / 1.0625);
+  --text-xl: 1.1875rem;
+  --text-xl--line-height: calc(1.75 / 1.1875);
+  --text-2xl: 1.4375rem;
+  --text-2xl--line-height: calc(2 / 1.4375);
+  --text-3xl: 1.8125rem;
+  --text-3xl--line-height: calc(2.25 / 1.8125);
+  --text-4xl: 2.125rem;
+  --text-4xl--line-height: calc(2.5 / 2.125);
+  --text-5xl: 2.875rem;
+  --text-6xl: 3.5rem;
+  --text-7xl: 4.25rem;
+  --text-8xl: 5.625rem;
+  --text-9xl: 7.5rem;
+
+  /* HeroUI Pro tracking. Note `normal` is -0.02em, not 0: the scale assumes
+     every size is optically tightened, so leaving it at 0 would make body copy
+     read looser than the headings it sits under. */
+  --tracking-tighter: -0.07em;
+  --tracking-tight: -0.045em;
+  --tracking-normal: -0.02em;
+  --tracking-wide: 0.005em;
+  --tracking-wider: 0.03em;
+  --tracking-widest: 0.08em;
 }
 
 @theme inline {
@@ -257,6 +294,22 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   body {
     @apply text-foreground relative;
     background-color: var(--app-chrome-background);
+    /* T3 Turbo: HeroUI Pro optically tightens every size, so the tracking has
+       to land on the document rather than on `tracking-normal` utilities —
+       nothing in the app applies that class, and Tailwind sets no base
+       letter-spacing. Components that opt into tracking-tight/-wide still
+       override this. */
+    letter-spacing: var(--tracking-normal);
+  }
+  /* Monospace is metric-tuned by the typeface: tightening it breaks column
+     alignment in diffs, code blocks, and anything using tabular figures. The
+     document tracking above must not reach these. */
+  code,
+  pre,
+  kbd,
+  samp,
+  .font-mono {
+    letter-spacing: normal;
   }
 }
 
