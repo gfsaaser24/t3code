@@ -755,7 +755,94 @@ it.effect(
       // Replacement race: a new session is already live in the adapter when
       // the torn-down session's exit event drains through the pump. The
       // binding must stay running — marking it stopped would hide a live
-      // child process from the reaper and diagnosis tooling.
+      // child process from the reaper and diagnosis tooling. The guard is
+      // identity-based (session createdAt newer than the exit event): a
+      // crash-exit for the CURRENT session — which some adapters emit
+      // without tearing down their session map — must still mark the
+      // binding stopped.
+      yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+        yield* ProviderService.ProviderService;
+        yield* codex.adapter.startSession({
+          threadId,
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          runtimeMode: "full-access",
+        });
+        yield* directory.upsert({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          status: "running",
+        });
+        yield* advanceTestClock(10);
+        // The fake adapter stamps sessions createdAt 2026-01-01T00:00:00Z;
+        // an exit event created BEFORE that models the replaced (old)
+        // session's teardown emission.
+        codex.emit({
+          eventId: asEventId("evt-stale-session-exited"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          createdAt: "2025-12-31T23:59:00.000Z",
+          type: "session.exited",
+          payload: {
+            reason: "Session stopped",
+            exitKind: "graceful",
+          },
+        });
+        yield* advanceTestClock(20);
+        for (let attempt = 0; attempt < 50; attempt++) {
+          yield* Effect.yieldNow;
+        }
+
+        const runtime = yield* repository.getByThreadId({ threadId });
+        assert.equal(Option.isSome(runtime), true);
+        if (Option.isSome(runtime)) {
+          assert.equal(runtime.value.status, "running");
+        }
+      }).pipe(Effect.provide(testLayer));
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "marks the binding stopped for a crash exit even when the adapter still reports the session",
+  () =>
+    Effect.gen(function* () {
+      const codex = makeFakeCodexAdapter();
+      const registry = makeAdapterRegistryMock({
+        [ProviderDriverKind.make("codex")]: codex.adapter,
+      });
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+
+      const threadId = asThreadId("thread-crash-exit-binding");
+
+      const testLayer = providerLayer.pipe(
+        Layer.provideMerge(directoryLayer),
+        Layer.provideMerge(runtimeRepositoryLayer),
+      );
+
+      // Codex-style crash: the child process dies, the adapter emits
+      // session.exited but never removes its session map entry. The exit
+      // event is NEWER than the session, so the identity guard must not
+      // treat the dead session as a live replacement.
       yield* Effect.gen(function* () {
         const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
         const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
@@ -774,25 +861,29 @@ it.effect(
         });
         yield* advanceTestClock(10);
         codex.emit({
-          eventId: asEventId("evt-stale-session-exited"),
+          eventId: asEventId("evt-crash-session-exited"),
           provider: ProviderDriverKind.make("codex"),
           threadId,
-          createdAt: "2026-01-01T00:00:00.000Z",
+          createdAt: "2026-01-01T00:00:05.000Z",
           type: "session.exited",
           payload: {
-            reason: "Session stopped",
-            exitKind: "graceful",
+            reason: "codex app-server exited unexpectedly",
+            exitKind: "crash",
           },
         });
         yield* advanceTestClock(20);
-        for (let attempt = 0; attempt < 50; attempt++) {
-          yield* Effect.yieldNow;
-        }
 
-        const runtime = yield* repository.getByThreadId({ threadId });
+        let runtime = yield* repository.getByThreadId({ threadId });
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (Option.isSome(runtime) && runtime.value.status === "stopped") {
+            break;
+          }
+          yield* Effect.yieldNow;
+          runtime = yield* repository.getByThreadId({ threadId });
+        }
         assert.equal(Option.isSome(runtime), true);
         if (Option.isSome(runtime)) {
-          assert.equal(runtime.value.status, "running");
+          assert.equal(runtime.value.status, "stopped");
         }
       }).pipe(Effect.provide(testLayer));
     }).pipe(Effect.provide(NodeServices.layer)),

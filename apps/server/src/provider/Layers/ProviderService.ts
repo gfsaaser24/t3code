@@ -336,10 +336,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       } else {
         lastBindingTouchAtMs.delete(threadKey);
         // A session.exited that raced a replacement session must not stomp
-        // the fresh binding: the exit belongs to the torn-down session, and
-        // the adapter is the authority on whether a live one remains.
-        const stillLive = yield* adapter.hasSession(event.threadId);
-        if (stillLive) {
+        // the fresh binding. Thread-level `hasSession` is not enough here:
+        // a Codex child-process crash emits session.exited without tearing
+        // down the adapter's map entry, so the dead session itself still
+        // reports live. Skip only when the adapter holds a session created
+        // AFTER this exit event — that can only be a replacement.
+        const activeSessions = yield* adapter.listSessions();
+        const current = activeSessions.find((session) => session.threadId === event.threadId);
+        const replacementIsLive =
+          current !== undefined && Date.parse(current.createdAt) > Date.parse(event.createdAt);
+        if (replacementIsLive) {
           return;
         }
       }
