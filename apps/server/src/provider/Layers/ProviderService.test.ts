@@ -718,6 +718,86 @@ it.effect("marks the persisted binding stopped when session.exited flows through
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("refreshes the binding lastSeenAt when turn activity flows through the pump", () =>
+  Effect.gen(function* () {
+    const codex = makeFakeCodexAdapter();
+    const registry = makeAdapterRegistryMock({
+      [ProviderDriverKind.make("codex")]: codex.adapter,
+    });
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+
+    const threadId = asThreadId("thread-turn-activity-touch");
+    const staleLastSeenAt = "2026-01-01T00:00:00.000Z";
+
+    const testLayer = providerLayer.pipe(
+      Layer.provideMerge(directoryLayer),
+      Layer.provideMerge(runtimeRepositoryLayer),
+    );
+
+    // Provider-initiated turns (background task notifications waking the
+    // agent) never route through sendTurn, so the pump must be the thing
+    // that keeps lastSeenAt honest — otherwise the reaper reads a thread
+    // doing autonomous work as idle since the user's last message.
+    yield* Effect.gen(function* () {
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      yield* ProviderService.ProviderService;
+      yield* repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: codexInstanceId,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: staleLastSeenAt,
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+      yield* advanceTestClock(10);
+      codex.emit({
+        eventId: asEventId("evt-turn-activity-touch"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        type: "turn.completed",
+        payload: {
+          state: "completed",
+        },
+      });
+      yield* advanceTestClock(20);
+
+      let runtime = yield* repository.getByThreadId({ threadId });
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (Option.isSome(runtime) && runtime.value.lastSeenAt !== staleLastSeenAt) {
+          break;
+        }
+        yield* Effect.yieldNow;
+        runtime = yield* repository.getByThreadId({ threadId });
+      }
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.notEqual(runtime.value.lastSeenAt, staleLastSeenAt);
+        // Turn activity must not change the binding status.
+        assert.equal(runtime.value.status, "running");
+      }
+    }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-service-"));
