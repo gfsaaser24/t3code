@@ -281,46 +281,61 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
     });
 
-  // Adapter-internal exits (stream end, session replace, adapter stopAll)
-  // emit `session.exited` without ever passing through `stopSession`, which
-  // left the persisted binding `running` — a ghost row the reaper keeps
-  // sweeping and diagnosis tooling misreads. The event pump is the one
-  // funnel every adapter shares, so the binding invariant lives here.
-  // Best-effort: a missing binding is a no-op and failures must never
-  // break event delivery.
-  const syncBindingOnSessionExit = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-    event.type !== "session.exited"
-      ? Effect.void
-      : Effect.gen(function* () {
-          const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-          const providerInstanceId = binding?.providerInstanceId;
-          if (
-            binding === undefined ||
-            binding.status === "stopped" ||
-            providerInstanceId === undefined
-          ) {
-            return;
-          }
-          const lastRuntimeEventAt = yield* nowIso;
-          yield* directory.upsert({
-            threadId: event.threadId,
-            provider: binding.provider,
-            providerInstanceId,
-            status: "stopped",
-            runtimePayload: {
-              activeTurnId: null,
-              lastRuntimeEvent: "session.exited",
-              lastRuntimeEventAt,
-            },
-          });
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider.session.binding-sync-on-exit-failed", {
-              threadId: event.threadId,
-              cause,
-            }),
-          ),
-        );
+  // The event pump is the one funnel every adapter shares, so two binding
+  // invariants live here. Both are best-effort: a missing binding is a
+  // no-op and failures must never break event delivery.
+  //
+  // 1. `session.exited`: adapter-internal exits (stream end, session
+  //    replace, adapter stopAll) never pass through `stopSession`, which
+  //    left the persisted binding `running` — a ghost row the reaper keeps
+  //    sweeping and diagnosis tooling misreads.
+  // 2. `turn.started` / `turn.completed`: `lastSeenAt` previously moved
+  //    only on user-initiated `sendTurn`. Turns the provider starts on its
+  //    own (background task notifications waking the agent) never routed
+  //    through it, so a thread doing autonomous work read as idle from the
+  //    moment the user last typed — and got reaped mid-work 30 minutes
+  //    later. Touching the binding on turn lifecycle makes the reaper's
+  //    clock measure actual inactivity.
+  const syncBindingOnRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> => {
+    const isSessionExit = event.type === "session.exited";
+    const isTurnActivity = event.type === "turn.started" || event.type === "turn.completed";
+    if (!isSessionExit && !isTurnActivity) {
+      return Effect.void;
+    }
+    return Effect.gen(function* () {
+      const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+      const providerInstanceId = binding?.providerInstanceId;
+      if (
+        binding === undefined ||
+        binding.status === "stopped" ||
+        providerInstanceId === undefined
+      ) {
+        return;
+      }
+      const lastRuntimeEventAt = yield* nowIso;
+      // On turn activity `status` is omitted so the directory preserves the
+      // existing value; the upsert itself refreshes `lastSeenAt`.
+      yield* directory.upsert({
+        threadId: event.threadId,
+        provider: binding.provider,
+        providerInstanceId,
+        ...(isSessionExit ? { status: "stopped" as const } : {}),
+        runtimePayload: {
+          ...(isSessionExit ? { activeTurnId: null } : {}),
+          lastRuntimeEvent: event.type,
+          lastRuntimeEventAt,
+        },
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider.session.binding-sync-failed", {
+          threadId: event.threadId,
+          eventType: event.type,
+          cause,
+        }),
+      ),
+    );
+  };
 
   const processRuntimeEvent = (
     source: {
@@ -336,7 +351,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           eventType: canonicalEvent.type,
         }).pipe(
           Effect.andThen(publishRuntimeEvent(canonicalEvent)),
-          Effect.andThen(syncBindingOnSessionExit(canonicalEvent)),
+          Effect.andThen(syncBindingOnRuntimeEvent(canonicalEvent)),
         ),
       ),
     );
