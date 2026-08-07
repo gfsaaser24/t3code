@@ -34,6 +34,9 @@ export function ChatPaneControl() {
               variant="outline"
               className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
               aria-label="Start a new chat"
+              // The tooltip wrapper replaces data-slot="button", so themed
+              // toolbar styling needs its own hook.
+              data-toolbar-control=""
               onClick={() => void replaceWithNewChat(currentPaneId)}
             />
           }
@@ -76,6 +79,9 @@ export function ChatPaneControl() {
                   size="icon-xs"
                   variant="outline"
                   aria-label="Close this chat pane"
+                  // The tooltip wrapper replaces data-slot="button", so themed
+                  // toolbar styling needs its own hook.
+                  data-toolbar-control=""
                   onClick={() => currentPaneId && closePane(currentPaneId)}
                 />
               }

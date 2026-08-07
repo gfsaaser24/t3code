@@ -132,9 +132,30 @@ export const TurboChatPaneTarget = Schema.Union([
 ]);
 export type TurboChatPaneTarget = typeof TurboChatPaneTarget.Type;
 
+/**
+ * Relative width of a pane inside the split, used as a flex grow weight.
+ *
+ * The bounds only keep a single stored value sane; the meaningful invariant is
+ * that weights are relative to their siblings, which a per-field schema cannot
+ * express. Restoring normalizes the row, so a partially written or hand-edited
+ * set still resolves to usable widths.
+ */
+export const MIN_TURBO_CHAT_PANE_WEIGHT = 0.05;
+export const MAX_TURBO_CHAT_PANE_WEIGHT = 20;
+export const TurboChatPaneWeight = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_TURBO_CHAT_PANE_WEIGHT,
+    maximum: MAX_TURBO_CHAT_PANE_WEIGHT,
+  }),
+);
+export type TurboChatPaneWeight = typeof TurboChatPaneWeight.Type;
+
 export const TurboChatPane = Schema.Struct({
   id: TurboChatPaneId,
   target: TurboChatPaneTarget,
+  // Optional so layouts persisted before resizing shipped still decode; a
+  // missing weight means "share the row equally".
+  weight: Schema.optionalKey(TurboChatPaneWeight),
 });
 export type TurboChatPane = typeof TurboChatPane.Type;
 
