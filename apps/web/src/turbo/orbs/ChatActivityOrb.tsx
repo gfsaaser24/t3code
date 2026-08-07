@@ -23,6 +23,18 @@ export interface ChatActivityOrbProps extends ChatOrbInput {
   readonly className?: string;
 }
 
+/**
+ * The composer's orb, above the stop button.
+ *
+ * Fixed to `solving` rather than tracking the live state: this slot answers
+ * "the model has the floor", and the per-state detail belongs on the timeline
+ * rows where the thing it describes is actually visible. Rendered only inside
+ * the stop button's branch, so it appears exactly while a turn can be stopped.
+ */
+export function ComposerThinkingOrb() {
+  return <ThinkingOrb state="solving" size={20} aria-label="Thinking" />;
+}
+
 export function ChatActivityOrb({ size = 20, className, ...activity }: ChatActivityOrbProps) {
   const state: ChatOrbState | null = resolveChatOrbState(activity);
   // An idle thread renders nothing rather than a paused orb: a frozen
