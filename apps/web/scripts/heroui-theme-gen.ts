@@ -138,7 +138,11 @@ const dark: Overrides = {
   messageActionForeground: "#fcfcfc",
 };
 
-function build(appearance: "light" | "dark", background: string, overrides: Overrides): ThemeColors {
+function build(
+  appearance: "light" | "dark",
+  background: string,
+  overrides: Overrides,
+): ThemeColors {
   const derived = createManagedThemeColors(appearance, background, ACCENT, { exactSeeds: true });
   return { ...derived, ...overrides } as ThemeColors;
 }
@@ -168,11 +172,16 @@ const derivedLight = createManagedThemeColors("light", LIGHT_BG, ACCENT, { exact
 const derivedDark = createManagedThemeColors("dark", DARK_BG, ACCENT, { exactSeeds: true });
 
 console.log(`roles: ${THEME_COLOR_ROLES.length}`);
-console.log(`explicit light: ${Object.keys(light).length}  derived light: ${THEME_COLOR_ROLES.length - Object.keys(light).length}`);
-console.log(`explicit dark:  ${Object.keys(dark).length}  derived dark:  ${THEME_COLOR_ROLES.length - Object.keys(dark).length}`);
+console.log(
+  `explicit light: ${Object.keys(light).length}  derived light: ${THEME_COLOR_ROLES.length - Object.keys(light).length}`,
+);
+console.log(
+  `explicit dark:  ${Object.keys(dark).length}  derived dark:  ${THEME_COLOR_ROLES.length - Object.keys(dark).length}`,
+);
 console.log(`\nroles left to T3's derivation (light):`);
 for (const role of THEME_COLOR_ROLES) {
-  if (!(role in light)) console.log(`  ${role.padEnd(28)} ${derivedLight[role]}   dark ${derivedDark[role]}`);
+  if (!(role in light))
+    console.log(`  ${role.padEnd(28)} ${derivedLight[role]}   dark ${derivedDark[role]}`);
 }
 
 const outputPath = new URL("../src/turbo/themes/heroui-pro.json", import.meta.url);
