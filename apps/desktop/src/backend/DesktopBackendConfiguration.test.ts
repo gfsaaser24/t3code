@@ -153,7 +153,7 @@ describe("DesktopBackendConfiguration", () => {
     ),
   );
 
-  it.effect("resolveWsl reuses the primary's bootstrap token", () =>
+  it.effect("resolveWsl uses distro-local Turbo state and reuses the primary token", () =>
     withHarness(
       Effect.gen(function* () {
         const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
@@ -161,6 +161,7 @@ describe("DesktopBackendConfiguration", () => {
         const primary = yield* configuration.resolvePrimary;
         const wsl = yield* configuration.resolveWsl({ port: 5000, distro: null });
 
+        assert.notProperty(wsl.bootstrap, "t3Home");
         assert.equal(wsl.bootstrap.desktopBootstrapToken, primary.bootstrap.desktopBootstrapToken);
       }),
     ),

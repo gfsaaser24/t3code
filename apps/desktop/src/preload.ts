@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     }
     return result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
   },
+  discoverOfficialT3Import: () =>
+    ipcRenderer.invoke(IpcChannels.DISCOVER_OFFICIAL_T3_IMPORT_CHANNEL),
+  runOfficialT3Import: (input) =>
+    ipcRenderer.invoke(IpcChannels.RUN_OFFICIAL_T3_IMPORT_CHANNEL, input),
   getLocalEnvironmentBearerToken: () =>
     ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),

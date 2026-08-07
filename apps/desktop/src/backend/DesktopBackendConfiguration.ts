@@ -446,9 +446,9 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     mode: "desktop" as const,
     noBrowser: true,
     port: input.port,
-    // Omit t3Home so the Linux backend uses its own home dir instead of
-    // the Windows-side baseDir (which would be a /mnt/c path and share
-    // the SQLite file with the primary).
+    // Omit t3Home so the Linux server resolves its Turbo default under the
+    // distro's own ~/.t3-turbo. Passing the Windows-side baseDir would create
+    // a /mnt/c path and share the SQLite file with the primary.
     host: wslBindHost,
     desktopBootstrapToken: input.bootstrapToken,
     // PortSchema rejects 0, so when tailscale serve is disabled we still
