@@ -5,9 +5,12 @@ import * as Planetscale from "alchemy/Planetscale";
 import * as Alchemy from "alchemy";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 
 import { relayDatabaseMode } from "./dbConfig.ts";
 
@@ -34,6 +37,22 @@ export class RelayTransactions extends Context.Service<
     }),
   );
 }
+
+const externalDatabaseConfiguration = Config.all({
+  host: Config.nonEmptyString("DATABASE_HOST"),
+  port: Config.port("DATABASE_PORT").pipe(Config.withDefault(5432)),
+  database: Config.nonEmptyString("DATABASE_NAME"),
+  user: Config.nonEmptyString("DATABASE_USER"),
+  password: Config.nonEmptyString("DATABASE_PASSWORD").pipe(Config.map(Redacted.make)),
+});
+
+export const ExternalDatabaseConfiguration = externalDatabaseConfiguration.pipe(
+  Config.map(Option.some),
+  // Empty GitHub variables mean "not configured" and retain the upstream PlanetScale path.
+  Config.orElse(() =>
+    Config.succeed(Option.none<Config.Success<typeof externalDatabaseConfiguration>>()),
+  ),
+);
 
 export const PlanetscaleDatabase = Effect.gen(function* () {
   const { stage } = yield* Alchemy.Stack;
@@ -75,13 +94,41 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
   return { branch, database, runtimeRole };
 });
 
-export const RelayHyperdrive = Effect.gen(function* () {
-  const { runtimeRole } = yield* PlanetscaleDatabase;
-  return yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
+export const RelayDatabase = Effect.gen(function* () {
+  const external = yield* ExternalDatabaseConfiguration;
+  if (Option.isSome(external)) {
+    const hyperdrive = yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
+      origin: {
+        scheme: "postgres",
+        ...external.value,
+      },
+      mtls: { sslmode: "require" },
+      caching: {
+        disabled: true,
+      },
+      originConnectionLimit: 20,
+    });
+    return {
+      databaseName: external.value.database,
+      databaseBranchName: "external",
+      hyperdrive,
+    } as const;
+  }
+
+  // Preserve the managed PlanetScale deployment for upstream-compatible environments.
+  const { database, branch, runtimeRole } = yield* PlanetscaleDatabase;
+  const hyperdrive = yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
     origin: runtimeRole.origin,
     caching: {
       disabled: true,
     },
     originConnectionLimit: 20,
   });
+  return {
+    databaseName: database.name,
+    databaseBranchName: branch?.name ?? "main",
+    hyperdrive,
+  } as const;
 });
+
+export const RelayHyperdrive = RelayDatabase.pipe(Effect.map(({ hyperdrive }) => hyperdrive));

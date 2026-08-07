@@ -40,6 +40,7 @@ const relayDeployOutputFields = [
   "clientTracingDataset",
   "clientTracingToken",
 ] as const;
+const requiredRelayDeployOutputFields = ["url"] as const;
 
 export const RelayDeployOutputField = Schema.Literals(relayDeployOutputFields);
 export type RelayDeployOutputField = typeof RelayDeployOutputField.Type;
@@ -251,7 +252,9 @@ const writeGithubEnvFile = Effect.fn("relay.deploy.writeGithubEnvFile")(function
     });
   }
   const fs = yield* FileSystem.FileSystem;
-  yield* Console.log(`::add-mask::${outcome.publicConfig.value.clientTracingToken}`);
+  if (outcome.publicConfig.value.clientTracingToken) {
+    yield* Console.log(`::add-mask::${outcome.publicConfig.value.clientTracingToken}`);
+  }
   yield* fs.writeFileString(
     outputPath,
     serializeRelayClientTracingEnvironment(outcome.publicConfig.value),
@@ -312,28 +315,22 @@ export function missingRelayPublicConfigFields(
   output: unknown,
 ): ReadonlyArray<RelayDeployOutputField> {
   const values = relayPublicConfigValues(output);
-  return relayDeployOutputFields.filter((field) => values[field] === undefined);
-}
-
-function hasCompleteRelayPublicConfigValues(
-  values: Readonly<Record<RelayDeployOutputField, string | undefined>>,
-): values is Readonly<Record<RelayDeployOutputField, string>> {
-  return relayDeployOutputFields.every((field) => values[field] !== undefined);
+  return requiredRelayDeployOutputFields.filter((field) => values[field] === undefined);
 }
 
 export function publicConfigFromOutput(output: unknown): RelayPublicConfig | null {
   const values = relayPublicConfigValues(output);
-  if (!hasCompleteRelayPublicConfigValues(values)) {
+  if (values.url === undefined) {
     return null;
   }
   return {
     relayUrl: values.url,
-    mobileTracingUrl: values.mobileTracingUrl,
-    mobileTracingDataset: values.mobileTracingDataset,
-    mobileTracingToken: values.mobileTracingToken,
-    clientTracingUrl: values.clientTracingUrl,
-    clientTracingDataset: values.clientTracingDataset,
-    clientTracingToken: values.clientTracingToken,
+    mobileTracingUrl: values.mobileTracingUrl ?? "",
+    mobileTracingDataset: values.mobileTracingDataset ?? "",
+    mobileTracingToken: values.mobileTracingToken ?? "",
+    clientTracingUrl: values.clientTracingUrl ?? "",
+    clientTracingDataset: values.clientTracingDataset ?? "",
+    clientTracingToken: values.clientTracingToken ?? "",
   };
 }
 
@@ -413,7 +410,13 @@ const runRelayDeploy = Effect.fn("relay.deploy.run")(
         Layer.mergeAll(
           Layer.effect(
             AlchemyContext,
-            AlchemyContext.pipe(Effect.map((context) => ({ ...context, adopt: options.adopt }))),
+            AlchemyContext.pipe(
+              Effect.map((context) => ({
+                ...context,
+                adopt: options.adopt,
+                updateStateStore: options.yes,
+              })),
+            ),
           ),
           Layer.succeed(AdoptPolicy, options.adopt),
           Layer.succeed(AuthProviders, {}),
@@ -490,7 +493,7 @@ export const relayDeployCommand = Command.make(
     ),
   },
   deploy,
-).pipe(Command.withDescription("Deploy the T3 Code relay through Alchemy."));
+).pipe(Command.withDescription("Deploy the T3 Turbo relay through Alchemy."));
 
 if (import.meta.main) {
   Command.run(relayDeployCommand, { version: "0.0.0" }).pipe(

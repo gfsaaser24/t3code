@@ -19,7 +19,6 @@ import {
 describe("RelayDeployError", () => {
   it("reports the incomplete state source, stage, and missing fields", () => {
     const missingFields = missingRelayPublicConfigFields({
-      url: "https://relay.example.test",
       mobileTracingUrl: "https://api.axiom.co/v1/traces",
     });
     const error = new RelayDeployError({
@@ -31,16 +30,10 @@ describe("RelayDeployError", () => {
     expect(error).toMatchObject({
       source: "alchemy_state",
       stage: "production",
-      missingFields: [
-        "mobileTracingDataset",
-        "mobileTracingToken",
-        "clientTracingUrl",
-        "clientTracingDataset",
-        "clientTracingToken",
-      ],
+      missingFields: ["url"],
     });
     expect(error.message).toBe(
-      "Relay deploy output from 'alchemy_state' for stage 'production' is missing required public config fields: mobileTracingDataset, mobileTracingToken, clientTracingUrl, clientTracingDataset, clientTracingToken",
+      "Relay deploy output from 'alchemy_state' for stage 'production' is missing required public config fields: url",
     );
   });
 
@@ -241,7 +234,15 @@ describe("publicConfigFromOutput", () => {
     });
   });
 
-  it("rejects incomplete stack output", () => {
-    expect(publicConfigFromOutput({ url: "https://relay.example.test" })).toBeNull();
+  it("accepts a relay URL without optional tracing output", () => {
+    expect(publicConfigFromOutput({ url: "https://relay.example.test" })).toEqual({
+      relayUrl: "https://relay.example.test",
+      mobileTracingUrl: "",
+      mobileTracingDataset: "",
+      mobileTracingToken: "",
+      clientTracingUrl: "",
+      clientTracingDataset: "",
+      clientTracingToken: "",
+    });
   });
 });
