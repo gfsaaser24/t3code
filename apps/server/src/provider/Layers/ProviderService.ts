@@ -281,6 +281,47 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
     });
 
+  // Adapter-internal exits (stream end, session replace, adapter stopAll)
+  // emit `session.exited` without ever passing through `stopSession`, which
+  // left the persisted binding `running` — a ghost row the reaper keeps
+  // sweeping and diagnosis tooling misreads. The event pump is the one
+  // funnel every adapter shares, so the binding invariant lives here.
+  // Best-effort: a missing binding is a no-op and failures must never
+  // break event delivery.
+  const syncBindingOnSessionExit = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+    event.type !== "session.exited"
+      ? Effect.void
+      : Effect.gen(function* () {
+          const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+          const providerInstanceId = binding?.providerInstanceId;
+          if (
+            binding === undefined ||
+            binding.status === "stopped" ||
+            providerInstanceId === undefined
+          ) {
+            return;
+          }
+          const lastRuntimeEventAt = yield* nowIso;
+          yield* directory.upsert({
+            threadId: event.threadId,
+            provider: binding.provider,
+            providerInstanceId,
+            status: "stopped",
+            runtimePayload: {
+              activeTurnId: null,
+              lastRuntimeEvent: "session.exited",
+              lastRuntimeEventAt,
+            },
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("provider.session.binding-sync-on-exit-failed", {
+              threadId: event.threadId,
+              cause,
+            }),
+          ),
+        );
+
   const processRuntimeEvent = (
     source: {
       readonly instanceId: ProviderInstanceId;
@@ -293,7 +334,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         increment(providerRuntimeEventsTotal, {
           provider: canonicalEvent.provider,
           eventType: canonicalEvent.type,
-        }).pipe(Effect.andThen(publishRuntimeEvent(canonicalEvent))),
+        }).pipe(
+          Effect.andThen(publishRuntimeEvent(canonicalEvent)),
+          Effect.andThen(syncBindingOnSessionExit(canonicalEvent)),
+        ),
       ),
     );
 
