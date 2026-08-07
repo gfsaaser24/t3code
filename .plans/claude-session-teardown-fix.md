@@ -41,12 +41,27 @@ run. Trace evidence (`server.trace.ndjson.3`, trace `876a00c3…`):
   `resolveRoutableSession` → `stopSession` → MCP revoke → analytics) forked
   from the startup reactor phase, with no client command anywhere in it.
 
-So the two incidents demonstrate two distinct triggers funneling through the
-same blind spot: (A) the SDK stream ending on its own (~5 min after settle,
-trigger unmeasured until now), and (B) the reaper sweeping an "idle" session
-whose only live work was background. Fix 3 covers (B) directly — `local_bash`
-classifies into `MONITOR_TASK_TYPES`, so the liveness registry reports
-"monitoring" and the sweep defers.
+## Unified root cause (resolved by forensics, 2026-08-07)
+
+Deeper digging closed the "unknown stream-end trigger" question: **there was
+only ever one killer — the reaper.** All 13 `thread.session-set stopped`
+events across three threads that day landed 30.1–39.7 minutes after the last
+**user message** (verified per-stop against `projection_thread_messages`).
+The lawn-app session at 17:51:48 was streaming four agents' tool calls two
+seconds before its "graceful" exit — the process did not die on its own;
+`stopSession` killed it.
+
+The gap that made the reaper's 30-minute rule misfire during active work:
+`lastSeenAt` only refreshed on user-initiated `sendTurn`. Turns the provider
+starts by itself (background task notifications waking the agent) never route
+through it, so a thread doing autonomous work reads as idle from the user's
+last keystroke. Fixed by touching the binding on `turn.started` /
+`turn.completed` in the event pump (same helper as the `session.exited`
+binding sync).
+
+Coverage: incident A (four `local_agent` fleets) and incident B (`local_bash`
+suite) are both deferred by the liveness check, and the turn-activity
+heartbeat keeps the clock honest between notifications.
 
 ## Review outcome (3 parallel reviewers)
 
@@ -100,8 +115,9 @@ desktop, mobile, relay, and tunnel modes are unaffected.
   resume handshakes emit `turn.completed` and can complete a real active turn
   prematurely (observed at `19:03:51` and `19:20`). Needs its own PR and
   non-suppression tests.
-- Root-cause hunt for the stream-end trigger (~4m45s after idle in the
-  incident). The new structured log provides the measurement.
+- ~~Root-cause hunt for the stream-end trigger~~ Resolved: it was the reaper
+  (see "Unified root cause"). The structured log stays as a tripwire for any
+  genuinely spontaneous CLI exit.
 
 ## Tests
 
