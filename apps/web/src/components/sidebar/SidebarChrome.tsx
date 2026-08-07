@@ -2,6 +2,10 @@ import { SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
+import { APP_BASE_NAME } from "../../branding";
+import { useActiveEnvironmentId } from "../../state/entities";
+import { usePrimaryEnvironmentId } from "../../state/environments";
+import { DesktopEnvironmentSwitcher } from "../desktop/DesktopEnvironmentSwitcher";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import {
@@ -21,6 +25,7 @@ import {
   useSidebar,
 } from "../ui/sidebar";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
+import { resolveSidebarProductLabel } from "./SidebarChrome.logic";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
@@ -70,9 +75,11 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
 });
 
 function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
+  const productLabel = resolveSidebarProductLabel(APP_BASE_NAME);
+
   return (
     <Link
-      aria-label="Go to threads"
+      aria-label={`${APP_BASE_NAME} — go to threads`}
       className={cn(
         "sidebar-brand relative z-10 ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md outline-hidden ring-ring focus-visible:ring-2",
         onBackdrop ? "text-white" : "text-foreground",
@@ -86,7 +93,7 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
           onBackdrop ? "text-white/70" : "text-muted-foreground",
         )}
       >
-        Code
+        {productLabel}
       </span>
     </Link>
   );
@@ -111,6 +118,9 @@ function T3Wordmark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const activeEnvironmentId = useActiveEnvironmentId();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const switcherEnvironmentId = activeEnvironmentId ?? primaryEnvironmentId;
   const handleSettingsClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -122,6 +132,11 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
+      {switcherEnvironmentId ? (
+        <div className="px-1 pb-0.5">
+          <DesktopEnvironmentSwitcher activeEnvironmentId={switcherEnvironmentId} />
+        </div>
+      ) : null}
       <SidebarMenu>
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleSettingsClick}>

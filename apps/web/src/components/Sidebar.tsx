@@ -205,6 +205,11 @@ import {
   type SidebarProjectGroupMember,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
+import { openChatPaneTarget } from "~/turbo/chatPanes/ChatPaneActionsContext";
+import {
+  buildChatPaneContextMenuItems,
+  resolveChatPaneSide,
+} from "~/turbo/chatPanes/chatPaneContextMenu";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -2111,6 +2116,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         thread.worktreePath ?? threadProject?.workspaceRoot ?? project.workspaceRoot ?? null;
       const clicked = await api.contextMenu.show(
         [
+          ...buildChatPaneContextMenuItems(),
           ...(thread.branch
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
             : []),
@@ -2122,6 +2128,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         ],
         position,
       );
+
+      const chatPaneSide = resolveChatPaneSide(clicked);
+      if (chatPaneSide) {
+        openChatPaneTarget({ kind: "server", threadRef }, chatPaneSide);
+        return;
+      }
 
       if (clicked === "new-thread-on-branch") {
         // Explicit branch carry-over: reuse the thread's worktree when it

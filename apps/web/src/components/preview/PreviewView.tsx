@@ -63,6 +63,7 @@ interface Props {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
+  actionsEnabled?: boolean;
 }
 
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
@@ -77,6 +78,7 @@ export function PreviewView({
   configuredUrls,
   visible,
   onSendAnnotation,
+  actionsEnabled = visible,
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
@@ -593,7 +595,7 @@ export function PreviewView({
   // Subscribe only while visible; `toggle-panel` is owned by ChatView's
   // URL-aware handler regardless of whether the panel is currently mounted.
   useEffect(() => {
-    if (!visible) return;
+    if (!visible || !actionsEnabled) return;
     return subscribePreviewAction((action) => {
       switch (action) {
         case "refresh":
@@ -615,7 +617,7 @@ export function PreviewView({
           return;
       }
     });
-  }, [handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, visible]);
+  }, [actionsEnabled, handleRefresh, handleResetZoom, handleZoomIn, handleZoomOut, visible]);
 
   return (
     <div

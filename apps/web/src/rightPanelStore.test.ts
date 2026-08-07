@@ -102,6 +102,28 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("upgrades saved files surfaces with neutral path reveal state", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "files",
+            surfaces: [{ id: "files", kind: "files" }],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "files",
+          surfaces: [{ id: "files", kind: "files", revealPath: null, revealRequestId: 0 }],
+        },
+      },
+    });
+  });
+
   it("drops persisted plan surfaces and does not reopen an empty panel", () => {
     expect(
       migratePersistedRightPanelState({
@@ -173,11 +195,11 @@ describe("rightPanelStore", () => {
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,
       activeSurfaceId: "files",
-      surfaces: [{ id: "files", kind: "files" }],
+      surfaces: [{ id: "files", kind: "files", revealPath: null, revealRequestId: 0 }],
     });
   });
 
-  it("replaces the standalone explorer with peer file surfaces", () => {
+  it("keeps the standalone explorer alongside peer file surfaces", () => {
     useRightPanelStore.getState().open(refA, "files");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");
     useRightPanelStore.getState().openFile(refA, "src/index.ts");
@@ -187,6 +209,7 @@ describe("rightPanelStore", () => {
       isOpen: true,
       activeSurfaceId: "file:README.md",
       surfaces: [
+        { id: "files", kind: "files", revealPath: null, revealRequestId: 0 },
         {
           id: "file:src/index.ts",
           kind: "file",
@@ -202,6 +225,95 @@ describe("rightPanelStore", () => {
           revealRequestId: 1,
         },
       ],
+    });
+  });
+
+  it("opens image files as reusable peer tabs", () => {
+    useRightPanelStore.getState().openFile(refA, "assets/hero.png");
+    useRightPanelStore.getState().openFile(refA, "assets/diagram.svg");
+    useRightPanelStore.getState().openFile(refA, "assets/hero.png");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "file:assets/hero.png",
+      surfaces: [
+        {
+          id: "file:assets/hero.png",
+          kind: "file",
+          relativePath: "assets/hero.png",
+          revealLine: null,
+          revealRequestId: 2,
+        },
+        {
+          id: "file:assets/diagram.svg",
+          kind: "file",
+          relativePath: "assets/diagram.svg",
+          revealLine: null,
+          revealRequestId: 1,
+        },
+      ],
+    });
+  });
+
+  it("activates the Files surface with repeatable path reveal requests", () => {
+    useRightPanelStore.getState().open(refA, "files");
+    useRightPanelStore.getState().openFile(refA, "src/components/App.tsx", 12);
+    useRightPanelStore.getState().revealInFiles(refA, "src/components");
+    useRightPanelStore.getState().revealInFiles(refA, "src/components");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "files",
+      surfaces: [
+        {
+          id: "files",
+          kind: "files",
+          revealPath: "src/components",
+          revealRequestId: 2,
+        },
+        {
+          id: "file:src/components/App.tsx",
+          kind: "file",
+          relativePath: "src/components/App.tsx",
+          revealLine: 12,
+          revealRequestId: 1,
+        },
+      ],
+    });
+  });
+
+  it("renames an open file surface and preserves its active reveal state", () => {
+    useRightPanelStore.getState().open(refA, "files");
+    useRightPanelStore.getState().openFile(refA, "src/old.ts", 42);
+
+    useRightPanelStore.getState().renameFileSurface(refA, "src/old.ts", "src/new.ts");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "file:src/new.ts",
+      surfaces: [
+        { id: "files", kind: "files", revealPath: null, revealRequestId: 0 },
+        {
+          id: "file:src/new.ts",
+          kind: "file",
+          relativePath: "src/new.ts",
+          revealLine: 42,
+          revealRequestId: 1,
+        },
+      ],
+    });
+  });
+
+  it("closes a deleted file surface and activates its neighbor", () => {
+    useRightPanelStore.getState().open(refA, "files");
+    useRightPanelStore.getState().openFile(refA, "src/deleted.ts");
+
+    useRightPanelStore.getState().closeFileSurface(refA, "src/deleted.ts");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "files",
+      surfaces: [{ id: "files", kind: "files", revealPath: null, revealRequestId: 0 }],
     });
   });
 

@@ -5,6 +5,10 @@ import type {
 import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
 import { RotateCw } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
@@ -18,8 +22,17 @@ import { useTheme } from "~/hooks/useTheme";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
+import { projectEnvironment } from "~/state/projects";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
+import { type FileTreeContextMenuAction, fileTreeContextMenuItems } from "./fileTreeContextMenu";
+import {
+  directoryTreePaths,
+  getAltChevronExpansion,
+  rootDirectoryTreePaths,
+  setAllDirectoriesExpanded,
+} from "./fileTreeBulkExpansion";
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 
 interface FileBrowserPanelProps {
@@ -30,7 +43,14 @@ interface FileBrowserPanelProps {
   selectedPath: string | null;
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
   selectedPathRevealId: number;
+  /** Directory path requested by navigation outside the tree, or null when idle. */
+  requestedRevealPath: string | null;
+  /** Bumped when the same external reveal path should be handled again. */
+  requestedRevealId: number;
   onOpenFile: (relativePath: string) => void;
+  onFileRenamed: (oldRelativePath: string, newRelativePath: string) => void;
+  onFileDeleted: (relativePath: string) => void;
+  isFileMutationPending: (relativePath: string) => boolean;
 }
 
 const TREE_UNSAFE_CSS = `
@@ -104,11 +124,19 @@ export default function FileBrowserPanel({
   projectName,
   selectedPath,
   selectedPathRevealId,
+  requestedRevealPath,
+  requestedRevealId,
   onOpenFile,
+  onFileRenamed,
+  onFileDeleted,
+  isFileMutationPending,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
   const entriesQuery = useProjectEntriesQuery(environmentId, cwd);
+  const renameFile = useAtomCommand(projectEnvironment.renameFile);
+  const duplicateFile = useAtomCommand(projectEnvironment.duplicateFile);
+  const deleteFile = useAtomCommand(projectEnvironment.deleteFile);
   const entries = entriesQuery.data?.entries ?? [];
   const entryKinds = useMemo(
     () => new Map(entries.map((entry) => [entry.path, entry.kind] as const)),
@@ -116,10 +144,52 @@ export default function FileBrowserPanel({
   );
   const entryKindsRef = useRef<ReadonlyMap<string, ProjectEntry["kind"]>>(entryKinds);
   const treePaths = useMemo(() => entries.map(treePath), [entries]);
+  const directoryPaths = useMemo(() => directoryTreePaths(entries), [entries]);
+  const initialDirectoryPaths = useMemo(
+    () => rootDirectoryTreePaths(directoryPaths),
+    [directoryPaths],
+  );
   const previousTreePathsRef = useRef<readonly string[]>([]);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
   const handledRevealRef = useRef<{ path: string; revealId: number } | null>(null);
+  const treeModelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
+
+  const showMutationFailure = (
+    title: string,
+    result: Parameters<typeof isAtomCommandInterrupted>[0],
+  ) => {
+    if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+    const error = squashAtomCommandFailure(result);
+    toastManager.add({
+      type: "error",
+      title,
+      description: error instanceof Error ? error.message : "An error occurred.",
+    });
+  };
+
+  const renameFileFromTree = async (sourcePath: string, destinationPath: string) => {
+    const result = await renameFile({
+      environmentId,
+      input: { cwd, relativePath: sourcePath, destinationRelativePath: destinationPath },
+    });
+    if (result._tag === "Failure") {
+      showMutationFailure("Unable to rename file", result);
+      entriesQuery.refresh();
+      return;
+    }
+    onFileRenamed(sourcePath, result.value.relativePath);
+    entriesQuery.refresh();
+    toastManager.add({
+      type: "success",
+      title: "File renamed",
+      description: result.value.relativePath,
+    });
+  };
+  const renameFileFromTreeRef = useRef(renameFileFromTree);
+  useEffect(() => {
+    renameFileFromTreeRef.current = renameFileFromTree;
+  });
 
   // The tree renders rows in shadow DOM and its anchor rect is unreliable, so
   // capture the right-click position ourselves; contextmenu is a composed
@@ -150,48 +220,86 @@ export default function FileBrowserPanel({
     const position = pointerIsFresh
       ? { x: pointer.x, y: pointer.y }
       : { x: anchorRect.left, y: anchorRect.bottom };
+    const mutationPending = item.kind === "file" && isFileMutationPending(relativePath);
+    let clicked: FileTreeContextMenuAction | null = null;
     try {
-      const clicked = await api.contextMenu.show(
-        [
-          { id: "copy-mention", label: "Copy mention" },
-          { id: "add-to-chat", label: "Add to chat" },
-        ],
+      clicked = await api.contextMenu.show(
+        fileTreeContextMenuItems(item.kind, mutationPending),
         position,
       );
-      if (clicked === "copy-mention") {
-        try {
-          await writeTextToClipboard(mention);
-          toastManager.add({ type: "success", title: "Mention copied", description: relativePath });
-        } catch (error) {
-          toastManager.add({
-            type: "error",
-            title: "Failed to copy mention",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          });
-        }
-        return;
-      }
-      if (clicked === "add-to-chat") {
-        const composer = composerRef?.current;
-        if (!composer) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to add to chat",
-            description: "Open a chat for this project and try again.",
-          });
-          return;
-        }
-        const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
-        if (!inserted) {
-          toastManager.add({
-            type: "error",
-            title: "Unable to add to chat",
-            description: "The chat isn't ready to accept input right now.",
-          });
-        }
-      }
     } finally {
       context.close();
+    }
+
+    if (clicked === "open-new-tab") {
+      onOpenFile(relativePath);
+      return;
+    }
+    if (clicked === "rename") {
+      queueMicrotask(() => treeModelRef.current?.startRenaming(relativePath));
+      return;
+    }
+    if (clicked === "duplicate") {
+      const result = await duplicateFile({ environmentId, input: { cwd, relativePath } });
+      if (result._tag === "Failure") {
+        showMutationFailure("Unable to duplicate file", result);
+        return;
+      }
+      entriesQuery.refresh();
+      onOpenFile(result.value.relativePath);
+      toastManager.add({
+        type: "success",
+        title: "File duplicated",
+        description: result.value.relativePath,
+      });
+      return;
+    }
+    if (clicked === "delete") {
+      const confirmed = await api.dialogs.confirm(
+        `Delete '${relativePath}'? This cannot be undone.`,
+      );
+      if (!confirmed) return;
+      const result = await deleteFile({ environmentId, input: { cwd, relativePath } });
+      if (result._tag === "Failure") {
+        showMutationFailure("Unable to delete file", result);
+        return;
+      }
+      onFileDeleted(result.value.relativePath);
+      entriesQuery.refresh();
+      toastManager.add({ type: "success", title: "File deleted", description: relativePath });
+      return;
+    }
+    if (clicked === "copy-mention") {
+      try {
+        await writeTextToClipboard(mention);
+        toastManager.add({ type: "success", title: "Mention copied", description: relativePath });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Failed to copy mention",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+      return;
+    }
+    if (clicked === "add-to-chat") {
+      const composer = composerRef?.current;
+      if (!composer) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add to chat",
+          description: "Open a chat for this project and try again.",
+        });
+        return;
+      }
+      const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
+      if (!inserted) {
+        toastManager.add({
+          type: "error",
+          title: "Unable to add to chat",
+          description: "The chat isn't ready to accept input right now.",
+        });
+      }
     }
   };
   const showEntryContextMenuRef = useRef(showEntryContextMenu);
@@ -199,7 +307,6 @@ export default function FileBrowserPanel({
     showEntryContextMenuRef.current = showEntryContextMenu;
   });
 
-  const treeModelRef = useRef<ReturnType<typeof useFileTree>["model"] | null>(null);
   const dragMention = useMemo(
     () =>
       createFileTreeDragMentionController({
@@ -222,7 +329,9 @@ export default function FileBrowserPanel({
     density: "compact",
     fileTreeSearchMode: "hide-non-matches",
     flattenEmptyDirectories: true,
-    initialExpansion: 1,
+    // Refreshes explicitly reopen the root directories below. Keeping the
+    // model default closed makes an empty bulk-expansion list truly collapse all.
+    initialExpansion: "closed",
     icons: T3_PIERRE_ICONS,
     onSelectionChange: (selectedPaths) => {
       // The drag controller's selection cache must track every change,
@@ -243,6 +352,14 @@ export default function FileBrowserPanel({
       }
     },
     paths: [],
+    renaming: {
+      canRename: (item) => !item.isFolder,
+      onError: (error) =>
+        toastManager.add({ type: "error", title: "Unable to rename file", description: error }),
+      onRename: ({ sourcePath, destinationPath }) => {
+        void renameFileFromTreeRef.current(sourcePath, destinationPath);
+      },
+    },
     search: false,
     unsafeCSS: TREE_UNSAFE_CSS,
   });
@@ -259,15 +376,17 @@ export default function FileBrowserPanel({
     if (previousTreePathsRef.current === treePaths) return;
     entryKindsRef.current = entryKinds;
     previousTreePathsRef.current = treePaths;
-    model.resetPaths(treePaths);
-  }, [entryKinds, model, treePaths]);
+    model.resetPaths(treePaths, { initialExpandedPaths: initialDirectoryPaths });
+  }, [entryKinds, initialDirectoryPaths, model, treePaths]);
 
   useEffect(() => {
-    if (!selectedPath) {
+    const path = requestedRevealPath ?? selectedPath;
+    const revealId = requestedRevealPath !== null ? requestedRevealId : selectedPathRevealId;
+    if (path === null) {
       handledRevealRef.current = null;
       return;
     }
-    const revealRequest = { path: selectedPath, revealId: selectedPathRevealId };
+    const revealRequest = { path, revealId };
     const handledReveal = handledRevealRef.current;
     // Entry refreshes rebuild treePaths while the same preview stays open.
     // Replaying a handled reveal would close an active tree search and steal focus.
@@ -277,9 +396,11 @@ export default function FileBrowserPanel({
     ) {
       return;
     }
-    if (entryKinds.get(selectedPath) !== "file") return;
-    const selectedItem = model.getItem(selectedPath);
-    if (!selectedItem) return;
+    const kind = entryKinds.get(path);
+    if (path !== "" && kind === undefined) return;
+    const itemPath = kind === "directory" ? `${path.replace(/\/$/, "")}/` : path;
+    const selectedItem = path === "" ? null : model.getItem(itemPath);
+    if (path !== "" && !selectedItem) return;
 
     // A selection that originated inside the tree (clicking a row, possibly
     // in an active tree search) is already visible; re-revealing it would
@@ -287,8 +408,13 @@ export default function FileBrowserPanel({
     // opens (file picker, content search, chat links).
     const selectedInTree = model
       .getSelectedPaths()
-      .some((path) => path.replace(/\/$/, "") === selectedPath);
-    if (selectedInTree && treeSelectionPathRef.current === selectedPath) {
+      .some((selected) => selected.replace(/\/$/, "") === path);
+    if (
+      requestedRevealPath === null &&
+      kind === "file" &&
+      selectedInTree &&
+      treeSelectionPathRef.current === path
+    ) {
       treeSelectionPathRef.current = null;
       handledRevealRef.current = revealRequest;
       return;
@@ -304,20 +430,34 @@ export default function FileBrowserPanel({
 
     // Directory rows are registered with a trailing slash (see treePath), so
     // ancestor lookups must use the same form to expand them.
-    const segments = selectedPath.split("/");
+    const segments = path.split("/").filter(Boolean);
     let ancestorPath = "";
-    for (const segment of segments.slice(0, -1)) {
+    const ancestorSegments = kind === "directory" ? segments : segments.slice(0, -1);
+    for (const segment of ancestorSegments) {
       ancestorPath = ancestorPath ? `${ancestorPath}/${segment}` : segment;
       const item = model.getItem(`${ancestorPath}/`) ?? model.getItem(ancestorPath);
       if (item && "expand" in item) item.expand();
     }
 
-    selectedItem.select();
-    model.scrollToPath(selectedPath, { focus: true, offset: "center" });
+    if (selectedItem) {
+      selectedItem.select();
+      model.scrollToPath(itemPath, { focus: true, offset: "center" });
+    } else {
+      const firstPath = treePaths[0];
+      if (firstPath) model.scrollToPath(firstPath, { focus: false, offset: "top" });
+    }
     queueMicrotask(() => {
       syncingSelectionRef.current = false;
     });
-  }, [entryKinds, model, selectedPath, selectedPathRevealId, treePaths]);
+  }, [
+    entryKinds,
+    model,
+    requestedRevealId,
+    requestedRevealPath,
+    selectedPath,
+    selectedPathRevealId,
+    treePaths,
+  ]);
 
   // Tag tree drags with the composer mention payload. The row is read from
   // the composed event path (the tree's shadow root is open), so this does
@@ -343,6 +483,21 @@ export default function FileBrowserPanel({
       panel.removeEventListener("dragend", handleDragEnd);
     };
   }, [dragMention]);
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel === null) return;
+
+    const handleAltChevronClick = (event: MouseEvent) => {
+      const expanded = getAltChevronExpansion(event);
+      if (expanded === null) return;
+      if (model.isSearchOpen()) search.close();
+      if (!setAllDirectoriesExpanded(model, treePaths, directoryPaths, expanded)) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    panel.addEventListener("click", handleAltChevronClick, true);
+    return () => panel.removeEventListener("click", handleAltChevronClick, true);
+  }, [directoryPaths, model, search, treePaths]);
 
   return (
     <div

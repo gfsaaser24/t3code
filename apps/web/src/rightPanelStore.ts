@@ -36,7 +36,12 @@ export type RightPanelSurface =
       splitDirection?: "horizontal" | "vertical";
     }
   | { id: "diff"; kind: "diff" }
-  | { id: "files"; kind: "files" }
+  | {
+      id: "files";
+      kind: "files";
+      revealPath: string | null;
+      revealRequestId: number;
+    }
   | {
       id: `file:${string}`;
       kind: "file";
@@ -61,6 +66,13 @@ interface RightPanelStoreState {
   open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  revealInFiles: (ref: ScopedThreadRef, relativePath: string) => void;
+  renameFileSurface: (
+    ref: ScopedThreadRef,
+    oldRelativePath: string,
+    newRelativePath: string,
+  ) => void;
+  closeFileSurface: (ref: ScopedThreadRef, relativePath: string) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -97,7 +109,7 @@ const singletonSurface = (
     case "diff":
       return { id: "diff", kind };
     case "files":
-      return { id: "files", kind };
+      return { id: "files", kind, revealPath: null, revealRequestId: 0 };
     case "agents":
       return { id: "agents", kind };
   }
@@ -195,6 +207,20 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           : 0;
                       return [{ ...surface, revealLine, revealRequestId }];
                     }
+                    if (surface.kind === "files") {
+                      const revealPath =
+                        "revealPath" in surface && typeof surface.revealPath === "string"
+                          ? surface.revealPath
+                          : null;
+                      const revealRequestId =
+                        "revealRequestId" in surface &&
+                        typeof surface.revealRequestId === "number" &&
+                        Number.isSafeInteger(surface.revealRequestId) &&
+                        surface.revealRequestId >= 0
+                          ? surface.revealRequestId
+                          : 0;
+                      return [{ ...surface, revealPath, revealRequestId }];
+                    }
                     if (surface.kind !== "terminal") return [surface];
                     if (
                       !("resourceId" in surface) ||
@@ -281,11 +307,8 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
       openFile: (ref, relativePath, line) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
-            const withoutStandaloneExplorer = current.surfaces.filter(
-              (surface) => surface.kind !== "files",
-            );
             const surfaceId = `file:${relativePath}` as const;
-            const existing = withoutStandaloneExplorer.find(
+            const existing = current.surfaces.find(
               (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
                 surface.id === surfaceId && surface.kind === "file",
             );
@@ -298,10 +321,72 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               isOpen: true,
               activeSurfaceId: surface.id,
               surfaces: existing
-                ? withoutStandaloneExplorer.map((entry) =>
-                    entry.id === surface.id ? surface : entry,
-                  )
-                : [...withoutStandaloneExplorer, surface],
+                ? current.surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
+                : [...current.surfaces, surface],
+            };
+          }),
+        })),
+      revealInFiles: (ref, relativePath) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const existing = current.surfaces.find(
+              (surface): surface is Extract<RightPanelSurface, { kind: "files" }> =>
+                surface.kind === "files",
+            );
+            const surface: Extract<RightPanelSurface, { kind: "files" }> = {
+              id: "files",
+              kind: "files",
+              revealPath: relativePath,
+              revealRequestId: (existing?.revealRequestId ?? 0) + 1,
+            };
+            return {
+              isOpen: true,
+              activeSurfaceId: surface.id,
+              surfaces: existing
+                ? current.surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
+                : [...current.surfaces, surface],
+            };
+          }),
+        })),
+      renameFileSurface: (ref, oldRelativePath, newRelativePath) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            if (oldRelativePath === newRelativePath) return current;
+            const oldSurfaceId = `file:${oldRelativePath}` as const;
+            const newSurfaceId = `file:${newRelativePath}` as const;
+            const oldSurface = current.surfaces.find(
+              (surface): surface is Extract<RightPanelSurface, { kind: "file" }> =>
+                surface.id === oldSurfaceId && surface.kind === "file",
+            );
+            if (!oldSurface) return current;
+            return {
+              ...current,
+              activeSurfaceId:
+                current.activeSurfaceId === oldSurfaceId ? newSurfaceId : current.activeSurfaceId,
+              surfaces: current.surfaces.map((surface) =>
+                surface.id === oldSurfaceId
+                  ? { ...oldSurface, id: newSurfaceId, relativePath: newRelativePath }
+                  : surface,
+              ),
+            };
+          }),
+        })),
+      closeFileSurface: (ref, relativePath) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const surfaceId = `file:${relativePath}` as const;
+            const index = current.surfaces.findIndex((surface) => surface.id === surfaceId);
+            if (index < 0) return current;
+            const surfaces = current.surfaces.filter((surface) => surface.id !== surfaceId);
+            if (current.activeSurfaceId !== surfaceId) {
+              return { ...current, isOpen: surfaces.length > 0 && current.isOpen, surfaces };
+            }
+            const fallback = surfaces[Math.min(index, surfaces.length - 1)] ?? null;
+            return {
+              ...current,
+              isOpen: surfaces.length > 0 && current.isOpen,
+              surfaces,
+              activeSurfaceId: fallback?.id ?? null,
             };
           }),
         })),

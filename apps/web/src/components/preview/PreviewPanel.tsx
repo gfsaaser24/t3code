@@ -18,6 +18,7 @@ interface Props {
     annotation: PreviewAnnotationPayload,
     image: ComposerImageAttachment | null,
   ) => void;
+  actionsEnabled?: boolean;
 }
 
 export function PreviewPanel({
@@ -27,13 +28,14 @@ export function PreviewPanel({
   configuredUrls,
   visible,
   onSendAnnotation,
+  actionsEnabled = visible,
 }: Props) {
   if (!isPreviewSupportedInRuntime()) {
     return (
       <PreviewPanelShell mode={mode}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
           <p className="max-w-sm text-sm text-muted-foreground">
-            Preview is only available in the T3 Code desktop app.
+            Preview is only available in the T3 Turbo desktop app.
           </p>
         </div>
       </PreviewPanelShell>
@@ -48,6 +50,7 @@ export function PreviewPanel({
         configuredUrls={configuredUrls}
         visible={visible}
         {...(onSendAnnotation ? { onSendAnnotation } : {})}
+        actionsEnabled={actionsEnabled}
       />
     </PreviewPanelShell>
   );
