@@ -3652,24 +3652,27 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // survives its session. Emit the terminal event stopTask would have
     // produced (see interruptTurn) so durable UI state settles at teardown
     // instead of showing phantom running agents until the next resume.
-    for (const taskId of Array.from(context.liveTaskIds)) {
-      context.liveTaskIds.delete(taskId);
-      const taskStamp = yield* makeEventStamp();
-      yield* offerRuntimeEvent({
-        type: "task.completed",
-        eventId: taskStamp.eventId,
-        provider: PROVIDER,
-        createdAt: taskStamp.createdAt,
-        threadId: context.session.threadId,
-        ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
-        payload: {
-          taskId: RuntimeTaskId.make(taskId),
-          status: "stopped",
-          ...taskLinkageFor(context.taskAgents, taskId),
-        },
-        providerRefs: nativeProviderRefs(context),
-      });
-    }
+    const drainLiveTasks = Effect.gen(function* () {
+      for (const taskId of Array.from(context.liveTaskIds)) {
+        context.liveTaskIds.delete(taskId);
+        const taskStamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "task.completed",
+          eventId: taskStamp.eventId,
+          provider: PROVIDER,
+          createdAt: taskStamp.createdAt,
+          threadId: context.session.threadId,
+          ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+          payload: {
+            taskId: RuntimeTaskId.make(taskId),
+            status: "stopped",
+            ...taskLinkageFor(context.taskAgents, taskId),
+          },
+          providerRefs: nativeProviderRefs(context),
+        });
+      }
+    });
+    yield* drainLiveTasks;
 
     if (context.turnState) {
       yield* completeTurn(context, "interrupted", "Session stopped.");
@@ -3682,6 +3685,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (streamFiber && streamFiber.pollUnsafe() === undefined) {
       yield* Fiber.interrupt(streamFiber);
     }
+
+    // A task_started handler suspended mid-yield on the stream fiber can
+    // resume between the first drain and the interrupt above, re-adding a
+    // task after it was drained. The fiber is dead now, so one more drain
+    // makes "zero live tasks after teardown" an invariant, not a race.
+    yield* drainLiveTasks;
 
     yield* Effect.try({
       try: () => context.query.close(),
