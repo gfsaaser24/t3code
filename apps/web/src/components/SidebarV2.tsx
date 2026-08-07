@@ -991,6 +991,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               role="button"
               tabIndex={0}
               data-testid="sidebar-v2-row-card"
+              data-sidebar-card=""
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
@@ -1009,6 +1010,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               />
               {props.projectTitle ? (
                 <span
+                  data-sidebar-card-meta=""
                   className={cn(
                     "min-w-0 flex-1 truncate text-secondary-label text-xs",
                     shouldRecede ? "font-normal" : "font-medium",
