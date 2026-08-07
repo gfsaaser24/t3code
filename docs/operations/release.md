@@ -12,7 +12,8 @@ This document covers the unified release workflow for stable and nightly desktop
   - scheduled nightly check every three hours
   - manual `workflow_dispatch` for either channel
 - Runs quality gates first: lint, typecheck, test.
-- Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging clients.
+- Reads the shared production T3 Connect relay URL and Clerk client configuration before packaging
+  clients when the repository has enabled Connect; otherwise builds artifacts without Connect.
 - Builds four artifacts in parallel for both channels:
   - macOS `arm64` DMG
   - macOS `x64` DMG
@@ -47,8 +48,12 @@ independent from the shared Release App installation.
 ## T3 Connect relay deployment
 
 The relay is a shared control plane versioned separately from client releases. Stable and nightly
-client builds must point at the same relay so users see the same linked environments when switching
-release channels.
+client builds that enable Connect must point at the same relay so users see the same linked
+environments when switching release channels. Repositories without Cloudflare credentials skip
+relay resolution and build without Connect.
+
+See [Self-host the T3 Connect relay](./self-host-relay.md) for fork setup, Cloudflare token scopes,
+first-deploy bootstrap, and release fallback behavior.
 
 `.github/workflows/deploy-relay.yml` deploys Alchemy stage `prod` on every push to `main`. The
 release workflow reads the relay URL and Clerk client configuration from the existing `production`

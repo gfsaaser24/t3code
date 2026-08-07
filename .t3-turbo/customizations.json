@@ -1,0 +1,519 @@
+{
+  "schemaVersion": 1,
+  "product": "T3 Turbo",
+  "registeredRefs": [
+    {
+      "id": "relay-portal",
+      "ref": "refs/heads/infra/t3turbo-relay"
+    }
+  ],
+  "seams": [
+    {
+      "id": "product-identity-and-updater",
+      "status": "implemented",
+      "summary": "T3 Turbo has an isolated desktop identity, state home, and fork-owned update feed.",
+      "checks": [
+        {
+          "path": "apps/desktop/src/app/DesktopEnvironment.ts",
+          "markers": [
+            "const APP_BASE_NAME = \"T3 Turbo\";",
+            "const APP_RELEASE_REPOSITORY = \"gfsaaser24/t3code\";",
+            "\"com.gabef.t3turbo\""
+          ]
+        },
+        {
+          "path": "apps/desktop/src/app/DesktopStatePaths.ts",
+          "markers": ["input.joinPath(input.homeDirectory, \".t3-turbo\")"]
+        },
+        {
+          "path": "apps/desktop/package.json",
+          "markers": ["\"productName\": \"T3 Turbo\""]
+        },
+        {
+          "path": "scripts/build-desktop-artifact.ts",
+          "markers": ["T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code", "--publish never"]
+        },
+        {
+          "path": "apps/desktop/src/app/DesktopEnvironment.test.ts",
+          "markers": ["T3 Turbo", "gfsaaser24/t3code"]
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "markers": ["name=T3 Turbo v$version"]
+        }
+      ]
+    },
+    {
+      "id": "canonical-icon-pipeline",
+      "status": "implemented",
+      "summary": "The canonical Turbo icon and registered web, desktop, mobile, marketing, and widget derivatives remain present.",
+      "checks": [
+        { "path": "t3turbo.png", "markers": [] },
+        {
+          "path": "scripts/lib/turbo-brand-assets.ts",
+          "markers": [
+            "sourcePng: \"t3turbo.png\"",
+            "windowsIconIco: \"assets/turbo/t3turbo-windows.ico\"",
+            "desktopIconIcns: \"assets/turbo/t3turbo.icns\"",
+            "webFaviconIco: \"assets/turbo/t3turbo-web-favicon.ico\"",
+            "androidMonochromeIconPng: \"apps/mobile/assets/t3turbo-android-monochrome.png\"",
+            "androidNotificationIconPng: \"apps/mobile/assets/t3turbo-android-notification.png\"",
+            "widgetIconPng: \"apps/mobile/assets/widget/T3Mark.png\""
+          ]
+        },
+        {
+          "path": "scripts/export-turbo-icons.ts",
+          "markers": ["TURBO_BRAND_ASSET_PATHS", "--check"]
+        },
+        { "path": "assets/turbo/t3turbo-windows.ico", "markers": [] },
+        { "path": "assets/turbo/t3turbo.icns", "markers": [] },
+        { "path": "assets/turbo/t3turbo-ios-1024.png", "markers": [] },
+        { "path": "assets/turbo/t3turbo-web-favicon.ico", "markers": [] },
+        { "path": "apps/mobile/assets/t3turbo-android-monochrome.png", "markers": [] },
+        { "path": "apps/mobile/assets/t3turbo-android-notification.png", "markers": [] },
+        { "path": "apps/mobile/assets/widget/T3Mark.png", "markers": [] },
+        {
+          "path": "apps/mobile/app.config.ts",
+          "markers": [
+            "TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng",
+            "TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng"
+          ]
+        },
+        {
+          "path": "apps/mobile/src/components/BrandMark.tsx",
+          "markers": ["assets/turbo/t3turbo-ios-1024.png", "MOBILE_PRODUCT_NAME"]
+        },
+        {
+          "path": "apps/marketing/src/layouts/Layout.astro",
+          "markers": ["T3 Turbo", "Based on T3 Code by T3 Tools Inc"]
+        },
+        {
+          "path": "scripts/turbo-product-branding.test.ts",
+          "markers": ["keeps mobile and marketing product copy on T3 Turbo"]
+        },
+        {
+          "path": "scripts/lib/turbo-brand-assets.test.ts",
+          "markers": ["TURBO_BRAND_ASSET_PATHS"]
+        }
+      ]
+    },
+    {
+      "id": "file-explorer",
+      "status": "implemented",
+      "summary": "Explorer navigation keeps file actions, reveal behavior, and Alt-click bulk folder expansion.",
+      "checks": [
+        {
+          "path": "apps/web/src/components/files/FileBrowserPanel.tsx",
+          "markers": [
+            "fileTreeContextMenuItems",
+            "getAltChevronExpansion",
+            "setAllDirectoriesExpanded",
+            "if (clicked === \"open-new-tab\")"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/files/fileTreeContextMenu.ts",
+          "markers": ["\"open-new-tab\"", "\"rename\"", "\"duplicate\"", "\"delete\""]
+        },
+        {
+          "path": "apps/web/src/components/files/fileTreeBulkExpansion.ts",
+          "markers": [
+            "export function getAltChevronExpansion",
+            "export function setAllDirectoriesExpanded"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/files/fileTreeContextMenu.test.ts",
+          "markers": ["fileTreeContextMenuItems"]
+        },
+        {
+          "path": "apps/web/src/components/files/fileTreeBulkExpansion.test.ts",
+          "markers": ["getAltChevronExpansion", "setAllDirectoriesExpanded"]
+        }
+      ]
+    },
+    {
+      "id": "workspace-image-preview",
+      "status": "implemented",
+      "summary": "Workspace image types open in editor tabs and render through the shared image-preview classifier.",
+      "checks": [
+        {
+          "path": "packages/shared/src/filePreview.ts",
+          "markers": [
+            "WORKSPACE_IMAGE_PREVIEW_EXTENSIONS",
+            "\".ico\"",
+            "export function isWorkspaceImagePreviewPath"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "markers": ["function WorkspaceImagePreview", "isWorkspaceImagePreviewPath(relativePath)"]
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "markers": ["const fileSurface =", "openFile: (ref, relativePath, line) =>"]
+        },
+        {
+          "path": "packages/shared/src/filePreview.test.ts",
+          "markers": ["isWorkspaceImagePreviewPath"]
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.test.ts",
+          "markers": ["opens image files as reusable peer tabs"]
+        }
+      ]
+    },
+    {
+      "id": "markdown-preview-preference",
+      "status": "implemented",
+      "summary": "The source/rendered Markdown choice persists as a panel-independent client preference.",
+      "checks": [
+        {
+          "path": "apps/web/src/markdownPreviewPreference.ts",
+          "markers": [
+            "export const MARKDOWN_PREVIEW_STORAGE_KEY = \"t3code.renderMarkdown\";",
+            "export function useMarkdownPreviewMode()"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "markers": [
+            "const [markdownPreviewMode, setMarkdownPreviewMode] = useMarkdownPreviewMode();",
+            "Show rendered markdown",
+            "Show markdown source"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/chat/markdownFileLinkGesture.ts",
+          "markers": ["export function resolveMarkdownFileLinkGesture", "open-system-default"]
+        },
+        {
+          "path": "apps/web/src/components/chat/markdownFileLinkGesture.test.ts",
+          "markers": ["opens Markdown files with the system default app on Ctrl+Shift+click"]
+        },
+        {
+          "path": "apps/web/src/components/ChatMarkdown.tsx",
+          "markers": [
+            "resolveMarkdownFileLinkGesture",
+            "open-file-with-system-default",
+            "useAtomCommand(shellEnvironment.openPath",
+            "usePreparedConnection(threadRef?.environmentId ?? null)",
+            "environmentId: fileEnvironmentId"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/shellCommands.ts",
+          "markers": ["createEnvironmentRpcCommand", "tag: WS_METHODS.shellOpenPath"]
+        },
+        {
+          "path": "apps/web/src/state/shell.ts",
+          "markers": ["createShellEnvironmentAtoms", "connectionAtomRuntime"]
+        },
+        {
+          "path": "packages/contracts/src/rpc.ts",
+          "markers": ["shellOpenPath: \"shell.openPath\"", "payload: OpenPathInput"]
+        },
+        {
+          "path": "apps/server/src/ws.ts",
+          "markers": ["externalLauncher.launchPath(input.path)"]
+        },
+        {
+          "path": "apps/server/src/process/externalLauncher.ts",
+          "markers": ["readonly launchPath:", "const launchPath = Effect.fn"]
+        },
+        {
+          "path": "apps/server/src/process/externalLauncher.test.ts",
+          "markers": ["opens an absolute path with the system default application without a shell"]
+        },
+        {
+          "path": "apps/web/src/components/settings/T3TurboSettings.tsx",
+          "markers": ["title=\"T3 Turbo Settings\"", "Markdown file display"]
+        },
+        {
+          "path": "apps/web/src/routes/settings.t3-turbo.tsx",
+          "markers": ["createFileRoute(\"/settings/t3-turbo\")"]
+        },
+        {
+          "path": "apps/web/src/components/settings/SettingsSidebarNav.tsx",
+          "markers": ["\"/settings/t3-turbo\": GaugeIcon", "SETTINGS_NAV_ITEMS"]
+        },
+        {
+          "path": "apps/web/src/components/settings/settingsSearch.test.ts",
+          "markers": ["exposes T3 Turbo Settings and its Markdown preference"]
+        }
+      ]
+    },
+    {
+      "id": "official-data-import",
+      "status": "implemented",
+      "summary": "Dependency-light import planning, identity remapping, staged storage, restore, and projection replay modules remain recoverable.",
+      "checks": [
+        {
+          "path": "apps/server/src/turbo/officialImport/plan.ts",
+          "markers": [
+            "Schema.Literals([\"skip\", \"replace\", \"clone\"])",
+            "export const OfficialImportIdMap",
+            "export const planOfficialImport",
+            "export const validateOfficialImportPlan"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/replay.ts",
+          "markers": [
+            "OfficialImportProjectionVerificationError",
+            "rebuildOfficialImportProjections"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/storage.ts",
+          "markers": ["prepareImportWorkspace", "cutoverImport", "restoreImportBackup"]
+        },
+        {
+          "path": "apps/server/src/cli/officialImport.ts",
+          "markers": [
+            "export const officialImportCommand",
+            "prepareOfficialImport",
+            "applyPreparedOfficialImport"
+          ]
+        },
+        {
+          "path": "apps/server/src/bin.ts",
+          "markers": ["import { officialImportCommand }", "officialImportCommand,"]
+        },
+        {
+          "path": "packages/contracts/src/ipc.ts",
+          "markers": [
+            "DesktopOfficialT3ImportInputSchema",
+            "DesktopOfficialT3ImportResultSchema",
+            "discoverOfficialT3Import?:",
+            "runOfficialT3Import?:"
+          ]
+        },
+        {
+          "path": "apps/desktop/src/ipc/channels.ts",
+          "markers": ["DISCOVER_OFFICIAL_T3_IMPORT_CHANNEL", "RUN_OFFICIAL_T3_IMPORT_CHANNEL"]
+        },
+        {
+          "path": "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
+          "markers": [
+            "yield* ipc.handle(discoverOfficialT3Import)",
+            "yield* ipc.handle(runOfficialT3Import)"
+          ]
+        },
+        {
+          "path": "apps/desktop/src/preload.ts",
+          "markers": ["discoverOfficialT3Import: () =>", "runOfficialT3Import: (input) =>"]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/plan.test.ts",
+          "markers": ["official import clone identity graph", "validateOfficialImportPlan"]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/storage.test.ts",
+          "markers": ["appendCanonicalEvents", "restoreImportBackup"]
+        },
+        {
+          "path": "apps/desktop/src/ipc/methods/officialT3Environment.ts",
+          "markers": [
+            "const executeImport = Effect.fn",
+            "export const runOfficialT3Import",
+            "yield* primary.stop();",
+            "snapshot.desiredRunning ? primary.start : Effect.void",
+            "Official T3 Code still has an active chat, turn, or approval"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/desktop/DesktopEnvironmentSwitcher.tsx",
+          "markers": ["bridge?.runOfficialT3Import", "Import official T3 Code"]
+        },
+        {
+          "path": "docs/user/official-t3-import.md",
+          "markers": ["t3 import official", "Keep both", "Relay and remote clients"]
+        },
+        {
+          "path": ".plans/22-t3-turbo-official-data-import.md",
+          "markers": [
+            "# T3 Turbo One-Way Official Data Import",
+            "Keep Turbo and skip official",
+            "Keep both; import official with a new UUID"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multi-chat-pane-workspace",
+      "status": "implemented",
+      "summary": "Typed, persisted chat-pane layouts keep pane controls and resource ownership in a replaceable Turbo seam.",
+      "checks": [
+        {
+          "path": "packages/contracts/src/settings.ts",
+          "markers": [
+            "export const TurboChatPaneLayout",
+            "turboChatPaneLayout: CompatibleTurboChatPaneLayout"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneActionsContext.tsx",
+          "markers": [
+            "export function openChatPaneTarget",
+            "export function ChatPaneActionsProvider"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneWorkspace.tsx",
+          "markers": ["export function ChatPaneWorkspace", "DiffWorkerPoolProvider"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.ts",
+          "markers": ["isChatPaneFocused", "selectPaneTerminalMountKeys"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneControl.tsx",
+          "markers": [
+            "Open new chat to the right",
+            "Open new chat to the left",
+            "Close this chat pane"
+          ]
+        },
+        {
+          "path": "apps/web/src/routes/_chat.tsx",
+          "markers": [
+            "<ChatPaneActionsProvider routeTarget={routeTarget}>",
+            "<ChatPaneWorkspace fallback={<Outlet />} />"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "markers": [
+            "isChatPaneFocused(paneId, focusedPaneId)",
+            "selectPaneTerminalMountKeys({",
+            "shouldUseChatPaneRightPanelSheet(chatPaneCount)",
+            "<PersistentThreadTerminalPanel",
+            "<PersistentThreadTerminalDrawer",
+            "<RightPanelTabs"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/chat/ChatHeader.tsx",
+          "markers": ["<ChatPaneControl />"]
+        },
+        {
+          "path": "apps/web/src/terminalUiStateStore.ts",
+          "markers": ["scopedThreadKey(threadRef)", "parseScopedThreadKey"]
+        },
+        {
+          "path": "apps/web/src/rightPanelStore.ts",
+          "markers": ["scopedThreadKey(ref)", "byThreadKey"]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["openChatPaneTarget({ kind: \"server\", threadRef }, chatPaneSide)"]
+        },
+        {
+          "path": "apps/web/src/components/SidebarV2.tsx",
+          "markers": ["openChatPaneTarget({ kind: \"server\", threadRef }, chatPaneSide)"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneContextMenu.test.ts",
+          "markers": ["offers the right and left split actions"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneLayout.test.ts",
+          "markers": ["inserts panes immediately left and right of the focused pane"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPanePersistence.test.ts",
+          "markers": ["round-trips server and draft targets"]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
+          "markers": ["grants global resource ownership only to the focused pane"]
+        },
+        {
+          "path": "docs/user/chat-panes.md",
+          "markers": ["T3 Turbo can keep several chats visible", "layout record"]
+        }
+      ]
+    },
+    {
+      "id": "relay-policy",
+      "status": "policy",
+      "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",
+      "checks": [
+        {
+          "path": ".t3-turbo/OPENCLAW_RULES.md",
+          "markers": [
+            "`infra/t3turbo-relay`",
+            "A product ingestion must not replace the relay branch",
+            "relay, online portal, tunnel, and self-host infrastructure seams"
+          ]
+        },
+        {
+          "path": "infra/relay/README.md",
+          "markers": [
+            "not in the hot path for normal T3 Turbo traffic",
+            "The environment server and relay have separate credentials and trust boundaries.",
+            "RELAY_TUNNEL_ZONE_NAME"
+          ]
+        },
+        {
+          "path": ".github/workflows/deploy-relay.yml",
+          "markers": [
+            "name: Detect Cloudflare configuration",
+            "if: steps.cloudflare_config.outputs.enabled == 'true'",
+            "RELAY_TUNNEL_ZONE_NAME"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "nightly-and-secret-policy",
+      "status": "policy",
+      "summary": "Daily 11 PM Eastern ingestion preserves the last known-good Turbo stack, publishes only to the fork, and excludes the local secrets note.",
+      "checks": [
+        {
+          "path": ".gitignore",
+          "markers": ["/SECRETS DO NOT COMMIT.md"]
+        },
+        {
+          "path": ".t3-turbo/OPENCLAW_RULES.md",
+          "markers": [
+            "ingestion starts with the last known-good T3 Turbo branch",
+            "Never resolve a collision with a blanket `ours`, `theirs`, force push, clean checkout",
+            "Never bake credentials, tokens, secrets",
+            "Do not publish T3 Turbo to NPM"
+          ]
+        },
+        {
+          "path": ".github/workflows/turbo-nightly-sync.yml",
+          "markers": [
+            "cron: \"0 23 * * *\"",
+            "timezone: \"America/New_York\"",
+            "Resolve the completed Eastern cutoff",
+            "-f until=\"$CUTOFF_INSTANT\"",
+            "Rebase in an isolated worktree",
+            "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
+            "scripts/turbo-product-branding.test.ts",
+            "Record registered relay and portal branch state",
+            "Measure registered relay and portal branch state",
+            "report_repair:",
+            "Record the reviewed repair and PR path",
+            "Create nightly completion report",
+            "T3CODE_DESKTOP_UPDATE_REPOSITORY",
+            "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",
+            "--force-with-lease"
+          ]
+        },
+        {
+          "path": "docs/internals/t3-turbo-nightly-inbound.md",
+          "markers": [
+            "replays our Turbo commit",
+            "Every day at 11:00 PM",
+            "installer only in `gfsaaser24/t3code`",
+            "last known-good release"
+          ]
+        }
+      ]
+    }
+  ]
+}

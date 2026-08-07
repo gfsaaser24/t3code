@@ -1,3 +1,27 @@
+# T3 Turbo — Self-Hosted Infrastructure (`infra/t3turbo-relay`)
+
+> **This branch is the T3 Turbo operator repo.** It carries the complete, versioned
+> kit for standing up the self-hosted stack: Cloudflare relay + tunnel, Clerk auth,
+> and self-hosted Supabase Postgres — no Axiom, no APNs (Android-only operator).
+
+## Start here
+
+| What                                                                           | Where                                                            |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| Master runbook (bring-up order, architecture, threat model, secrets inventory) | [`infra/README.md`](infra/README.md)                             |
+| Rebase seam — upstream files we modify + conflict guidance                     | [`SEAM.md`](SEAM.md)                                             |
+| Supabase: schema, seed, RLS, setup rules                                       | [`infra/supabase/`](infra/supabase/)                             |
+| Cloudflare Tunnel configs + systemd unit                                       | [`infra/cloudflared/`](infra/cloudflared/)                       |
+| GitHub/Cloudflare vars & secrets checklist (names only)                        | [`infra/cloudflare/CHECKLIST.md`](infra/cloudflare/CHECKLIST.md) |
+| Relay deploy guide (Hyperdrive, Clerk, verification)                           | [`infra/relay/DEPLOY.md`](infra/relay/DEPLOY.md)                 |
+
+**Hard rule:** no secret values in this repository — ever. Placeholders in `<angle brackets>`
+are resolved from the operator's private vault at deploy time.
+
+---
+
+_Upstream T3 Code README follows below (kept for rebase context)._
+
 # T3 Code
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
@@ -55,6 +79,71 @@ brew install --cask t3-code
 yay -S t3code-bin
 ```
 
+## T3 Turbo downstream
+
+This fork also builds **T3 Turbo**, our desktop-only downstream variant. Turbo ingests official
+T3 source; it never downloads or republishes an official installer. The scheduled
+[`T3-Turbo Nightly Sync`](./.github/workflows/turbo-nightly-sync.yml) workflow:
+
+1. checks `pingdotgg/t3code:main` and the newest official Nightly tag every three hours;
+2. verifies that both refs move forward from the checkpoint in
+   [`.t3-turbo/upstream.json`](./.t3-turbo/upstream.json);
+3. rebases the small Turbo commit stack in an isolated worktree;
+4. builds the Linux WSL native dependency and an unsigned Windows x64 installer;
+5. publishes the installer, blockmap, and `nightly.yml` only in this fork; and
+6. advances the `turbo` branch only after publication succeeds.
+
+If Git reports a conflict, the workflow leaves the current branch and release untouched, uploads
+a conflict report, and opens or updates a review issue. It never guesses whether our change or
+upstream's change should win.
+
+### Configure the ingestion workflow
+
+The workflow file must be identical on both `main` and `turbo`. `main` owns the schedule, while
+`turbo` carries the workflow across upstream rebases. Enable the pipeline with the required
+repository variable:
+
+```powershell
+gh variable set TURBO_NIGHTLY_ENABLED --body true --repo gfsaaser24/t3code
+```
+
+Optionally assign conflict issues to a GitHub account:
+
+```powershell
+gh variable set TURBO_NOTIFY_USER --body gfsaaser24 --repo gfsaaser24/t3code
+```
+
+No official T3 credentials or signing secrets are required for ingestion or packaging. Do not
+store a personal access token as an Actions secret for this workflow. GitHub supplies its scoped
+`GITHUB_TOKEN` to read public upstream metadata, open conflict issues, publish fork releases, and
+advance the fork branch.
+
+OpenClaw intervention alerts are optional. When used, configure
+`TURBO_OPENCLAW_ENABLED=true` and the three repository secrets named in the
+[nightly inbound runbook](./docs/internals/t3-turbo-nightly-inbound.md#email-and-openclaw-telegram-alerts).
+
+### Run and inspect it
+
+The local commands below assume GitHub CLI is authenticated with `gh auth login`.
+
+```powershell
+# Ask the workflow to check official main and Nightly source now.
+gh workflow run turbo-nightly-sync.yml --ref main --repo gfsaaser24/t3code
+
+# Inspect runs and published installers.
+gh run list --workflow turbo-nightly-sync.yml --repo gfsaaser24/t3code --limit 5
+gh release list --repo gfsaaser24/t3code --limit 5
+```
+
+A manual dispatch is a source check, not an unconditional rebuild. When the recorded upstream
+`main` commit and Nightly tag are already current, the run succeeds without producing another
+installer; the workflow currently has no force-rebuild input. A changed upstream ref produces a
+deterministic `.turbo.N` version and a new installer on the fork's
+[Releases page](https://github.com/gfsaaser24/t3code/releases).
+
+For the complete state model, version rules, conflict recovery, updater behavior, permissions,
+and troubleshooting checks, read [T3 Turbo nightly inbound updates](./docs/internals/t3-turbo-nightly-inbound.md).
+
 ## Some notes
 
 We are very very early in this project. Expect bugs.
@@ -75,33 +164,3 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - Linux: [run T3 Code as a background service](./docs/user/background-service.md)
 
 Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
