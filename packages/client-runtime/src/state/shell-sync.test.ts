@@ -150,7 +150,7 @@ describe("environment shell synchronization", () => {
     }),
   );
 
-  it.effect("resumes from a warm shell cache without reloading the HTTP snapshot", () =>
+  it.effect("replaces a warm shell cache with an authoritative snapshot on a new session", () =>
     Effect.gen(function* () {
       const cachedSnapshot: OrchestrationShellSnapshot = {
         snapshotSequence: 5,
@@ -219,22 +219,19 @@ describe("environment shell synchronization", () => {
         Effect.provideService(ShellSnapshotLoader, snapshotLoader),
       );
 
-      // Wait until the subscription is established from the warm cache.
+      // A new session refreshes the cache before opening the stream.
       yield* SubscriptionRef.changes(capturedAfterSequence).pipe(
         Stream.filter((value) => value !== undefined),
         Stream.runHead,
       );
 
-      expect(yield* SubscriptionRef.get(capturedAfterSequence)).toBe(5);
+      expect(yield* SubscriptionRef.get(capturedAfterSequence)).toBe(9_999);
       expect(yield* Ref.get(capturedCompletionMarker)).toBe(true);
-      expect(yield* SubscriptionRef.get(loaderCalls)).toBe(0);
+      expect(yield* SubscriptionRef.get(loaderCalls)).toBe(1);
       const synchronizing = yield* SubscriptionRef.get(shellState);
       expect(synchronizing.status).toBe("synchronizing");
-      expect(Option.getOrThrow(synchronizing.snapshot)).toEqual(cachedSnapshot);
+      expect(Option.getOrThrow(synchronizing.snapshot)).toEqual(resetSnapshot);
 
-      // When the resume gap overflows SHELL_RESUME_MAX_GAP the server resets
-      // the stream with a fresh snapshot; the client applies it as usual.
-      yield* Queue.offer(events, { kind: "snapshot", snapshot: resetSnapshot });
       yield* Queue.offer(events, { kind: "synchronized" });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter((value) => value.status === "live"),
@@ -243,7 +240,7 @@ describe("environment shell synchronization", () => {
 
       const live = yield* SubscriptionRef.get(shellState);
       expect(Option.getOrThrow(live.snapshot)).toEqual(resetSnapshot);
-      expect(yield* SubscriptionRef.get(loaderCalls)).toBe(0);
+      expect(yield* SubscriptionRef.get(loaderCalls)).toBe(1);
     }),
   );
 
@@ -263,10 +260,11 @@ describe("environment shell synchronization", () => {
           ),
       } as unknown as WsRpcProtocolClient;
       const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+      const activeSession = yield* SubscriptionRef.make(Option.some(session(client)));
       const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
         target: TARGET,
         state: supervisorState,
-        session: yield* SubscriptionRef.make(Option.some(session(client))),
+        session: activeSession,
         prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
         connect: Effect.void,
         disconnect: Effect.void,
@@ -304,12 +302,12 @@ describe("environment shell synchronization", () => {
         ),
       );
 
-      // The warm cache resumes at its own cursor without an HTTP load.
+      // A new session starts from an authoritative HTTP snapshot.
       for (let attempt = 0; attempt < 100; attempt += 1) {
         if ((yield* Ref.get(capturedAfterSequences)).length >= 1) break;
         yield* Effect.yieldNow;
       }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([1]);
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10]);
       yield* Queue.offer(events, { kind: "synchronized" });
       yield* SubscriptionRef.changes(shellState).pipe(
         Stream.filter((value) => value.status === "live"),
@@ -333,7 +331,7 @@ describe("environment shell synchronization", () => {
         if ((yield* Ref.get(capturedAfterSequences)).length >= 2) break;
         yield* Effect.yieldNow;
       }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([1, 40]);
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40]);
       yield* Queue.offer(events, { kind: "synchronized" });
 
       yield* Queue.offer(wakeups, "application-active-probe");
@@ -341,16 +339,23 @@ describe("environment shell synchronization", () => {
         if ((yield* Ref.get(capturedAfterSequences)).length >= 3) break;
         yield* Effect.yieldNow;
       }
-      expect(yield* Ref.get(capturedAfterSequences)).toEqual([1, 40, 40]);
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40]);
 
       yield* Queue.offer(wakeups, "application-active-reconnect");
       for (let attempt = 0; attempt < 10; attempt += 1) {
         yield* Effect.yieldNow;
       }
       expect((yield* Ref.get(capturedAfterSequences)).length).toBe(3);
-      // The in-memory cursor made every resubscription warm: the HTTP
-      // snapshot loader is never consulted.
-      expect(yield* Ref.get(loaderCalls)).toBe(0);
+      expect(yield* Ref.get(loaderCalls)).toBe(1);
+
+      // Replacing the session performs another authoritative refresh.
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(capturedAfterSequences)).length >= 4) break;
+        yield* Effect.yieldNow;
+      }
+      expect(yield* Ref.get(capturedAfterSequences)).toEqual([10, 40, 40, 20]);
+      expect(yield* Ref.get(loaderCalls)).toBe(2);
     }),
   );
 });

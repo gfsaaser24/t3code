@@ -927,7 +927,12 @@ describe("EnvironmentSupervisor", () => {
 
   it.effect("reconnects immediately when the foreground liveness probe fails", () =>
     Effect.gen(function* () {
+      const allowReconnect = yield* Deferred.make<void>();
       const harness = yield* makeHarness({
+        prepare: (attempt) =>
+          attempt === 2
+            ? Deferred.await(allowReconnect).pipe(Effect.as(PREPARED_CONNECTION))
+            : Effect.succeed(PREPARED_CONNECTION),
         probe: (attempt) =>
           attempt === 1 ? Effect.fail(transient("The live session is stale.")) : Effect.void,
       });
@@ -937,8 +942,15 @@ describe("EnvironmentSupervisor", () => {
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.wake("application-active");
-      // No TestClock advance: a failed wake probe skips the first backoff rung
-      // and reconnects immediately.
+      const reconnecting = yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connecting",
+      );
+      expect(reconnecting.attempt).toBe(1);
+      expect(Option.isNone(yield* SubscriptionRef.get(supervisor.session))).toBe(true);
+
+      // No TestClock advance: a failed wake probe skips the first backoff rung.
+      yield* Deferred.succeed(allowReconnect, undefined);
       yield* awaitState(
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 2 && state.attempt === 1,
@@ -981,7 +993,7 @@ describe("EnvironmentSupervisor", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("quickly times out a stalled desktop foreground liveness probe", () =>
+  it.effect("uses the full tolerance window for a stalled desktop foreground probe", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
         probe: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
@@ -992,7 +1004,9 @@ describe("EnvironmentSupervisor", () => {
 
       yield* awaitState(supervisor.state, (state) => state.phase === "connected");
       yield* harness.wake("application-active");
-      yield* TestClock.adjust("3 seconds");
+      yield* TestClock.adjust("14999 millis");
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+      yield* TestClock.adjust("1 milli");
       yield* awaitState(
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 2 && state.attempt === 1,

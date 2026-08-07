@@ -4741,7 +4741,7 @@ function ChatViewContent(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "warning",
-          title: "Not connected — message not sent",
+          title: "Not connected: message not sent",
           description: "Reconnecting to the environment. Try again once it is connected.",
         }),
       );

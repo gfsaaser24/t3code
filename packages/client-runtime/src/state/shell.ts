@@ -21,6 +21,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeDynamic } from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
@@ -71,6 +72,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     error: Option.none(),
   });
   const awaitingCompletion = yield* Ref.make(false);
+  const lastAuthoritativeSession = yield* Ref.make<RpcSession | null>(null);
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
 
   const persist = Effect.fn("EnvironmentShellState.persist")(function* (
@@ -187,14 +189,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
-        // Warm resume: a snapshot already in memory (restored from the cache
-        // or left over from a previous subscription) carries a resume cursor,
-        // so subscribe with it directly instead of re-fetching the full shell
-        // snapshot over HTTP. When the cursor is too far behind, the server
-        // resets the stream with a fresh snapshot (see SHELL_RESUME_MAX_GAP
-        // in the server), which applyItem applies like any other item.
+        // Foreground resubscriptions on the same live session can resume from
+        // the in-memory cursor. A new session reloads the authoritative HTTP
+        // snapshot so a valid cursor cannot preserve incomplete cached data.
+        const hasAuthoritativeSnapshot = (yield* Ref.get(lastAuthoritativeSession)) === session;
         let current = yield* SubscriptionRef.get(state);
-        if (Option.isNone(current.snapshot)) {
+        if (!hasAuthoritativeSnapshot || Option.isNone(current.snapshot)) {
           const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
             Effect.flatMap(
               Option.match({
@@ -212,6 +212,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           const httpSnapshot = yield* snapshotLoader.load(prepared);
           if (Option.isSome(httpSnapshot)) {
             yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+            yield* Ref.set(lastAuthoritativeSession, session);
             current = yield* SubscriptionRef.get(state);
           }
         }
