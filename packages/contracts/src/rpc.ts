@@ -2,7 +2,12 @@ import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
-import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
+import {
+  ExternalLauncherError,
+  LaunchEditorInput,
+  OpenPathInput,
+  OpenPathResult,
+} from "./editor.ts";
 import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
@@ -73,12 +78,21 @@ import {
   RelayClientStatusSchema,
 } from "./relayClient.ts";
 import {
+  ProjectDeleteFileError,
+  ProjectDeleteFileInput,
+  ProjectDeleteFileResult,
+  ProjectDuplicateFileError,
+  ProjectDuplicateFileInput,
+  ProjectDuplicateFileResult,
   ProjectListEntriesError,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectReadFileError,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenameFileError,
+  ProjectRenameFileInput,
+  ProjectRenameFileResult,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
   ProjectSearchContentsResult,
@@ -171,13 +185,17 @@ export const WS_METHODS = {
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
   projectsListEntries: "projects.listEntries",
+  projectsDeleteFile: "projects.deleteFile",
+  projectsDuplicateFile: "projects.duplicateFile",
   projectsReadFile: "projects.readFile",
+  projectsRenameFile: "projects.renameFile",
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
   projectsWriteFile: "projects.writeFile",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
+  shellOpenPath: "shell.openPath",
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
@@ -464,6 +482,24 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   error: Schema.Union([ProjectReadFileError, EnvironmentAuthorizationError]),
 });
 
+export const WsProjectsRenameFileRpc = Rpc.make(WS_METHODS.projectsRenameFile, {
+  payload: ProjectRenameFileInput,
+  success: ProjectRenameFileResult,
+  error: Schema.Union([ProjectRenameFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectsDuplicateFileRpc = Rpc.make(WS_METHODS.projectsDuplicateFile, {
+  payload: ProjectDuplicateFileInput,
+  success: ProjectDuplicateFileResult,
+  error: Schema.Union([ProjectDuplicateFileError, EnvironmentAuthorizationError]),
+});
+
+export const WsProjectsDeleteFileRpc = Rpc.make(WS_METHODS.projectsDeleteFile, {
+  payload: ProjectDeleteFileInput,
+  success: ProjectDeleteFileResult,
+  error: Schema.Union([ProjectDeleteFileError, EnvironmentAuthorizationError]),
+});
+
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
   success: ProjectWriteFileResult,
@@ -472,6 +508,12 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
 
 export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
   payload: LaunchEditorInput,
+  error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
+});
+
+export const WsShellOpenPathRpc = Rpc.make(WS_METHODS.shellOpenPath, {
+  payload: OpenPathInput,
+  success: OpenPathResult,
   error: Schema.Union([ExternalLauncherError, EnvironmentAuthorizationError]),
 });
 
@@ -829,11 +871,15 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectsListEntriesRpc,
+  WsProjectsDeleteFileRpc,
+  WsProjectsDuplicateFileRpc,
   WsProjectsReadFileRpc,
+  WsProjectsRenameFileRpc,
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsWriteFileRpc,
   WsShellOpenInEditorRpc,
+  WsShellOpenPathRpc,
   WsFilesystemBrowseRpc,
   WsAssetsCreateUrlRpc,
   WsSubscribeVcsStatusRpc,

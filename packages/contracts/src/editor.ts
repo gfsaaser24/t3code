@@ -50,6 +50,28 @@ export const LaunchEditorInput = Schema.Struct({
 });
 export type LaunchEditorInput = typeof LaunchEditorInput.Type;
 
+export const OpenPathInput = Schema.Struct({
+  path: TrimmedNonEmptyString,
+});
+export type OpenPathInput = typeof OpenPathInput.Type;
+
+export const OpenPathResult = Schema.Struct({
+  path: TrimmedNonEmptyString,
+});
+export type OpenPathResult = typeof OpenPathResult.Type;
+
+export class ExternalLauncherInvalidPathError extends Schema.TaggedErrorClass<ExternalLauncherInvalidPathError>()(
+  "ExternalLauncherInvalidPathError",
+  {
+    path: Schema.String,
+    reason: Schema.Literal("not_absolute"),
+  },
+) {
+  override get message(): string {
+    return `External application paths must be absolute: ${this.path}`;
+  }
+}
+
 export class ExternalLauncherUnknownEditorError extends Schema.TaggedErrorClass<ExternalLauncherUnknownEditorError>()(
   "ExternalLauncherUnknownEditorError",
   {
@@ -102,6 +124,18 @@ export class ExternalLauncherBrowserSpawnError extends Schema.TaggedErrorClass<E
   }
 }
 
+export class ExternalLauncherDefaultAppSpawnError extends Schema.TaggedErrorClass<ExternalLauncherDefaultAppSpawnError>()(
+  "ExternalLauncherDefaultAppSpawnError",
+  {
+    ...ExternalLauncherSpawnFields,
+    target: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Failed to open '${this.target}' with the system default application using '${[this.command, ...this.args].join(" ")}'`;
+  }
+}
+
 export class ExternalLauncherEditorSpawnError extends Schema.TaggedErrorClass<ExternalLauncherEditorSpawnError>()(
   "ExternalLauncherEditorSpawnError",
   {
@@ -116,10 +150,12 @@ export class ExternalLauncherEditorSpawnError extends Schema.TaggedErrorClass<Ex
 }
 
 export const ExternalLauncherError = Schema.Union([
+  ExternalLauncherInvalidPathError,
   ExternalLauncherUnknownEditorError,
   ExternalLauncherUnsupportedEditorError,
   ExternalLauncherCommandNotFoundError,
   ExternalLauncherBrowserSpawnError,
+  ExternalLauncherDefaultAppSpawnError,
   ExternalLauncherEditorSpawnError,
 ]);
 export type ExternalLauncherError = typeof ExternalLauncherError.Type;

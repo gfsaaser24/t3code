@@ -2,7 +2,10 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  ProjectDeleteFileError,
+  ProjectDuplicateFileError,
   ProjectReadFileError,
+  ProjectRenameFileError,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
   ProjectSearchEntriesError,
@@ -58,6 +61,30 @@ describe("project RPC errors", () => {
       resolvedPath: "/workspace/src/index.ts",
       cause,
     });
+    const renameError = new ProjectRenameFileError({
+      cwd: "/workspace",
+      relativePath: "draft.txt",
+      destinationRelativePath: "final.txt",
+      failure: "destination_exists",
+      resolvedPath: "/workspace/final.txt",
+      cause,
+    });
+    const duplicateError = new ProjectDuplicateFileError({
+      cwd: "/workspace",
+      relativePath: "draft.txt",
+      failure: "operation_failed",
+      operation: "copy-file",
+      operationPath: "/workspace/draft copy.txt",
+      cause,
+    });
+    const deleteError = new ProjectDeleteFileError({
+      cwd: "/workspace",
+      relativePath: "draft.txt",
+      failure: "operation_failed",
+      operation: "unlink",
+      operationPath: "/workspace/draft.txt",
+      cause,
+    });
 
     expect(searchError.message).toBe("Failed to search workspace entries in '/workspace'.");
     expect(searchError.message).not.toContain(cause.message);
@@ -69,6 +96,19 @@ describe("project RPC errors", () => {
     expect(readError.message).toBe("Failed to read workspace file 'src/index.ts' in '/workspace'.");
     expect(readError.message).not.toContain(cause.message);
     expect(readError.cause).toBe(cause);
+    expect(renameError.message).toBe(
+      "Failed to rename workspace file 'draft.txt' to 'final.txt' in '/workspace'.",
+    );
+    expect(renameError.failure).toBe("destination_exists");
+    expect(renameError.cause).toBe(cause);
+    expect(duplicateError.message).toBe(
+      "Failed to duplicate workspace file 'draft.txt' in '/workspace'.",
+    );
+    expect(duplicateError.operation).toBe("copy-file");
+    expect(deleteError.message).toBe(
+      "Failed to delete workspace file 'draft.txt' in '/workspace'.",
+    );
+    expect(deleteError.operation).toBe("unlink");
 
     const contentSearchError = new ProjectSearchContentsError({
       cwd: "/workspace",
@@ -86,6 +126,7 @@ describe("project RPC errors", () => {
   it("decodes legacy message-only errors during rolling upgrades", () => {
     const decodeSearchError = Schema.decodeUnknownSync(ProjectSearchEntriesError);
     const decodeWriteError = Schema.decodeUnknownSync(ProjectWriteFileError);
+    const decodeRenameError = Schema.decodeUnknownSync(ProjectRenameFileError);
 
     const searchError = decodeSearchError({
       _tag: "ProjectSearchEntriesError",
@@ -96,6 +137,10 @@ describe("project RPC errors", () => {
       _tag: "ProjectWriteFileError",
       message: "Legacy project write failure.",
     });
+    const renameError = decodeRenameError({
+      _tag: "ProjectRenameFileError",
+      message: "Legacy project rename failure.",
+    });
 
     expect(searchError.message).toBe("Legacy project search failure.");
     expect(searchError.cwd).toBeUndefined();
@@ -105,5 +150,8 @@ describe("project RPC errors", () => {
     expect(writeError.message).toBe("Legacy project write failure.");
     expect(writeError.relativePath).toBeUndefined();
     expect(writeError.failure).toBeUndefined();
+    expect(renameError.message).toBe("Legacy project rename failure.");
+    expect(renameError.destinationRelativePath).toBeUndefined();
+    expect(renameError.failure).toBeUndefined();
   });
 });

@@ -27,10 +27,16 @@ import type {
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type { AssetCreateUrlInput, AssetCreateUrlResult } from "./assets.ts";
 import type {
+  ProjectDeleteFileInput,
+  ProjectDeleteFileResult,
+  ProjectDuplicateFileInput,
+  ProjectDuplicateFileResult,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
+  ProjectRenameFileInput,
+  ProjectRenameFileResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -171,12 +177,14 @@ export interface DesktopAppBranding {
   baseName: string;
   stageLabel: DesktopAppStageLabel;
   displayName: string;
+  releaseRepository: string;
 }
 
 export const DesktopAppBrandingSchema = Schema.Struct({
   baseName: Schema.String,
   stageLabel: DesktopAppStageLabelSchema,
   displayName: Schema.String,
+  releaseRepository: Schema.String,
 });
 
 export interface DesktopRuntimeInfo {
@@ -288,6 +296,52 @@ export const DesktopEnvironmentBootstrapSchema = Schema.Struct({
   wsBaseUrl: Schema.NullOr(Schema.String),
   bootstrapToken: Schema.optionalKey(Schema.String),
 });
+
+export const DesktopOfficialT3ImportAvailabilitySchema = Schema.Struct({
+  sourceBaseDir: Schema.String,
+  targetBaseDir: Schema.String,
+  runCommand: Schema.String,
+  planCommand: Schema.String,
+});
+export type DesktopOfficialT3ImportAvailability =
+  typeof DesktopOfficialT3ImportAvailabilitySchema.Type;
+
+export const DesktopOfficialT3ImportCollisionChoiceSchema = Schema.Literals([
+  "skip",
+  "replace",
+  "clone",
+]);
+export type DesktopOfficialT3ImportCollisionChoice =
+  typeof DesktopOfficialT3ImportCollisionChoiceSchema.Type;
+
+export const DesktopOfficialT3ImportInputSchema = Schema.Struct({
+  collisionChoices: Schema.optionalKey(
+    Schema.Record(Schema.String, DesktopOfficialT3ImportCollisionChoiceSchema),
+  ),
+});
+export type DesktopOfficialT3ImportInput = typeof DesktopOfficialT3ImportInputSchema.Type;
+
+export const DesktopOfficialT3ImportResultSchema = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("imported"),
+    importedEventCount: Schema.Number,
+    copiedAttachmentCount: Schema.Number,
+    receiptPath: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("needs-collision-choices"),
+    threadIds: Schema.Array(Schema.String),
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("blocked"),
+    reason: Schema.Literals(["source-active", "target-active", "import-failed"]),
+    message: Schema.String,
+    runCommand: Schema.String,
+    planCommand: Schema.String,
+  }),
+]);
+export type DesktopOfficialT3ImportResult = typeof DesktopOfficialT3ImportResultSchema.Type;
 
 export const DesktopSshEnvironmentTargetSchema = Schema.Struct({
   alias: Schema.String,
@@ -1000,6 +1054,10 @@ export interface DesktopBridge {
   // info (omits instances whose backend hasn't produced a config yet).
   // The primary backend is identified by id === PRIMARY_LOCAL_ENVIRONMENT_ID.
   getLocalEnvironmentBootstraps: () => readonly DesktopEnvironmentBootstrap[];
+  discoverOfficialT3Import?: () => Promise<DesktopOfficialT3ImportAvailability | null>;
+  runOfficialT3Import?: (
+    input: DesktopOfficialT3ImportInput,
+  ) => Promise<DesktopOfficialT3ImportResult>;
   getLocalEnvironmentBearerToken: () => Promise<string>;
   getClientSettings: () => Promise<ClientSettings | null>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
@@ -1199,8 +1257,11 @@ export interface EnvironmentApi {
     ) => () => void;
   };
   projects: {
+    deleteFile: (input: ProjectDeleteFileInput) => Promise<ProjectDeleteFileResult>;
+    duplicateFile: (input: ProjectDuplicateFileInput) => Promise<ProjectDuplicateFileResult>;
     listEntries: (input: ProjectListEntriesInput) => Promise<ProjectListEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    renameFile: (input: ProjectRenameFileInput) => Promise<ProjectRenameFileResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
   };

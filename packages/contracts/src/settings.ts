@@ -1,8 +1,10 @@
 import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { ScopedThreadRef } from "./environment.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
@@ -110,6 +112,56 @@ export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationM
 export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200));
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
+export const TurboChatPaneId = TrimmedNonEmptyString.pipe(Schema.brand("TurboChatPaneId"));
+export type TurboChatPaneId = typeof TurboChatPaneId.Type;
+
+export const TurboChatPaneDraftId = TrimmedNonEmptyString.pipe(
+  Schema.brand("TurboChatPaneDraftId"),
+);
+export type TurboChatPaneDraftId = typeof TurboChatPaneDraftId.Type;
+
+export const TurboChatPaneTarget = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("server"),
+    threadRef: ScopedThreadRef,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("draft"),
+    draftId: TurboChatPaneDraftId,
+  }),
+]);
+export type TurboChatPaneTarget = typeof TurboChatPaneTarget.Type;
+
+export const TurboChatPane = Schema.Struct({
+  id: TurboChatPaneId,
+  target: TurboChatPaneTarget,
+});
+export type TurboChatPane = typeof TurboChatPane.Type;
+
+export const TurboChatPaneLayout = Schema.Struct({
+  version: Schema.Literal(1),
+  panes: Schema.Array(TurboChatPane).check(Schema.isNonEmpty()),
+  focusedPaneId: TurboChatPaneId,
+});
+export type TurboChatPaneLayout = typeof TurboChatPaneLayout.Type;
+
+const decodeTurboChatPaneLayout = Schema.decodeUnknownOption(TurboChatPaneLayout);
+
+/**
+ * Pane persistence is intentionally forward compatible. It is UI recovery
+ * state, so an unsupported version or malformed value must not prevent the
+ * rest of the client settings document from loading.
+ */
+export const CompatibleTurboChatPaneLayout = Schema.Unknown.pipe(
+  Schema.decodeTo(
+    Schema.NullOr(TurboChatPaneLayout),
+    SchemaTransformation.transform<(typeof TurboChatPaneLayout)["Encoded"] | null, unknown>({
+      decode: (value) => Option.getOrNull(decodeTurboChatPaneLayout(value)),
+      encode: (value) => value,
+    }),
+  ),
+);
+
 export const ClientSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -199,6 +251,9 @@ export const ClientSettingsSchema = Schema.Struct({
   sidebarV2ConfiguredByUser: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
+  ),
+  turboChatPaneLayout: CompatibleTurboChatPaneLayout.pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
   ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
@@ -797,6 +852,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarV2Enabled: Schema.optionalKey(Schema.Boolean),
   sidebarV2ConfiguredByUser: Schema.optionalKey(Schema.Boolean),
   timestampFormat: Schema.optionalKey(TimestampFormat),
+  turboChatPaneLayout: Schema.optionalKey(CompatibleTurboChatPaneLayout),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;
