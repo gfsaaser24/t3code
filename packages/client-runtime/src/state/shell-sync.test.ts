@@ -165,6 +165,7 @@ describe("environment shell synchronization", () => {
         updatedAt: "2026-06-07T00:00:00.000Z",
       };
       const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
+      const wakeups = yield* Queue.unbounded<ConnectionWakeups.ConnectionWakeup>();
       const subscribeInputs = yield* Queue.unbounded<{
         readonly afterSequence?: number;
         readonly requestCompletionMarker?: boolean;
@@ -213,6 +214,10 @@ describe("environment shell synchronization", () => {
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.provideService(Persistence.EnvironmentCacheStore, cache),
         Effect.provideService(ShellSnapshotLoader, snapshotLoader),
+        Effect.provideService(
+          ConnectionWakeups.ConnectionWakeups,
+          ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.fromQueue(wakeups) }),
+        ),
       );
 
       const subscribeInput = yield* Queue.take(subscribeInputs);
@@ -232,6 +237,12 @@ describe("environment shell synchronization", () => {
 
       const live = yield* SubscriptionRef.get(shellState);
       expect(Option.getOrThrow(live.snapshot)).toEqual(resetSnapshot);
+      expect(yield* Ref.get(loaderCalls)).toBe(1);
+
+      yield* Queue.offer(wakeups, "application-active");
+      const resumedInput = yield* Queue.take(subscribeInputs);
+      expect(resumedInput.afterSequence).toBe(resetSnapshot.snapshotSequence);
+      expect(resumedInput.requestCompletionMarker).toBe(true);
       expect(yield* Ref.get(loaderCalls)).toBe(1);
     }),
   );
