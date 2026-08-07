@@ -17,8 +17,14 @@ import type { ToolLifecycleItemType } from "@t3tools/contracts";
 
 import type { ChatOrbState } from "./chatOrbState";
 
-/** Matches the 14px line-height of the rows these sit in. */
-const TIMELINE_ORB_SIZE = 20;
+/**
+ * The library ships exactly two sizes, 20 and 64, and documents them as
+ * separate designs rather than a scale factor — each carries its own dot count
+ * and speed tuning. 20 is therefore a floor, not a hint: the slot has to be
+ * built around it. Sizing the box any smaller does not shrink the canvas, it
+ * just lets it overflow.
+ */
+export const TIMELINE_ORB_SIZE = 20;
 
 export function TimelineOrb({
   state,
@@ -28,10 +34,38 @@ export function TimelineOrb({
   readonly label: string;
 }) {
   return (
-    <span className="inline-flex size-3.5 shrink-0 items-center justify-center">
+    <span className="inline-flex size-5 shrink-0 items-center justify-center leading-none">
       <ThinkingOrb state={state} size={TIMELINE_ORB_SIZE} aria-label={label} />
     </span>
   );
+}
+
+/**
+ * The resting counterpart, sized to the same 20px slot.
+ *
+ * Rows swap between the two as work starts and finishes, so they must occupy
+ * identical space — otherwise a fan-out completing shifts its whole row
+ * sideways at the moment attention is on it.
+ */
+export function TimelineOrbSlot({ className }: { readonly className?: string }) {
+  return (
+    <span className="inline-flex size-5 shrink-0 items-center justify-center leading-none">
+      <span aria-hidden className={className} />
+    </span>
+  );
+}
+
+/**
+ * The composer's orb, above the stop button.
+ *
+ * Fixed to `solving` rather than tracking the live state: this slot answers
+ * "the model has the floor", and the per-state detail belongs on the rows where
+ * the thing it describes is visible. Rendered only inside the stop button's
+ * branch, so it appears exactly while a turn can be stopped and cannot outlive
+ * one.
+ */
+export function ComposerThinkingOrb() {
+  return <ThinkingOrb state="solving" size={TIMELINE_ORB_SIZE} aria-label="Thinking" />;
 }
 
 /**

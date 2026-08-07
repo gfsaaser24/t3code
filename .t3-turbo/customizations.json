@@ -376,8 +376,16 @@
           ]
         },
         {
+          "path": "apps/web/src/turbo/orbs/TimelineOrb.tsx",
+          "markers": [
+            "export function TimelineOrb",
+            "export function toolOrbState",
+            "export function ComposerThinkingOrb"
+          ]
+        },
+        {
           "path": "apps/web/src/turbo/orbs/chatOrbState.ts",
-          "markers": ["export function resolveChatOrbState", "\"weaving\"", "\"breathing\""]
+          "markers": ["export function chatOrbLabel", "\"weaving\"", "\"breathing\""]
         },
         {
           "path": "apps/web/src/components/chat/ComposerPrimaryActions.tsx",

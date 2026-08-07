@@ -325,8 +325,10 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 import { useChatPaneActions, useCurrentChatPaneId } from "~/turbo/chatPanes/ChatPaneActionsContext";
-import { ComposerThinkingOrb } from "~/turbo/orbs/ChatActivityOrb";
-import { TimelineOrb } from "~/turbo/orbs/TimelineOrb";
+import { ComposerThinkingOrb, TimelineOrb, TimelineOrbSlot } from "~/turbo/orbs/TimelineOrb";
+import { chatOrbLabel } from "~/turbo/orbs/chatOrbState";
+
+const COMPOSER_ACTIVITY_ORB = <ComposerThinkingOrb />;
 import {
   isChatPaneFocused,
   selectPaneTerminalMountKeys,
@@ -4259,7 +4261,10 @@ export function ChatViewContent(props: ChatViewProps) {
   // interrupting, and works by session, so no active turn is needed.
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
-  const activityOrb = <ComposerThinkingOrb />;
+  // Module-level constant, not a fresh element per render: ChatComposer is
+  // memoized, and rebuilding this on every ChatViewContent render would defeat
+  // that on every keystroke. It takes no props, so one instance is correct.
+  const activityOrb = COMPOSER_ACTIVITY_ORB;
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command
@@ -4306,13 +4311,19 @@ export function ChatViewContent(props: ChatViewProps) {
       // Working weaves if agents are behind it, breathes if the thread is only
       // being watched. A stopped-but-not-cleared liveness keeps the static dot,
       // since nothing is moving.
+      // Working weaves if agents are behind it, breathes if the thread is only
+      // being watched. A stopped-but-not-cleared liveness keeps the static dot,
+      // since nothing is moving. Both use the same slot so the banner title
+      // does not shift when the work lands.
       icon: working ? (
         <TimelineOrb
           state={liveCount > 0 ? "weaving" : "breathing"}
-          label={liveCount > 0 ? `${liveCount} agents working` : "Monitoring in the background"}
+          label={
+            liveCount > 0 ? chatOrbLabel("weaving", liveCount) : "Monitoring in the background"
+          }
         />
       ) : (
-        <span className="size-1.5 rounded-full bg-foreground" aria-hidden="true" />
+        <TimelineOrbSlot className="size-1.5 rounded-full bg-foreground" />
       ),
       title: working
         ? liveCount > 0
