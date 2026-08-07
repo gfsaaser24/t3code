@@ -5896,7 +5896,10 @@ export function ChatViewContent(props: ChatViewProps) {
       onToggleRightPanel={toggleRightPanel}
     />
   );
-  const panelLayoutControls = (
+  // Floating placement, used while the right panel is open: the controls sit
+  // above the panel, which the header does not contain, so they have to be
+  // taken out of flow to reach that corner.
+  const floatingPanelLayoutControls = (
     <div
       className={cn(
         // One inset in both states: the controls move between containers when
@@ -5911,6 +5914,16 @@ export function ChatViewContent(props: ChatViewProps) {
           onToggle={toggleRightPanelMaximized}
         />
       ) : null}
+      {panelToggleControls}
+    </div>
+  );
+  // In-flow placement, used while the right panel is closed and the controls
+  // live inside the header. Floating them here overlapped the header's own
+  // trailing controls: the header is a full-width flex row that reserved no
+  // space for them, which only became visible once a split pane made the
+  // header narrow enough for its content to reach the corner.
+  const inlinePanelLayoutControls = (
+    <div className="ml-1 flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
       {panelToggleControls}
     </div>
   );
@@ -5997,7 +6010,7 @@ export function ChatViewContent(props: ChatViewProps) {
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
-      {rightPanelOpen && !shouldUseRightPanelSheet ? panelLayoutControls : null}
+      {rightPanelOpen && !shouldUseRightPanelSheet ? floatingPanelLayoutControls : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -6021,7 +6034,6 @@ export function ChatViewContent(props: ChatViewProps) {
             reserveSidebarControlInset && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
           )}
         >
-          {!rightPanelOpen ? panelLayoutControls : null}
           <ChatHeader
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadId={activeThread.id}
@@ -6046,6 +6058,7 @@ export function ChatViewContent(props: ChatViewProps) {
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
           />
+          {!rightPanelOpen ? inlinePanelLayoutControls : null}
         </header>
 
         <ThreadErrorBanner
