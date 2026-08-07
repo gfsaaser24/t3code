@@ -362,7 +362,7 @@ describe("ProviderSessionReaper", () => {
     );
 
     // Past the inactivity threshold (1s) but inside the default wedge cap.
-    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const nowMs = await runtime!.runPromise(Clock.currentTimeMillis);
     await runtime!.runPromise(
       repository.upsert({
         threadId,
@@ -380,9 +380,9 @@ describe("ProviderSessionReaper", () => {
     );
 
     const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
-    await Effect.runPromise(drainFibers);
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await runtime!.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
   });
@@ -418,7 +418,7 @@ describe("ProviderSessionReaper", () => {
 
     // Idle longer than the wedge cap: "live" background work that never
     // reaches a terminal state must not pin the session forever.
-    const nowMs = await Effect.runPromise(Clock.currentTimeMillis);
+    const nowMs = await runtime!.runPromise(Clock.currentTimeMillis);
     await runtime!.runPromise(
       repository.upsert({
         threadId,
@@ -436,8 +436,8 @@ describe("ProviderSessionReaper", () => {
     );
 
     const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
 
     await waitFor(() => harness.stopSession.mock.calls.length === 1);
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
