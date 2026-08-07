@@ -14,6 +14,9 @@
  * genuinely accented elements. Pinning the neutrals back is what keeps it
  * looking like HeroUI.
  */
+import * as NodeFS from "node:fs";
+import * as NodeURL from "node:url";
+
 import {
   createManagedThemeColors,
   parseThemeFile,
@@ -172,4 +175,6 @@ for (const role of THEME_COLOR_ROLES) {
   if (!(role in light)) console.log(`  ${role.padEnd(28)} ${derivedLight[role]}   dark ${derivedDark[role]}`);
 }
 
-process.stdout.write("\n__THEME_JSON__\n" + serialized + "\n");
+const outputPath = new URL("../src/turbo/themes/heroui-pro.json", import.meta.url);
+NodeFS.writeFileSync(outputPath, serialized.endsWith("\n") ? serialized : `${serialized}\n`);
+console.log(`\nwrote ${NodeURL.fileURLToPath(outputPath)}`);

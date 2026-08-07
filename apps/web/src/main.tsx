@@ -16,6 +16,11 @@ import {
   syncDocumentWindowControlsOverlayClass,
 } from "./lib/windowControlsOverlay";
 import { AppRoot } from "./AppRoot";
+import { seedBundledThemes } from "./turbo/themes/bundledThemes";
+
+// Install the themes T3 Turbo ships with before the first render, so they are
+// present in Settings -> Themes on a cold profile. This never throws.
+seedBundledThemes();
 
 // Electron loads the app from a file-backed shell, so hash history avoids path resolution issues.
 const history = isElectron ? createHashHistory() : createBrowserHistory();
