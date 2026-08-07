@@ -25,6 +25,7 @@ import {
   type ProviderSession,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -288,21 +289,60 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   // 1. `session.exited`: adapter-internal exits (stream end, session
   //    replace, adapter stopAll) never pass through `stopSession`, which
   //    left the persisted binding `running` — a ghost row the reaper keeps
-  //    sweeping and diagnosis tooling misreads.
-  // 2. `turn.started` / `turn.completed`: `lastSeenAt` previously moved
-  //    only on user-initiated `sendTurn`. Turns the provider starts on its
-  //    own (background task notifications waking the agent) never routed
+  //    sweeping and diagnosis tooling misreads. Guarded against stale
+  //    exits: if the adapter still holds a live session for the thread
+  //    (a replacement started before the old session's exit event drained),
+  //    the binding must stay `running`.
+  // 2. Turn and task lifecycle events: `lastSeenAt` previously moved only
+  //    on user-initiated `sendTurn`. Turns the provider starts on its own
+  //    (background task notifications waking the agent) and long-running
+  //    background tasks that heartbeat via `task.progress` never routed
   //    through it, so a thread doing autonomous work read as idle from the
-  //    moment the user last typed — and got reaped mid-work 30 minutes
-  //    later. Touching the binding on turn lifecycle makes the reaper's
-  //    clock measure actual inactivity.
-  const syncBindingOnRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> => {
+  //    moment the user last typed — and got reaped mid-work. Touching the
+  //    binding on these events (throttled — task.progress ticks every few
+  //    seconds) makes the reaper's clock measure actual inactivity, and
+  //    turns the reaper's wedge cap into "no heartbeat at all for the cap
+  //    window", which is the definition of wedged.
+  const BINDING_TOUCH_THROTTLE_MS = 60_000;
+  const lastBindingTouchAtMs = new Map<string, number>();
+
+  const BINDING_TOUCH_EVENT_TYPES: ReadonlySet<ProviderRuntimeEvent["type"]> = new Set([
+    "turn.started",
+    "turn.completed",
+    "task.started",
+    "task.progress",
+    "task.updated",
+    "task.completed",
+  ]);
+
+  const syncBindingOnRuntimeEvent = (
+    adapter: ProviderAdapterShape<ProviderAdapterError>,
+    event: ProviderRuntimeEvent,
+  ): Effect.Effect<void> => {
     const isSessionExit = event.type === "session.exited";
-    const isTurnActivity = event.type === "turn.started" || event.type === "turn.completed";
-    if (!isSessionExit && !isTurnActivity) {
+    const isActivityTouch = BINDING_TOUCH_EVENT_TYPES.has(event.type);
+    if (!isSessionExit && !isActivityTouch) {
       return Effect.void;
     }
     return Effect.gen(function* () {
+      const threadKey = String(event.threadId);
+      if (!isSessionExit) {
+        const nowMs = yield* Clock.currentTimeMillis;
+        const lastTouch = lastBindingTouchAtMs.get(threadKey);
+        if (lastTouch !== undefined && nowMs - lastTouch < BINDING_TOUCH_THROTTLE_MS) {
+          return;
+        }
+        lastBindingTouchAtMs.set(threadKey, nowMs);
+      } else {
+        lastBindingTouchAtMs.delete(threadKey);
+        // A session.exited that raced a replacement session must not stomp
+        // the fresh binding: the exit belongs to the torn-down session, and
+        // the adapter is the authority on whether a live one remains.
+        const stillLive = yield* adapter.hasSession(event.threadId);
+        if (stillLive) {
+          return;
+        }
+      }
       const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
       const providerInstanceId = binding?.providerInstanceId;
       if (
@@ -313,8 +353,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         return;
       }
       const lastRuntimeEventAt = yield* nowIso;
-      // On turn activity `status` is omitted so the directory preserves the
-      // existing value; the upsert itself refreshes `lastSeenAt`.
+      // On activity touches `status` is omitted so the directory preserves
+      // the existing value; the upsert itself refreshes `lastSeenAt`.
       yield* directory.upsert({
         threadId: event.threadId,
         provider: binding.provider,
@@ -341,6 +381,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     source: {
       readonly instanceId: ProviderInstanceId;
       readonly provider: ProviderDriverKind;
+      readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
     },
     event: ProviderRuntimeEvent,
   ): Effect.Effect<void> =>
@@ -351,7 +392,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           eventType: canonicalEvent.type,
         }).pipe(
           Effect.andThen(publishRuntimeEvent(canonicalEvent)),
-          Effect.andThen(syncBindingOnRuntimeEvent(canonicalEvent)),
+          Effect.andThen(syncBindingOnRuntimeEvent(source.adapter, canonicalEvent)),
         ),
       ),
     );
@@ -395,6 +436,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             {
               instanceId: id,
               provider: adapter.provider,
+              adapter,
             },
             event,
           ),
