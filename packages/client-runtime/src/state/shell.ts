@@ -193,6 +193,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         // the in-memory cursor. A new session reloads the authoritative HTTP
         // snapshot so a valid cursor cannot preserve incomplete cached data.
         const hasAuthoritativeSnapshot = (yield* Ref.get(lastAuthoritativeSession)) === session;
+        let canResume = hasAuthoritativeSnapshot;
         let current = yield* SubscriptionRef.get(state);
         if (!hasAuthoritativeSnapshot || Option.isNone(current.snapshot)) {
           const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
@@ -213,11 +214,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           if (Option.isSome(httpSnapshot)) {
             yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
             yield* Ref.set(lastAuthoritativeSession, session);
+            canResume = true;
             current = yield* SubscriptionRef.get(state);
           }
         }
 
-        if (Option.isNone(current.snapshot)) {
+        // If the authoritative refresh failed, omit the cached cursor so the
+        // socket fallback sends a complete snapshot for this new session.
+        if (!canResume || Option.isNone(current.snapshot)) {
           return supportsCompletionMarker ? { requestCompletionMarker: true as const } : {};
         }
         if (!supportsCompletionMarker) {
