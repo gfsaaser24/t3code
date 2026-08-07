@@ -79,6 +79,27 @@ export const THEME_COLOR_ROLES = [
   "terminalSelection",
   "terminalScrollbar",
   "terminalScrollbarHover",
+  // Region roles. Every overlay in the app used to collapse onto the single
+  // popover surface, the sidebar card inherited the sidebar's own foregrounds,
+  // and the composer only had a glass outline. These give menus, sidebar cards
+  // and the composer their own vocabulary so a palette can move one without
+  // dragging the others with it.
+  "menuSurface",
+  "menuForeground",
+  "menuBorder",
+  "menuItemHover",
+  "menuItemHoverForeground",
+  "menuSeparator",
+  "sidebarCardSurface",
+  "sidebarCardBorder",
+  "sidebarCardTitle",
+  "sidebarCardMeta",
+  "composerSurface",
+  "composerForeground",
+  "composerPlaceholder",
+  "composerBorder",
+  "composerControl",
+  "composerControlForeground",
 ] as const;
 
 export type ThemeColorRole = (typeof THEME_COLOR_ROLES)[number];
@@ -86,6 +107,77 @@ const THEME_COLOR_ROLE_SET: ReadonlySet<string> = new Set(THEME_COLOR_ROLES);
 export type ThemeAppearance = "light" | "dark";
 
 export type ThemeColors = Readonly<Record<ThemeColorRole, string>>;
+
+/**
+ * Region roles and the role each one falls back to.
+ *
+ * The source on the right is what that surface already resolved to before the
+ * region role existed, read off the components themselves: menu, select and
+ * tooltip popups are `bg-popover`/`text-popover-foreground`, a highlighted menu
+ * item is `bg-accent`/`text-accent-foreground`, a menu separator is
+ * `bg-border`, and the composer glass already routed through the raised
+ * surface and the toolbar edge. Keeping the fallbacks exact means adding these
+ * roles changes nothing on screen until someone deliberately overrides one.
+ */
+const REGION_THEME_ROLE_SOURCES = {
+  menuSurface: "surfaceOverlay",
+  menuForeground: "text",
+  menuBorder: "border",
+  menuItemHover: "accentSurface",
+  menuItemHoverForeground: "accentSurfaceForeground",
+  menuSeparator: "border",
+  sidebarCardSurface: "sidebarControlSurface",
+  sidebarCardBorder: "sidebarBorder",
+  sidebarCardTitle: "sidebarForeground",
+  sidebarCardMeta: "sidebarMutedForeground",
+  composerSurface: "surfaceRaised",
+  composerForeground: "text",
+  composerPlaceholder: "placeholder",
+  composerBorder: "toolbarBorder",
+  composerControl: "toolbarControl",
+  composerControlForeground: "toolbarControlForeground",
+} as const satisfies Readonly<Record<string, ThemeColorRole>>;
+
+export type RegionThemeRole = keyof typeof REGION_THEME_ROLE_SOURCES;
+
+/**
+ * A palette before its region roles are filled in. The built-in palettes and
+ * both derivation engines are written in these terms so a new region role only
+ * has to be described once, in the table above.
+ */
+export type ThemeBaseColors = Readonly<Record<Exclude<ThemeColorRole, RegionThemeRole>, string>>;
+
+/**
+ * Recomputes every region role from its source, discarding inherited values.
+ *
+ * The derivation engines build their result by spreading the default palette
+ * and overwriting the roles they solve. Region roles are not among those, so
+ * without this a generated palette would keep the *default* theme's menu,
+ * sidebar card and composer colors while every surface around them moved —
+ * purple menus sitting on a neutral grey theme.
+ */
+export function withDerivedRegionThemeRoles(colors: ThemeColors): ThemeColors {
+  const next: Record<string, string> = { ...colors };
+  for (const [role, source] of Object.entries(REGION_THEME_ROLE_SOURCES)) {
+    const derived = next[source];
+    if (typeof derived === "string" && derived.length > 0) next[role] = derived;
+  }
+  return next as ThemeColors;
+}
+
+/** Fills any region role the caller did not set from its fallback source. */
+export function withRegionThemeRoles(
+  base: ThemeBaseColors & Partial<Record<RegionThemeRole, string>>,
+): ThemeColors {
+  const filled: Record<string, string> = { ...base };
+  for (const [role, source] of Object.entries(REGION_THEME_ROLE_SOURCES)) {
+    const existing = filled[role];
+    if (typeof existing !== "string" || existing.length === 0) {
+      filled[role] = filled[source] ?? "";
+    }
+  }
+  return filled as ThemeColors;
+}
 export type ThemeColorOverrides = Readonly<Partial<Record<ThemeColorRole, string>>>;
 export type ThemeVariants = Readonly<Partial<Record<ThemeAppearance, ThemeColors>>>;
 export type ThemeVariantOverrides = Readonly<Partial<Record<ThemeAppearance, ThemeColorOverrides>>>;
@@ -160,9 +252,22 @@ function parseStoredThemeColors(value: unknown, appearance: ThemeAppearance): Th
   };
   // Tolerate unknown roles and malformed values so themes saved by other
   // builds (for example one that adds a new role) keep their remaining colors.
+  const stored = new Set<string>();
   for (const [role, color] of Object.entries(value)) {
     if (THEME_COLOR_ROLE_SET.has(role) && isThemeColor(color)) {
       colors[role as ThemeColorRole] = color;
+      stored.add(role);
+    }
+  }
+  // A theme written before a region role existed was seeded above from the
+  // default palette, which is a different palette entirely — leaving it would
+  // put the flagship theme's menus and composer on someone else's colors.
+  // Anything the file did not carry follows the file's own palette instead.
+  for (const [role, source] of Object.entries(REGION_THEME_ROLE_SOURCES)) {
+    if (stored.has(role)) continue;
+    const derived = colors[source];
+    if (typeof derived === "string" && derived.length > 0) {
+      colors[role as ThemeColorRole] = derived;
     }
   }
   return colors as ThemeColors;
@@ -304,7 +409,7 @@ function legacyThemeMode(theme: ThemePreference): ThemeAppearance | null {
 // Measured from the live t3.chat default theme. Translucent chat surfaces are
 // flattened over --chat-background so this opaque palette reproduces the
 // pixels users see after T3 Chat's blur and noise layers are composited.
-const T3_CHAT_LIGHT_COLORS: ThemeColors = {
+const T3_CHAT_LIGHT_COLORS: ThemeBaseColors = {
   canvas: "#fdf7fd",
   // T3 Code's workspace header belongs to the chat panel, so keep it seamless
   // with the light chat canvas rather than mapping it to T3 Chat's outer shell.
@@ -372,7 +477,7 @@ const T3_CHAT_LIGHT_COLORS: ThemeColors = {
   terminalScrollbarHover: "#eaa7cb",
 };
 
-const T3_CHAT_DARK_COLORS: ThemeColors = {
+const T3_CHAT_DARK_COLORS: ThemeBaseColors = {
   canvas: "#1f1a24",
   // T3 Code's workspace header belongs to the chat panel, so keep it seamless
   // with the canvas rather than mapping it to T3 Chat's outer shell.
@@ -452,7 +557,7 @@ const T3_CHAT_DARK_COLORS: ThemeColors = {
  * their real backdrops (canvas, or the sidebar for its rows) because theme
  * colors must be opaque hex.
  */
-const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
+const T3_CODE_LIGHT_THEME_COLORS: ThemeBaseColors = {
   canvas: "#fcfcfc",
   chrome: "#fcfcfc",
   toolbar: "#fcfcfc",
@@ -512,7 +617,7 @@ const T3_CODE_LIGHT_THEME_COLORS: ThemeColors = {
   terminalScrollbarHover: "#bdbdbd",
 };
 
-const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
+const T3_CODE_DARK_THEME_COLORS: ThemeBaseColors = {
   canvas: "#0a0a0a",
   chrome: "#0a0a0a",
   toolbar: "#0a0a0a",
@@ -579,7 +684,9 @@ const T3_CODE_DARK_THEME_COLORS: ThemeColors = {
  * files.
  */
 export function getStandardThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CODE_DARK_THEME_COLORS : T3_CODE_LIGHT_THEME_COLORS;
+  return withRegionThemeRoles(
+    appearance === "dark" ? T3_CODE_DARK_THEME_COLORS : T3_CODE_LIGHT_THEME_COLORS,
+  );
 }
 
 type ThemeRgbColor = {
@@ -940,7 +1047,7 @@ export function createVividThemeColors(
 
   const actionHover: ThemeOklch = { ...action, L: action.L + (dark ? 0.06 : -0.06) };
 
-  return {
+  return withDerivedRegionThemeRoles({
     ...defaults,
     ...standardStatusColors(canvasRgb),
     canvas: themeRgbToHexColor(canvasRgb),
@@ -995,7 +1102,7 @@ export function createVividThemeColors(
     terminalSelection: hex(surfaceAt(dark ? 0.18 : 0.12, Math.min(0.12, accent.C * 0.55))),
     terminalScrollbar: hex(surfaceAt(dark ? 0.22 : 0.16, tintC)),
     terminalScrollbarHover: hex(surfaceAt(dark ? 0.3 : 0.22, tintC)),
-  };
+  });
 }
 
 function themeContrastRatio(first: ThemeRgbColor, second: ThemeRgbColor): number {
@@ -1181,7 +1288,7 @@ export function createManagedThemeColors(
     0.35,
   );
 
-  return {
+  return withDerivedRegionThemeRoles({
     ...defaults,
     ...standardStatusColors(canvas),
     update: themeRgbToHexColor(accent),
@@ -1260,22 +1367,22 @@ export function createManagedThemeColors(
     terminalScrollbarHover: themeRgbToHexColor(
       mixThemeRgbColors(canvas, text, appearance === "dark" ? 0.55 : 0.32),
     ),
-  };
+  });
 }
 
 export const T3_CHAT_THEME: ThemeDefinition = {
   id: T3_CHAT_THEME_ID,
   label: T3_CHAT_THEME_LABEL,
   appearance: "light",
-  colors: T3_CHAT_LIGHT_COLORS,
+  colors: withRegionThemeRoles(T3_CHAT_LIGHT_COLORS),
   variants: {
-    dark: T3_CHAT_DARK_COLORS,
+    dark: withRegionThemeRoles(T3_CHAT_DARK_COLORS),
   },
 };
 
 /** Theme-file defaults follow the flagship palette for the requested mode. */
 export function getDefaultThemeColors(appearance: ThemeAppearance): ThemeColors {
-  return appearance === "dark" ? T3_CHAT_DARK_COLORS : T3_CHAT_LIGHT_COLORS;
+  return withRegionThemeRoles(appearance === "dark" ? T3_CHAT_DARK_COLORS : T3_CHAT_LIGHT_COLORS);
 }
 
 /**
@@ -1489,6 +1596,24 @@ function parseThemeColorOverrides(value: unknown): ThemeColorOverrides {
   return overrides;
 }
 
+/**
+ * Merges a theme file's overrides onto a fallback palette, deriving any region
+ * role the file did not carry from the merged result.
+ *
+ * Without this the fallback wins for region roles, and the fallback is a
+ * different palette: importing a file written before these roles existed would
+ * put the flagship theme's menus and composer on the imported colors.
+ */
+function mergeThemeFileColors(fallback: ThemeColors, overrides: ThemeColorOverrides): ThemeColors {
+  const merged: Record<string, string> = { ...fallback, ...overrides };
+  for (const [role, source] of Object.entries(REGION_THEME_ROLE_SOURCES)) {
+    if (overrides[role as ThemeColorRole] !== undefined) continue;
+    const derived = merged[source];
+    if (typeof derived === "string" && derived.length > 0) merged[role] = derived;
+  }
+  return merged as ThemeColors;
+}
+
 export function parseThemeFile(value: unknown): ThemeDefinition {
   if (!isRecord(value)) {
     throw new Error("Theme files must contain a JSON object.");
@@ -1528,10 +1653,10 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
         throw new Error(`Theme variants must not repeat the base appearance "${appearance}".`);
       }
       const variantFallback = getDefaultThemeColors(variantAppearance);
-      variants[variantAppearance] = {
-        ...variantFallback,
-        ...parseThemeColorOverrides(variantColors),
-      };
+      variants[variantAppearance] = mergeThemeFileColors(
+        variantFallback,
+        parseThemeColorOverrides(variantColors),
+      );
     }
   }
 
@@ -1539,7 +1664,7 @@ export function parseThemeFile(value: unknown): ThemeDefinition {
     id,
     label: name.trim(),
     appearance,
-    colors: { ...fallback, ...overrides },
+    colors: mergeThemeFileColors(fallback, overrides),
     ...(Object.keys(variants).length > 0 ? { variants } : {}),
     ...(value.managed === true ? { managed: true } : {}),
   };
@@ -1616,6 +1741,22 @@ const APP_THEME_VARIABLES: Readonly<Record<ThemeColorRole, string>> = {
   terminalSelection: "--app-theme-terminal-selection-background",
   terminalScrollbar: "--app-theme-terminal-scrollbar",
   terminalScrollbarHover: "--app-theme-terminal-scrollbar-hover",
+  menuSurface: "--app-theme-menu-surface",
+  menuForeground: "--app-theme-menu-foreground",
+  menuBorder: "--app-theme-menu-border",
+  menuItemHover: "--app-theme-menu-item-hover",
+  menuItemHoverForeground: "--app-theme-menu-item-hover-foreground",
+  menuSeparator: "--app-theme-menu-separator",
+  sidebarCardSurface: "--app-theme-sidebar-card-surface",
+  sidebarCardBorder: "--app-theme-sidebar-card-border",
+  sidebarCardTitle: "--app-theme-sidebar-card-title",
+  sidebarCardMeta: "--app-theme-sidebar-card-meta",
+  composerSurface: "--app-theme-composer-surface",
+  composerForeground: "--app-theme-composer-foreground",
+  composerPlaceholder: "--app-theme-composer-placeholder",
+  composerBorder: "--app-theme-composer-border",
+  composerControl: "--app-theme-composer-control",
+  composerControlForeground: "--app-theme-composer-control-foreground",
 };
 
 export function getThemeColorVariable(role: ThemeColorRole): string {
