@@ -325,6 +325,7 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 import { useChatPaneActions, useCurrentChatPaneId } from "~/turbo/chatPanes/ChatPaneActionsContext";
+import { ChatActivityOrb } from "~/turbo/orbs/ChatActivityOrb";
 import {
   isChatPaneFocused,
   selectPaneTerminalMountKeys,
@@ -2215,6 +2216,19 @@ export function ChatViewContent(props: ChatViewProps) {
     threadError,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  // Activity orb, rendered beside the stop button. `liveCount` is the panel
+  // model's own count of pending/running/waiting subagents, so a fan-out shows
+  // as weaving without re-deriving anything here.
+  const activityOrb = (
+    <ChatActivityOrb
+      turnRunning={phase === "running"}
+      awaitingUser={pendingApprovals.length > 0 || pendingUserInputs.length > 0}
+      monitoring={false}
+      activeSubagentCount={agentPanelModel.liveCount}
+      activeToolKind={null}
+      streamKind={null}
+    />
+  );
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -6198,6 +6212,7 @@ export function ChatViewContent(props: ChatViewProps) {
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
+                            activityOrb={activityOrb}
                             isSendBusy={isSendBusy}
                             sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
                             isPreparingWorktree={isPreparingWorktree}
