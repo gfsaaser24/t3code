@@ -1,0 +1,754 @@
+name: T3-Turbo Nightly Sync
+
+on:
+  schedule:
+    - cron: "0 23 * * *"
+      timezone: "America/New_York"
+  workflow_dispatch:
+
+concurrency:
+  group: turbo-nightly-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TURBO_BRANCH: turbo
+
+jobs:
+  sync_source:
+    name: Rebase Turbo customizations
+    if: vars.TURBO_NIGHTLY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      has_update: ${{ steps.resolve.outputs.has_update }}
+      conflicted: ${{ steps.rebase.outputs.conflicted }}
+      old_head: ${{ steps.source.outputs.old_head }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      cutoff_date: ${{ steps.cutoff.outputs.cutoff_date }}
+      cutoff_label: ${{ steps.cutoff.outputs.cutoff_label }}
+      cutoff_instant: ${{ steps.cutoff.outputs.cutoff_instant }}
+      official_tag: ${{ steps.resolve.outputs.official_tag }}
+      nightly_sha: ${{ steps.resolve.outputs.nightly_sha }}
+      upstream_sha: ${{ steps.rebase.outputs.upstream_sha }}
+      candidate_sha: ${{ steps.rebase.outputs.candidate_sha }}
+      issue_url: ${{ steps.review_issue.outputs.issue_url }}
+      relay_portal_ref: ${{ steps.relay_portal.outputs.registered_ref }}
+      relay_portal_before_sha: ${{ steps.relay_portal.outputs.before_sha }}
+    steps:
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
+
+      - id: source
+        name: Record source branch head
+        shell: bash
+        run: echo "old_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - id: relay_portal
+        name: Record registered relay and portal branch state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t registered_refs < <(
+            jq -er '.registeredRefs[] | select(.id == "relay-portal") | .ref' \
+              .t3-turbo/customizations.json
+          )
+          if [[ ${#registered_refs[@]} -ne 1 ]]; then
+            echo "The customization manifest must register exactly one relay-portal branch ref." >&2
+            exit 1
+          fi
+          registered_ref="${registered_refs[0]}"
+          git check-ref-format "$registered_ref"
+          before_ref="refs/t3-turbo/registered/relay-portal-before"
+          git fetch --no-tags origin "+$registered_ref:$before_ref"
+          before_sha="$(git rev-parse "$before_ref^{commit}")"
+          echo "registered_ref=$registered_ref" >> "$GITHUB_OUTPUT"
+          echo "before_sha=$before_sha" >> "$GITHUB_OUTPUT"
+
+      - id: cutoff
+        name: Resolve the completed Eastern cutoff
+        shell: bash
+        run: node scripts/turbo-nightly-sync.ts cutoff --github-output
+
+      - name: Read official inbound metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CUTOFF_INSTANT: ${{ steps.cutoff.outputs.cutoff_instant }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="$(jq -r .repository .t3-turbo/upstream.json)"
+          branch="$(jq -r .branch .t3-turbo/upstream.json)"
+          gh api "repos/$repository/releases?per_page=100" > "$RUNNER_TEMP/official-releases.json"
+          node scripts/turbo-nightly-sync.ts latest \
+            --releases "$RUNNER_TEMP/official-releases.json" \
+            --cutoff-instant "$CUTOFF_INSTANT" \
+            > "$RUNNER_TEMP/latest-nightly.json"
+          official_tag="$(jq -r .tag "$RUNNER_TEMP/latest-nightly.json")"
+          gh api --method GET "repos/$repository/commits" \
+            -f sha="$branch" \
+            -f until="$CUTOFF_INSTANT" \
+            -f per_page=1 \
+            > "$RUNNER_TEMP/official-main.json"
+          main_sha="$(jq -er '.[0].sha' "$RUNNER_TEMP/official-main.json")"
+          gh api "repos/$repository/compare/$official_tag...$main_sha" \
+            > "$RUNNER_TEMP/official-compare.json"
+
+      - id: resolve
+        name: Resolve newest official Nightly
+        run: >-
+          node scripts/turbo-nightly-sync.ts resolve
+          --releases "${{ runner.temp }}/official-releases.json"
+          --state .t3-turbo/upstream.json
+          --main "${{ runner.temp }}/official-main.json"
+          --compare "${{ runner.temp }}/official-compare.json"
+          --cutoff-date "${{ steps.cutoff.outputs.cutoff_date }}"
+          --cutoff-instant "${{ steps.cutoff.outputs.cutoff_instant }}"
+          --release-sequence "$GITHUB_RUN_NUMBER"
+          --github-output
+
+      - id: rebase
+        name: Rebase in an isolated worktree
+        if: steps.resolve.outputs.has_update == 'true'
+        env:
+          PUBLISH_TAG: ${{ steps.resolve.outputs.tag }}
+          OFFICIAL_TAG: ${{ steps.resolve.outputs.official_tag }}
+          NIGHTLY_SHA: ${{ steps.resolve.outputs.nightly_sha }}
+          SOURCE_SHA: ${{ steps.resolve.outputs.source_sha }}
+          OLD_TAG: ${{ steps.resolve.outputs.old_tag }}
+          OLD_NIGHTLY_SHA: ${{ steps.resolve.outputs.old_nightly_sha }}
+          OLD_MAIN_SHA: ${{ steps.resolve.outputs.old_main_sha }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          CUTOFF_DATE: ${{ steps.cutoff.outputs.cutoff_date }}
+          CUTOFF_INSTANT: ${{ steps.cutoff.outputs.cutoff_instant }}
+          UPSTREAM_REPOSITORY: ${{ steps.resolve.outputs.repository }}
+          UPSTREAM_BRANCH: ${{ steps.resolve.outputs.branch }}
+          REGISTERED_RELAY_PORTAL_REF: ${{ steps.relay_portal.outputs.registered_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add official "https://github.com/$UPSTREAM_REPOSITORY.git"
+          main_upstream_ref="refs/t3-turbo/official-heads/$UPSTREAM_BRANCH"
+          live_main_upstream_ref="refs/t3-turbo/official-live-heads/$UPSTREAM_BRANCH"
+          release_upstream_ref="refs/t3-turbo/official-tags/$OFFICIAL_TAG"
+          git fetch --no-tags official \
+            "+refs/heads/$UPSTREAM_BRANCH:$live_main_upstream_ref" \
+            "+refs/tags/$OFFICIAL_TAG:$release_upstream_ref"
+          if ! git cat-file -e "$SOURCE_SHA^{commit}"; then
+            echo "The upstream main commit selected at the cutoff is no longer fetchable." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$SOURCE_SHA" "$live_main_upstream_ref"; then
+            echo "Upstream main changed history after the cutoff was resolved; review before retrying." >&2
+            exit 1
+          fi
+          git update-ref "$main_upstream_ref" "$SOURCE_SHA"
+
+          new_sha="$(git rev-parse "$main_upstream_ref^{commit}")"
+          release_sha="$(git rev-parse "$release_upstream_ref^{commit}")"
+          if [[ "$new_sha" != "$SOURCE_SHA" ]]; then
+            echo "Official $UPSTREAM_BRANCH changed while inbound metadata was being resolved; retry the run." >&2
+            exit 1
+          fi
+          if [[ "$release_sha" != "$NIGHTLY_SHA" ]]; then
+            echo "Official Nightly tag changed while inbound metadata was being resolved; retry the run." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$OLD_MAIN_SHA" HEAD; then
+            echo "Turbo branch no longer descends from its recorded upstream main SHA." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$OLD_NIGHTLY_SHA" "$OLD_MAIN_SHA"; then
+            echo "Recorded Nightly commit is not contained in the recorded upstream main snapshot." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$OLD_MAIN_SHA" "$new_sha"; then
+            echo "Refusing to move Turbo backward or onto unrelated upstream history." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$OLD_NIGHTLY_SHA" "$release_sha"; then
+            echo "Refusing a Nightly tag that does not descend from the recorded Nightly history." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$release_sha" "$new_sha"; then
+            echo "Official Nightly $OFFICIAL_TAG is not contained in upstream main; refusing a divergent update." >&2
+            exit 1
+          fi
+
+          git diff --name-only "$OLD_MAIN_SHA" "$new_sha" > "$RUNNER_TEMP/upstream-paths.txt"
+          git diff --name-only "$OLD_MAIN_SHA" HEAD > "$RUNNER_TEMP/customization-paths.txt"
+
+          sync_worktree="$RUNNER_TEMP/turbo-sync-worktree"
+          git worktree add --detach "$sync_worktree" HEAD
+          git -C "$sync_worktree" switch -c turbo-sync-candidate
+          git -C "$sync_worktree" config user.name "t3-turbo-bot"
+          git -C "$sync_worktree" config user.email "t3-turbo-bot@users.noreply.github.com"
+          set +e
+          git -C "$sync_worktree" rebase --committer-date-is-author-date \
+            --onto "$new_sha" "$OLD_MAIN_SHA" \
+            > "$RUNNER_TEMP/rebase.stdout" 2> "$RUNNER_TEMP/rebase.stderr"
+          rebase_status=$?
+          set -e
+
+          echo "upstream_sha=$new_sha" >> "$GITHUB_OUTPUT"
+          if [[ $rebase_status -ne 0 ]]; then
+            git -C "$sync_worktree" diff --name-only --diff-filter=U \
+              > "$RUNNER_TEMP/unmerged-paths.txt"
+            node scripts/turbo-nightly-sync.ts report \
+              --old-tag "$OLD_TAG" \
+              --old-sha "$OLD_MAIN_SHA" \
+              --new-tag "$PUBLISH_TAG (official $OFFICIAL_TAG plus upstream main)" \
+              --new-sha "$new_sha" \
+              --upstream-paths "$RUNNER_TEMP/upstream-paths.txt" \
+              --customization-paths "$RUNNER_TEMP/customization-paths.txt" \
+              --unmerged-paths "$RUNNER_TEMP/unmerged-paths.txt" \
+              --rebase-error "$RUNNER_TEMP/rebase.stderr" \
+              --output "$GITHUB_WORKSPACE/turbo-rebase-report.md"
+            git -C "$sync_worktree" rebase --abort || true
+            echo "conflicted=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          node scripts/turbo-customization-manifest.ts verify --root "$sync_worktree"
+          candidate_relay_portal_ref="$(
+            jq -er '.registeredRefs[] | select(.id == "relay-portal") | .ref' \
+              "$sync_worktree/.t3-turbo/customizations.json"
+          )"
+          if [[ "$candidate_relay_portal_ref" != "$REGISTERED_RELAY_PORTAL_REF" ]]; then
+            echo "The candidate changed the registered relay/portal branch ref." >&2
+            exit 1
+          fi
+
+          jq -n \
+            --arg repository "$UPSTREAM_REPOSITORY" \
+            --arg branch "$UPSTREAM_BRANCH" \
+            --arg mainSha "$new_sha" \
+            --arg nightlyTag "$OFFICIAL_TAG" \
+            --arg nightlySha "$release_sha" \
+            --arg version "$VERSION" \
+            --arg cutoffDate "$CUTOFF_DATE" \
+            --arg cutoffInstant "$CUTOFF_INSTANT" \
+            '{ repository: $repository, branch: $branch, mainSha: $mainSha, nightlyTag: $nightlyTag, nightlySha: $nightlySha, version: $version, cutoffDate: $cutoffDate, cutoffInstant: $cutoffInstant }' \
+            > "$sync_worktree/.t3-turbo/upstream.json"
+          git -C "$sync_worktree" add .t3-turbo/upstream.json
+          source_date="$(git -C "$sync_worktree" show -s --format=%aI "$new_sha")"
+          GIT_AUTHOR_DATE="$source_date" GIT_COMMITTER_DATE="$source_date" \
+            git -C "$sync_worktree" commit -m "chore(turbo): track upstream main at ${new_sha:0:12}"
+          candidate_sha="$(git -C "$sync_worktree" rev-parse HEAD)"
+          git -C "$sync_worktree" branch -f turbo-sync-bundle "$candidate_sha"
+          git -C "$sync_worktree" bundle create "$GITHUB_WORKSPACE/turbo-candidate.bundle" \
+            refs/heads/turbo-sync-bundle "^$OLD_MAIN_SHA"
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          echo "conflicted=false" >> "$GITHUB_OUTPUT"
+
+      - name: Upload conflict report
+        if: steps.rebase.outputs.conflicted == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: turbo-rebase-conflict-${{ steps.resolve.outputs.tag }}
+          path: turbo-rebase-report.md
+          if-no-files-found: error
+
+      - id: review_issue
+        name: Open or update review issue
+        if: steps.rebase.outputs.conflicted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_TAG: ${{ steps.resolve.outputs.tag }}
+          NOTIFY_USER: ${{ vars.TURBO_NOTIFY_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/turbo-nightly-sync.yml"
+          {
+            echo "### Review and retry"
+            echo
+            echo "- [Open this Actions run]($run_url)"
+            echo "- [Open the manual build page]($workflow_url)"
+            echo '- Create `repair/turbo-nightly-${{ github.run_id }}` from the unchanged `turbo` branch.'
+            echo '- Replay or amend the Turbo customization that collided, run the manifest verifier and its focused seam tests, then open a reviewed PR back to `turbo`.'
+            echo '- If the workflow changes, land the identical workflow blob on `main` before retrying. Do not hand-edit the upstream checkpoint or publish partial artifacts.'
+            echo '- CLI retry: `gh workflow run turbo-nightly-sync.yml -R '"$GITHUB_REPOSITORY"' --ref main`'
+          } >> turbo-rebase-report.md
+          title="T3-Turbo rebase needs review: $NEW_TAG"
+          issue_number="$(
+            gh issue list --state open --limit 100 --json number,title \
+              --jq ".[] | select(.title == \"$title\") | .number" | head -n 1
+          )"
+          if [[ -n "$issue_number" ]]; then
+            gh issue edit "$issue_number" --body-file turbo-rebase-report.md
+            if [[ -n "$NOTIFY_USER" ]]; then
+              gh issue edit "$issue_number" --add-assignee "$NOTIFY_USER"
+            fi
+            issue_url="$(gh issue view "$issue_number" --json url --jq .url)"
+          else
+            create_args=(--title "$title" --body-file turbo-rebase-report.md)
+            if [[ -n "$NOTIFY_USER" ]]; then
+              create_args+=(--assignee "$NOTIFY_USER")
+            fi
+            issue_url="$(gh issue create "${create_args[@]}")"
+          fi
+          echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
+
+      - name: Upload clean source candidate
+        if: steps.resolve.outputs.has_update == 'true' && steps.rebase.outputs.conflicted == 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: turbo-source-candidate
+          path: turbo-candidate.bundle
+          if-no-files-found: error
+
+  build_wsl_node_pty:
+    name: Build WSL node-pty from candidate source
+    needs: sync_source
+    if: needs.sync_source.outputs.has_update == 'true' && needs.sync_source.outputs.conflicted == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
+      - uses: actions/download-artifact@v8
+        with:
+          name: turbo-source-candidate
+      - name: Checkout source candidate
+        shell: bash
+        run: |
+          git fetch turbo-candidate.bundle \
+            refs/heads/turbo-sync-bundle:refs/remotes/turbo/candidate
+          git checkout --detach refs/remotes/turbo/candidate
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3...
+      - name: Build node-pty linux-x64 prebuild from source
+        shell: bash
+        run: |
+          set -euo pipefail
+          pty_pkg="$(node -e "console.log(require.resolve('node-pty/package.json', { paths: ['$GITHUB_WORKSPACE/apps/server'] }))")"
+          pty_dir="$(dirname "$pty_pkg")"
+          ( cd "$pty_dir" && npx --yes node-gyp rebuild )
+          mkdir -p wsl-prebuild
+          cp "$pty_dir/build/Release/pty.node" wsl-prebuild/pty.node
+      - uses: actions/upload-artifact@v7
+        with:
+          name: turbo-wsl-node-pty-x64
+          path: wsl-prebuild/pty.node
+          if-no-files-found: error
+
+  build_windows:
+    name: Validate and build Turbo installer
+    needs: [sync_source, build_wsl_node_pty]
+    if: needs.sync_source.outputs.has_update == 'true' && needs.sync_source.outputs.conflicted == 'false'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
+      - uses: actions/download-artifact@v8
+        with:
+          name: turbo-source-candidate
+      - name: Checkout source candidate
+        shell: bash
+        run: |
+          git fetch turbo-candidate.bundle \
+            refs/heads/turbo-sync-bundle:refs/remotes/turbo/candidate
+          git checkout --detach refs/remotes/turbo/candidate
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: turbo-wsl-node-pty-x64
+          path: wsl-prebuild
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - name: Validate source-aware sync tooling
+        run: >-
+          vp test run
+          scripts/turbo-nightly-sync.test.ts
+          scripts/turbo-customization-manifest.test.ts
+          scripts/turbo-product-branding.test.ts
+          scripts/lib/turbo-brand-assets.test.ts
+          packages/contracts/src/editor.test.ts
+          packages/contracts/src/settings.test.ts
+          apps/server/src/process/externalLauncher.test.ts
+          apps/server/src/turbo/officialImport/execute.test.ts
+          apps/server/src/turbo/officialImport/plan.test.ts
+          apps/server/src/turbo/officialImport/storage.test.ts
+          apps/desktop/src/app/OfficialT3EnvironmentDiscovery.test.ts
+          apps/desktop/src/app/OfficialT3ImportPlan.test.ts
+          apps/desktop/src/settings/DesktopClientSettings.test.ts
+          apps/web/src/components/files/fileTreeBulkExpansion.test.ts
+          apps/web/src/components/files/FilePreviewPanel.test.ts
+          apps/web/src/components/chat/markdownFileLinkGesture.test.ts
+          apps/web/src/components/settings/settingsSearch.test.ts
+          apps/web/src/markdownPreviewPreference.test.ts
+          apps/web/src/rightPanelStore.test.ts
+          apps/web/src/turbo/chatPanes/chatPaneContextMenu.test.ts
+          apps/web/src/turbo/chatPanes/chatPaneLayout.test.ts
+          apps/web/src/turbo/chatPanes/chatPanePersistence.test.ts
+          apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts
+      - name: Verify T3 Turbo icon derivatives
+        run: pnpm icons:turbo:check
+      - name: Align package versions
+        run: node scripts/update-release-package-versions.ts "${{ needs.sync_source.outputs.version }}"
+      - name: Build Turbo installer
+        env:
+          T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: >-
+          vp run dist:desktop:artifact
+          --platform win
+          --target nsis
+          --arch x64
+          --build-version "${{ needs.sync_source.outputs.version }}"
+          --wsl-prebuild "${{ github.workspace }}/wsl-prebuild/pty.node"
+          --verbose
+      - name: Require fork updater metadata
+        shell: pwsh
+        run: |
+          if (-not (Test-Path release/nightly.yml)) {
+            throw "Turbo build did not produce release/nightly.yml; refusing to publish an installer without a fork-owned feed."
+          }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: turbo-windows-release
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/nightly.yml
+          if-no-files-found: error
+
+  publish:
+    name: Publish Turbo assets and advance source branch
+    needs: [sync_source, build_windows]
+    if: needs.build_windows.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Turbo source branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          git config core.sparseCheckout true
+          printf '/*\n!/.repos/\n' > .git/info/sparse-checkout
+          git fetch --no-tags origin \
+            "refs/heads/$TURBO_BRANCH:refs/remotes/origin/$TURBO_BRANCH"
+          git checkout -B "$TURBO_BRANCH" "refs/remotes/origin/$TURBO_BRANCH"
+      - uses: actions/download-artifact@v8
+        with:
+          name: turbo-source-candidate
+      - uses: actions/download-artifact@v8
+        with:
+          name: turbo-windows-release
+          path: release-assets
+      - name: Load candidate and verify source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch turbo-candidate.bundle \
+            refs/heads/turbo-sync-bundle:refs/remotes/turbo/candidate
+          candidate_sha="$(git rev-parse refs/remotes/turbo/candidate)"
+          if [[ "$candidate_sha" != "${{ needs.sync_source.outputs.candidate_sha }}" ]]; then
+            echo "Candidate bundle SHA changed between jobs." >&2
+            exit 1
+          fi
+      - id: relay_portal
+        name: Measure registered relay and portal branch state
+        env:
+          REGISTERED_REF: ${{ needs.sync_source.outputs.relay_portal_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          after_ref="refs/t3-turbo/registered/relay-portal-after"
+          git fetch --no-tags origin "+$REGISTERED_REF:$after_ref"
+          after_sha="$(git rev-parse "$after_ref^{commit}")"
+          echo "after_sha=$after_sha" >> "$GITHUB_OUTPUT"
+      - name: Create nightly completion report
+        env:
+          CUTOFF_INSTANT: ${{ needs.sync_source.outputs.cutoff_instant }}
+          UPSTREAM_SHA: ${{ needs.sync_source.outputs.upstream_sha }}
+          NIGHTLY_TAG: ${{ needs.sync_source.outputs.official_tag }}
+          NIGHTLY_SHA: ${{ needs.sync_source.outputs.nightly_sha }}
+          PRIOR_TURBO_SHA: ${{ needs.sync_source.outputs.old_head }}
+          RESULTING_TURBO_SHA: ${{ needs.sync_source.outputs.candidate_sha }}
+          TURBO_TAG: ${{ needs.sync_source.outputs.tag }}
+          RELAY_PORTAL_REF: ${{ needs.sync_source.outputs.relay_portal_ref }}
+          RELAY_PORTAL_BEFORE_SHA: ${{ needs.sync_source.outputs.relay_portal_before_sha }}
+          RELAY_PORTAL_AFTER_SHA: ${{ steps.relay_portal.outputs.after_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t installers < <(find release-assets -maxdepth 1 -type f -name '*.exe' -print)
+          if [[ ${#installers[@]} -ne 1 ]]; then
+            echo "Expected exactly one T3 Turbo installer, found ${#installers[@]}." >&2
+            exit 1
+          fi
+          artifact_name="$(basename "${installers[0]}")"
+          artifact_sha256="$(sha256sum "${installers[0]}" | awk '{print $1}')"
+          release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TURBO_TAG"
+          node scripts/turbo-nightly-sync.ts success-report \
+            --cutoff-instant "$CUTOFF_INSTANT" \
+            --upstream-sha "$UPSTREAM_SHA" \
+            --nightly-tag "$NIGHTLY_TAG" \
+            --nightly-sha "$NIGHTLY_SHA" \
+            --prior-turbo-sha "$PRIOR_TURBO_SHA" \
+            --resulting-turbo-sha "$RESULTING_TURBO_SHA" \
+            --manifest-result "passed in the isolated source candidate" \
+            --test-result "passed in Windows candidate validation" \
+            --relay-portal-ref "$RELAY_PORTAL_REF" \
+            --relay-portal-before-sha "$RELAY_PORTAL_BEFORE_SHA" \
+            --relay-portal-after-sha "$RELAY_PORTAL_AFTER_SHA" \
+            --artifact-name "$artifact_name" \
+            --artifact-sha256 "$artifact_sha256" \
+            --release-url "$release_url" \
+            --output "$RUNNER_TEMP/turbo-success-report.md"
+      - name: Publish fork-only Turbo release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TURBO_TAG: ${{ needs.sync_source.outputs.tag }}
+          OFFICIAL_TAG: ${{ needs.sync_source.outputs.official_tag }}
+          UPSTREAM_SHA: ${{ needs.sync_source.outputs.upstream_sha }}
+          CUTOFF_LABEL: ${{ needs.sync_source.outputs.cutoff_label }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          # The tag must remain semver-valid so electron-updater recognizes
+          # the nightly prerelease channel. The fork repository isolates this
+          # release from the official build with the same version.
+          turbo_tag="$TURBO_TAG"
+          candidate_sha="$(git rev-parse refs/remotes/turbo/candidate)"
+          retry_ref="refs/t3-turbo/retry-tags/$turbo_tag"
+          if git ls-remote --exit-code --refs origin "refs/tags/$turbo_tag" >/dev/null; then
+            git fetch --no-tags origin "+refs/tags/$turbo_tag:$retry_ref"
+            existing_sha="$(git rev-parse "$retry_ref^{commit}")"
+            if [[ "$existing_sha" != "$candidate_sha" ]]; then
+              echo "Existing tag $turbo_tag points at a different source commit." >&2
+              exit 1
+            fi
+          else
+            lookup_status=$?
+            if [[ $lookup_status -ne 2 ]]; then
+              echo "Unable to inspect existing tag $turbo_tag." >&2
+              exit "$lookup_status"
+            fi
+            git push \
+              --force-with-lease="refs/tags/$turbo_tag:" \
+              origin \
+              "refs/remotes/turbo/candidate:refs/tags/$turbo_tag"
+          fi
+          if gh release view "$turbo_tag" >/dev/null 2>&1; then
+            gh release upload "$turbo_tag" release-assets/* --clobber
+            gh release edit "$turbo_tag" \
+              --notes-file "$RUNNER_TEMP/turbo-success-report.md" \
+              --draft=false \
+              --prerelease
+          else
+            gh release create "$turbo_tag" release-assets/* \
+              --verify-tag \
+              --title "T3 Turbo $CUTOFF_LABEL.exe" \
+              --notes-file "$RUNNER_TEMP/turbo-success-report.md" \
+              --prerelease
+          fi
+      - name: Advance Turbo source branch after successful publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push \
+            --force-with-lease="refs/heads/$TURBO_BRANCH:${{ needs.sync_source.outputs.old_head }}" \
+            origin \
+            "refs/remotes/turbo/candidate:refs/heads/$TURBO_BRANCH"
+      - name: Publish nightly completion summary
+        shell: bash
+        run: cat "$RUNNER_TEMP/turbo-success-report.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload nightly completion report
+        uses: actions/upload-artifact@v7
+        with:
+          name: turbo-success-report-${{ needs.sync_source.outputs.tag }}
+          path: ${{ runner.temp }}/turbo-success-report.md
+          if-no-files-found: error
+
+  report_repair:
+    name: Open or update nightly repair issue
+    needs: [sync_source, build_wsl_node_pty, build_windows, publish]
+    if: >-
+      always() &&
+      vars.TURBO_NIGHTLY_ENABLED == 'true' &&
+      needs.sync_source.outputs.conflicted != 'true' &&
+      (
+        needs.sync_source.result == 'failure' ||
+        needs.build_wsl_node_pty.result == 'failure' ||
+        needs.build_windows.result == 'failure' ||
+        needs.publish.result == 'failure'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      issue_url: ${{ steps.repair_issue.outputs.issue_url }}
+    steps:
+      - id: repair_issue
+        name: Record the reviewed repair and PR path
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_TAG: ${{ needs.sync_source.outputs.tag }}
+          SYNC_RESULT: ${{ needs.sync_source.result }}
+          WSL_RESULT: ${{ needs.build_wsl_node_pty.result }}
+          WINDOWS_RESULT: ${{ needs.build_windows.result }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          NOTIFY_USER: ${{ vars.TURBO_NOTIFY_USER }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repair_key="${CANDIDATE_TAG:-run-$GITHUB_RUN_ID}"
+          title="T3 Turbo nightly repair needed: $repair_key"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/turbo-nightly-sync.yml"
+          {
+            echo "# T3 Turbo nightly candidate needs repair"
+            echo
+            echo "- Run: $run_url"
+            echo "- Source/manifest: \`$SYNC_RESULT\`"
+            echo "- WSL native build: \`$WSL_RESULT\`"
+            echo "- Windows seam tests, icon verification, and installer build: \`$WINDOWS_RESULT\`"
+            echo "- Publication: \`$PUBLISH_RESULT\`"
+            echo
+            echo "The existing \`turbo\` branch and last known-good release remain the recovery base. Do not publish partial artifacts or hand-edit the upstream checkpoint."
+            echo
+            echo "## Repair and reviewed PR path"
+            echo
+            echo "1. Inspect the first failed job in the linked run and capture the manifest, focused-test, icon, native-build, installer-build, or publish error."
+            echo "2. Create \`repair/turbo-nightly-$GITHUB_RUN_ID\` from the unchanged \`turbo\` branch and reproduce only the failed check."
+            echo "3. Repair the registered seam or pipeline guard; keep the manifest check and focused regression coverage in the same commit."
+            echo "4. Run \`node scripts/turbo-customization-manifest.ts verify\`, the named focused tests, and \`pnpm icons:turbo:check\` when branding or icons are involved."
+            echo "5. Open a reviewed PR back to \`turbo\`. If this workflow changes, land the identical workflow blob on \`main\` before retrying."
+            echo "6. Retry from the manual workflow page only after the repaired stack is the new last known-good base: $workflow_url"
+          } > "$RUNNER_TEMP/turbo-repair.md"
+          issue_number="$(
+            gh issue list --state open --limit 100 --json number,title |
+              jq -r --arg title "$title" '.[] | select(.title == $title) | .number' |
+              head -n 1
+          )"
+          if [[ -n "$issue_number" ]]; then
+            gh issue edit "$issue_number" --body-file "$RUNNER_TEMP/turbo-repair.md"
+            if [[ -n "$NOTIFY_USER" ]]; then
+              gh issue edit "$issue_number" --add-assignee "$NOTIFY_USER"
+            fi
+            issue_url="$(gh issue view "$issue_number" --json url --jq .url)"
+          else
+            create_args=(--title "$title" --body-file "$RUNNER_TEMP/turbo-repair.md")
+            if [[ -n "$NOTIFY_USER" ]]; then
+              create_args+=(--assignee "$NOTIFY_USER")
+            fi
+            issue_url="$(gh issue create "${create_args[@]}")"
+          fi
+          echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
+
+  notify_openclaw:
+    name: Ask OpenClaw to notify Telegram
+    needs: [sync_source, build_wsl_node_pty, build_windows, publish, report_repair]
+    if: >-
+      always() &&
+      vars.TURBO_OPENCLAW_ENABLED == 'true' &&
+      (
+        needs.sync_source.outputs.conflicted == 'true' ||
+        needs.sync_source.result == 'failure' ||
+        needs.build_wsl_node_pty.result == 'failure' ||
+        needs.build_windows.result == 'failure' ||
+        needs.publish.result == 'failure'
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Send an actionable alert through OpenClaw
+        continue-on-error: true
+        env:
+          OPENCLAW_HOOK_URL: ${{ secrets.TURBO_OPENCLAW_HOOK_URL }}
+          OPENCLAW_HOOK_TOKEN: ${{ secrets.TURBO_OPENCLAW_HOOK_TOKEN }}
+          OPENCLAW_TELEGRAM_TARGET: ${{ secrets.TURBO_OPENCLAW_TELEGRAM_TARGET }}
+          CONFLICT_ISSUE_URL: ${{ needs.sync_source.outputs.issue_url }}
+          REPAIR_ISSUE_URL: ${{ needs.report_repair.outputs.issue_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$OPENCLAW_HOOK_URL" || -z "$OPENCLAW_HOOK_TOKEN" || -z "$OPENCLAW_TELEGRAM_TARGET" ]]; then
+            echo "OpenClaw notification is enabled, but its hook URL, token, or Telegram target is missing." >&2
+            exit 1
+          fi
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          workflow_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/turbo-nightly-sync.yml"
+          issue_url="${CONFLICT_ISSUE_URL:-$REPAIR_ISSUE_URL}"
+          printf -v message \
+            'T3 Turbo inbound needs attention.\n\nRun: %s\nManual build: %s' \
+            "$run_url" "$workflow_url"
+          if [[ -n "$issue_url" ]]; then
+            printf -v message '%s\nReview issue: %s' "$message" "$issue_url"
+          fi
+          jq -n \
+            --arg message "$message" \
+            --arg target "$OPENCLAW_TELEGRAM_TARGET" \
+            '{ message: $message, name: "T3 Turbo GitHub", wakeMode: "now", deliver: true, channel: "telegram", to: $target }' \
+            > "$RUNNER_TEMP/openclaw-notification.json"
+          curl --fail --silent --show-error \
+            --request POST \
+            "$OPENCLAW_HOOK_URL" \
+            --header "Authorization: Bearer $OPENCLAW_HOOK_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$RUNNER_TEMP/openclaw-notification.json"

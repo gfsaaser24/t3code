@@ -16,6 +16,8 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  DESKTOP_STAGE_PACKAGE_DESCRIPTION,
+  DESKTOP_STAGE_PACKAGE_NAME,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
@@ -36,7 +38,7 @@ import {
   resolveDesktopWebAssetBrand,
   resolveResourceMonitorRustTargets,
   resourceMonitorExecutableName,
-  resolveGitHubPublishConfig,
+  resolveTurboGitHubPublishConfig,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
   resolvePackageManagerUserAgent,
@@ -44,7 +46,7 @@ import {
   STAGE_INSTALL_ARGS,
   WINDOWS_ASAR_UNPACK,
 } from "./build-desktop-artifact.ts";
-import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
+import { TURBO_BRAND_ASSET_PATHS } from "./lib/turbo-brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 function mockProcess(exitCode: number) {
@@ -87,25 +89,44 @@ function iconResizeSpawnerLayer(
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
-    assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");
+    assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42.turbo.3"), "nightly");
+    assert.equal(
+      resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42.turbo.20260804.3"),
+      "nightly",
+    );
   });
 
-  it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+  it("keeps stable and malformed versions on the latest updater channel", () => {
+    for (const version of [
+      "0.0.17",
+      "0.0.17-nightly.20260413",
+      "0.0.17-nightly.20260413.42.turbo",
+      "0.0.17-nightly.20260413.42.turbo.2026080.3",
+      "0.0.17-nightly.20260413.42.turbo.3.4",
+      "0.0.17-nightly.20260413.42.turbo.20260804.3.1",
+    ]) {
+      assert.equal(resolveDesktopUpdateChannel(version), "latest");
+    }
   });
 
-  it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
+  it("uses the T3 Turbo product and stage package identity", () => {
+    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Turbo");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Turbo");
+    assert.equal(DESKTOP_STAGE_PACKAGE_NAME, "t3-turbo");
+    assert.equal(DESKTOP_STAGE_PACKAGE_DESCRIPTION, "T3-Turbo desktop build");
+  });
+
+  it("keeps every desktop release channel on the T3 Turbo artwork", () => {
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17"), {
-      macIconPng: BRAND_ASSET_PATHS.productionMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.productionLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.productionWindowsIconIco,
+      macIconPng: TURBO_BRAND_ASSET_PATHS.macIconPng,
+      linuxIconPng: TURBO_BRAND_ASSET_PATHS.universalIconPng,
+      windowsIconIco: TURBO_BRAND_ASSET_PATHS.windowsIconIco,
     });
 
     assert.deepStrictEqual(resolveDesktopBuildIconAssets("0.0.17-nightly.20260413.42"), {
-      macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
-      linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
-      windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
+      macIconPng: TURBO_BRAND_ASSET_PATHS.macIconPng,
+      linuxIconPng: TURBO_BRAND_ASSET_PATHS.universalIconPng,
+      windowsIconIco: TURBO_BRAND_ASSET_PATHS.windowsIconIco,
     });
   });
 
@@ -113,47 +134,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopWebAssetBrand("0.0.17"), "production");
     assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
   });
-
-  it.effect("resolves GitHub desktop publish config from Effect config", () =>
-    Effect.gen(function* () {
-      const latestConfig = yield* resolveGitHubPublishConfig("latest").pipe(
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
-              },
-            }),
-          ),
-        ),
-      );
-      const nightlyConfig = yield* resolveGitHubPublishConfig("nightly").pipe(
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                GITHUB_REPOSITORY: "pingdotgg/t3code",
-              },
-            }),
-          ),
-        ),
-      );
-
-      assert.deepStrictEqual(latestConfig, {
-        provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
-        releaseType: "release",
-      });
-      assert.deepStrictEqual(nightlyConfig, {
-        provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
-        releaseType: "prerelease",
-        channel: "nightly",
-      });
-    }),
-  );
 
   it("omits bundled workspace packages from staged desktop dependencies", () => {
     assert.deepStrictEqual(
@@ -349,16 +329,82 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
       assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
+      assert.equal(win.appId, "com.gabef.t3turbo");
+      assert.equal(win.productName, "T3 Turbo");
+      assert.equal(win.artifactName, "T3-Turbo-${version}-${arch}.${ext}");
       // Linux must register the renderer schemes so the generated .desktop
       // entry advertises MimeType=x-scheme-handler/t3code; for OAuth deep links.
       assert.deepStrictEqual((linux.linux as Record<string, unknown>).protocols, [
-        { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
+        { name: "T3 Turbo", schemes: ["t3code", "t3code-dev"] },
       ]);
       for (const config of [mac, linux, win]) {
         assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
         assert.deepStrictEqual(config.files, DESKTOP_FILE_EXCLUSIONS);
       }
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
+  it.effect("does not embed an upstream update feed from the GitHub environment", () =>
+    Effect.gen(function* () {
+      const config = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      assert.notProperty(config, "publish");
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: {
+              GITHUB_REPOSITORY: "pingdotgg/t3code",
+              T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("embeds only an explicitly configured Turbo fork update feed", () =>
+    Effect.gen(function* () {
+      const nightly = yield* resolveTurboGitHubPublishConfig("nightly");
+      assert.deepStrictEqual(nightly, {
+        provider: "github",
+        owner: "gabef",
+        repo: "t3-turbo",
+        releaseType: "prerelease",
+        channel: "nightly",
+      });
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { T3CODE_DESKTOP_UPDATE_REPOSITORY: "gabef/t3-turbo" },
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("rejects the official repository as a Turbo update feed", () =>
+    Effect.gen(function* () {
+      const config = yield* resolveTurboGitHubPublishConfig("nightly");
+      assert.isUndefined(config);
+    }).pipe(
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromEnv({
+            env: { T3CODE_DESKTOP_UPDATE_REPOSITORY: "PingDotGG/T3Code" },
+          }),
+        ),
+      ),
+    ),
   );
 
   it.effect("preserves both Linux icon resize failures with structural context", () => {
@@ -409,7 +455,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "com.gabef.t3turbo",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -429,7 +475,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.com.gabef.t3turbo</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
@@ -524,11 +570,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "com.gabef.t3turbo");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.deepStrictEqual(mac.protocols, [
-        { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
+        { name: "T3 Turbo", schemes: ["t3code", "t3code-dev"] },
       ]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,26 +18,48 @@ concurrency:
 jobs:
   deploy_relay:
     name: Deploy production relay
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
       name: production
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      DATABASE_HOST: ${{ vars.DATABASE_HOST }}
+      DATABASE_PORT: ${{ vars.DATABASE_PORT }}
+      DATABASE_NAME: ${{ vars.DATABASE_NAME }}
+      DATABASE_USER: ${{ vars.DATABASE_USER }}
+      # Legacy managed-PlanetScale fallback; DATABASE_* takes precedence.
       PLANETSCALE_ORGANIZATION: ${{ vars.PLANETSCALE_ORGANIZATION }}
+      # Optional tracing; an incomplete Axiom pair disables export.
       AXIOM_ORG_ID: ${{ vars.AXIOM_ORG_ID }}
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
+      # Optional iOS push; an incomplete APNS_* set disables the APNs resources and runtime.
       APNS_ENVIRONMENT: ${{ vars.APNS_ENVIRONMENT }}
       APNS_TEAM_ID: ${{ vars.APNS_TEAM_ID }}
       APNS_KEY_ID: ${{ vars.APNS_KEY_ID }}
       APNS_BUNDLE_ID: ${{ vars.APNS_BUNDLE_ID }}
       ALCHEMY_TELEMETRY_DISABLED: "1"
     steps:
+      - id: cloudflare_config
+        name: Detect Cloudflare configuration
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" && -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Relay deployment skipped because Cloudflare credentials are not configured."
+
       - name: Checkout
+        if: steps.cloudflare_config.outputs.enabled == 'true'
         uses: actions/checkout@v6
         with:
           sparse-checkout: |
@@ -45,6 +68,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
+        if: steps.cloudflare_config.outputs.enabled == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -53,11 +77,28 @@ jobs:
             args:
               - --filter=t3code-relay...
 
+      - name: Report optional relay services
+        if: steps.cloudflare_config.outputs.enabled == 'true'
+        shell: bash
+        env:
+          AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+        run: |
+          if [[ -z "${AXIOM_TOKEN:-}" || -z "${AXIOM_ORG_ID:-}" ]]; then
+            echo "::notice::Axiom is not fully configured; hosted tracing is disabled."
+          fi
+
+          if [[ -z "${APNS_PRIVATE_KEY:-}" || -z "${APNS_ENVIRONMENT:-}" || -z "${APNS_TEAM_ID:-}" || -z "${APNS_KEY_ID:-}" || -z "${APNS_BUNDLE_ID:-}" ]]; then
+            echo "::notice::APNs is not fully configured; mobile push is disabled."
+          fi
+
       - name: Deploy production relay stage
+        if: steps.cloudflare_config.outputs.enabled == 'true'
         id: deploy
         run: vp run --filter t3code-relay deploy --stage prod --yes --github-output
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
           PLANETSCALE_API_TOKEN_ID: ${{ secrets.PLANETSCALE_API_TOKEN_ID }}
           PLANETSCALE_API_TOKEN: ${{ secrets.PLANETSCALE_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_TOKEN }}
@@ -65,6 +106,7 @@ jobs:
           APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
 
       - name: Publish relay deploy commit status
+        if: steps.cloudflare_config.outputs.enabled == 'true'
         uses: actions/github-script@v8
         with:
           script: |

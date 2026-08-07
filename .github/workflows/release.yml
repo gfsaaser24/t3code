@@ -30,7 +30,7 @@ jobs:
   check_changes:
     name: Check for changes since last nightly
     if: github.event_name == 'schedule'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
@@ -70,7 +70,7 @@ jobs:
     if: |
       !failure() && !cancelled() &&
       (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       release_channel: ${{ steps.release_meta.outputs.release_channel }}
@@ -83,6 +83,7 @@ jobs:
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
       ref: ${{ github.sha }}
+      connect_enabled: ${{ steps.connect_config.outputs.enabled }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -146,7 +147,7 @@ jobs:
             echo "release_channel=stable" >> "$GITHUB_OUTPUT"
             echo "version=$version" >> "$GITHUB_OUTPUT"
             echo "tag=v$version" >> "$GITHUB_OUTPUT"
-            echo "name=T3 Code v$version" >> "$GITHUB_OUTPUT"
+            echo "name=T3 Turbo v$version" >> "$GITHUB_OUTPUT"
             echo "cli_dist_tag=latest" >> "$GITHUB_OUTPUT"
             if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
               echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
@@ -174,11 +175,26 @@ jobs:
             --current-tag "${{ steps.release_meta.outputs.tag }}" \
             --github-output
 
+      - id: connect_config
+        name: Detect T3 Connect configuration
+        shell: bash
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [[ -n "${CLOUDFLARE_ACCOUNT_ID:-}" && -n "${CLOUDFLARE_API_TOKEN:-}" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::T3 Connect public config is disabled because Cloudflare credentials are not configured."
+
   relay_public_config:
     name: Resolve T3 Connect public config
     needs: preflight
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.connect_enabled == 'true' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
       name: production
@@ -274,7 +290,7 @@ jobs:
     name: Build WSL node-pty (linux-x64)
     needs: [preflight]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -324,43 +340,52 @@ jobs:
     # build_wsl_node_pty, so a failed Linux prebuild doesn't skip the macOS/Linux
     # builds. `!cancelled()` (not `!failure()`) lets the job run even when
     # build_wsl_node_pty failed; the Windows-only download step below then fails
-    # that single platform if the prebuild is missing.
+    # that single platform if the prebuild is missing. A skipped relay config is
+    # also valid when this repository has not enabled T3 Connect.
     needs: [preflight, relay_public_config, build_wsl_node_pty]
-    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' }}
+    if: >-
+      ${{
+        !cancelled() &&
+        needs.preflight.result == 'success' &&
+        (
+          (needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.result == 'success') ||
+          (needs.preflight.outputs.connect_enabled != 'true' && needs.relay_public_config.result == 'skipped')
+        )
+      }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
-      T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.clerk_publishable_key || '' }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.clerk_jwt_template || '' }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.clerk_cli_oauth_client_id || '' }}
+      T3CODE_RELAY_URL: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.relay_url || '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - label: macOS arm64
-            runner: blacksmith-12vcpu-macos-26
+            runner: macos-26
             platform: mac
             target: dmg
             arch: arm64
             rust_target: aarch64-apple-darwin
             resource_key: darwin-arm64
           - label: macOS x64
-            runner: blacksmith-12vcpu-macos-26
+            runner: macos-26
             platform: mac
             target: dmg
             arch: x64
             rust_target: x86_64-apple-darwin
             resource_key: darwin-x64
           - label: Linux x64
-            runner: blacksmith-32vcpu-ubuntu-2404
+            runner: ubuntu-24.04
             platform: linux
             target: AppImage
             arch: x64
             rust_target: x86_64-unknown-linux-gnu
             resource_key: linux-x64
           - label: Windows x64
-            runner: blacksmith-32vcpu-windows-2025
+            runner: windows-2025
             platform: win
             target: nsis
             arch: x64
@@ -398,12 +423,14 @@ jobs:
           targets: ${{ matrix.rust_target }}
 
       - name: Download relay client tracing config
+        if: needs.preflight.outputs.connect_enabled == 'true'
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: needs.preflight.outputs.connect_enabled == 'true'
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -662,90 +689,11 @@ jobs:
           path: resource-monitor-publish/${{ matrix.resource_key }}/*
           if-no-files-found: error
 
-  publish_cli:
-    name: Publish CLI to npm
-    needs: [preflight, relay_public_config, build]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
-    runs-on: ubuntu-24.04 # blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
-      T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=t3...
-              - --filter=@t3tools/web...
-              - --filter=@t3tools/scripts...
-
-      - name: Download relay client tracing config
-        uses: actions/download-artifact@v8
-        with:
-          name: relay-client-tracing-config
-          path: ${{ runner.temp }}/relay-client-tracing
-
-      - name: Load relay client tracing config
-        shell: bash
-        run: |
-          config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
-          tracing_token="$(sed -n 's/^T3CODE_RELAY_CLIENT_OTLP_TRACES_TOKEN=//p' "$config_path")"
-          echo "::add-mask::$tracing_token"
-          cat "$config_path" >> "$GITHUB_ENV"
-
-      - name: Align package versions to release version
-        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
-
-      - name: Build web package
-        run: vp run --filter @t3tools/web build
-
-      - name: Build CLI package
-        run: vp run --filter t3 build
-
-      - name: Download resource monitors
-        uses: actions/download-artifact@v8
-        with:
-          pattern: resource-monitor-*
-          path: ${{ runner.temp }}/resource-monitors
-
-      - name: Bundle resource monitors into CLI package
-        shell: bash
-        run: |
-          set -euo pipefail
-          for artifact_dir in "$RUNNER_TEMP"/resource-monitors/resource-monitor-*; do
-            resource_key="${artifact_dir##*/resource-monitor-}"
-            target_dir="apps/server/dist/resource-monitor/${resource_key}"
-            mkdir -p "$target_dir"
-            cp "$artifact_dir"/t3-resource-monitor* "$target_dir/"
-            chmod +x "$target_dir"/t3-resource-monitor 2>/dev/null || true
-          done
-
-      - name: Publish CLI package
-        run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
-
   release:
     name: Publish GitHub Release
-    needs: [preflight, build, publish_cli]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    needs: [preflight, build]
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
@@ -859,14 +807,23 @@ jobs:
   deploy_web:
     name: Deploy hosted web app
     needs: [preflight, relay_public_config, release]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    if: >-
+      ${{
+        !failure() && !cancelled() &&
+        needs.preflight.result == 'success' &&
+        needs.release.result == 'success' &&
+        (
+          (needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.result == 'success') ||
+          (needs.preflight.outputs.connect_enabled != 'true' && needs.relay_public_config.result == 'skipped')
+        )
+      }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
-      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
-      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
-      T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
+      T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.clerk_publishable_key || '' }}
+      T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.clerk_jwt_template || '' }}
+      T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.clerk_cli_oauth_client_id || '' }}
+      T3CODE_RELAY_URL: ${{ needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.outputs.relay_url || '' }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -895,12 +852,14 @@ jobs:
               - --filter=@t3tools/web...
 
       - name: Download relay client tracing config
+        if: needs.preflight.outputs.connect_enabled == 'true'
         uses: actions/download-artifact@v8
         with:
           name: relay-client-tracing-config
           path: ${{ runner.temp }}/relay-client-tracing
 
       - name: Load relay client tracing config
+        if: needs.preflight.outputs.connect_enabled == 'true'
         shell: bash
         run: |
           config_path="$RUNNER_TEMP/relay-client-tracing/relay-client-tracing.env"
@@ -979,7 +938,7 @@ jobs:
     name: Finalize release
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
     needs: [preflight, release]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - id: app_token
@@ -1059,12 +1018,15 @@ jobs:
     if: |
       always() && !cancelled() &&
       needs.preflight.result == 'success' &&
-      needs.relay_public_config.result == 'success' &&
+      (
+        (needs.preflight.outputs.connect_enabled == 'true' && needs.relay_public_config.result == 'success') ||
+        (needs.preflight.outputs.connect_enabled != 'true' && needs.relay_public_config.result == 'skipped')
+      ) &&
       needs.release.result == 'success' &&
       needs.deploy_web.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
