@@ -1,6 +1,6 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { XIcon } from "lucide-react";
-import { useEffect, useMemo, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, type ReactNode } from "react";
 import { ChatViewContent } from "../../components/ChatView";
 import { threadHasStarted } from "../../components/ChatView.logic";
 import { DiffWorkerPoolProvider } from "../../components/DiffWorkerPoolProvider";
@@ -24,7 +24,8 @@ import { environmentShell } from "../../state/shell";
 import { useEnvironments } from "../../state/environments";
 import { resolveThreadRouteRenderState } from "../../threadRoutes";
 import { resolveThreadSyncPhase } from "../../threadSync";
-import type { ChatPane } from "./chatPaneLayout";
+import { chatPaneWeight, type ChatPane } from "./chatPaneLayout";
+import { ChatPaneDivider, MIN_CHAT_PANE_WIDTH } from "./ChatPaneDivider";
 import { ChatPaneScope, useChatPaneActions } from "./ChatPaneActionsContext";
 import { isServerPaneEnvironmentUnavailable } from "./chatPaneActions.logic";
 import { chatPaneChromeOwnership } from "./chatPaneResourcePolicy";
@@ -248,26 +249,48 @@ export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }
               environmentCatalogReady,
               knownEnvironmentIds,
             );
+            const previousPane = index > 0 ? layout.panes[index - 1] : null;
             return (
-              <section
-                key={pane.id}
-                aria-label={`Chat pane ${index + 1}`}
-                className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden border-border/70 border-l first:border-l-0"
-                data-chat-pane=""
-                data-chat-pane-focused={isFocused ? "true" : "false"}
-                data-chat-pane-id={pane.id}
-                onFocusCapture={() => focusPane(pane.id)}
-                onPointerDownCapture={() => focusPane(pane.id)}
-              >
-                <ChatPaneScope paneId={pane.id}>
-                  <ChatPaneTarget
-                    pane={pane}
-                    reserveTitleBarControlInset={chrome.reserveTitleBarControlInset}
-                    reserveSidebarControlInset={chrome.reserveSidebarControlInset}
-                    environmentUnavailable={environmentUnavailable}
+              <Fragment key={pane.id}>
+                {previousPane ? (
+                  <ChatPaneDivider
+                    boundaryIndex={index - 1}
+                    leftPaneLabel={`chat pane ${index}`}
+                    rightPaneLabel={`chat pane ${index + 1}`}
                   />
-                </ChatPaneScope>
-              </section>
+                ) : null}
+                <section
+                  aria-label={`Chat pane ${index + 1}`}
+                  className="relative flex min-h-0 min-w-0 overflow-hidden"
+                  // The divider owns the seam now, so the panes no longer draw
+                  // their own border. Width comes from the stored weight, and
+                  // the basis stays 0 so the weights alone decide the split.
+                  //
+                  // The floor is capped at an equal share so the minimums can
+                  // never sum past the row: a hard 360px would overflow a
+                  // narrow window as soon as a second pane opened.
+                  style={{
+                    flexGrow: chatPaneWeight(pane),
+                    flexShrink: 1,
+                    flexBasis: 0,
+                    minWidth: `min(${MIN_CHAT_PANE_WIDTH}px, ${100 / layout.panes.length}%)`,
+                  }}
+                  data-chat-pane=""
+                  data-chat-pane-focused={isFocused ? "true" : "false"}
+                  data-chat-pane-id={pane.id}
+                  onFocusCapture={() => focusPane(pane.id)}
+                  onPointerDownCapture={() => focusPane(pane.id)}
+                >
+                  <ChatPaneScope paneId={pane.id}>
+                    <ChatPaneTarget
+                      pane={pane}
+                      reserveTitleBarControlInset={chrome.reserveTitleBarControlInset}
+                      reserveSidebarControlInset={chrome.reserveSidebarControlInset}
+                      environmentUnavailable={environmentUnavailable}
+                    />
+                  </ChatPaneScope>
+                </section>
+              </Fragment>
             );
           })}
         </div>

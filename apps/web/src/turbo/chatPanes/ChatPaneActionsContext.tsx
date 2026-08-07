@@ -30,6 +30,8 @@ import {
   insertRight,
   promoteDraft,
   reconcileFocusedRoute,
+  resetChatPaneWeights,
+  resizeChatPaneBoundary,
   type ChatPane,
   type ChatPaneLayout,
 } from "./chatPaneLayout";
@@ -61,6 +63,13 @@ export interface ChatPaneActions {
   readonly closePane: (paneId: ChatPaneId) => void;
   readonly promoteDraft: (paneId: ChatPaneId, threadRef: ScopedThreadRef) => void;
   readonly discardPane: (paneId: ChatPaneId) => void;
+  /**
+   * Commits a divider drag. Called once when the pointer is released, not on
+   * every move: this writes through to client settings, and a settings write
+   * per pointer event would flood the wire for the whole drag.
+   */
+  readonly resizeBoundary: (boundaryIndex: number, leftWidth: number, rightWidth: number) => void;
+  readonly resetPaneSizes: () => void;
 }
 
 const ChatPaneActionsContext = createContext<ChatPaneActions | null>(null);
@@ -341,6 +350,25 @@ export function ChatPaneActionsProvider({
     }
   }, [commitLayout, currentLayout, navigateToTarget, routeTarget, settingsHydrated]);
 
+  const resizeBoundary = useCallback(
+    (boundaryIndex: number, leftWidth: number, rightWidth: number) => {
+      const current = currentLayout();
+      if (!current) return;
+      const next = resizeChatPaneBoundary(current, boundaryIndex, leftWidth, rightWidth);
+      if (next === current) return;
+      commitLayout(next);
+    },
+    [commitLayout, currentLayout],
+  );
+
+  const resetPaneSizes = useCallback(() => {
+    const current = currentLayout();
+    if (!current) return;
+    const next = resetChatPaneWeights(current);
+    if (next === current) return;
+    commitLayout(next);
+  }, [commitLayout, currentLayout]);
+
   const value = useMemo<ChatPaneActions>(
     () => ({
       layout: settingsHydrated ? layout : null,
@@ -353,6 +381,8 @@ export function ChatPaneActionsProvider({
       closePane,
       promoteDraft: promotePaneDraft,
       discardPane,
+      resizeBoundary,
+      resetPaneSizes,
     }),
     [
       closePane,
@@ -363,7 +393,9 @@ export function ChatPaneActionsProvider({
       openTarget,
       promotePaneDraft,
       replaceWithNewChat,
+      resetPaneSizes,
       resetToHome,
+      resizeBoundary,
       settingsHydrated,
     ],
   );

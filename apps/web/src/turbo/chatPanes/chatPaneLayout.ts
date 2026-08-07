@@ -9,7 +9,16 @@ export type ChatPaneId = typeof ChatPaneId.Type;
 export interface ChatPane {
   readonly id: ChatPaneId;
   readonly target: ThreadRouteTarget;
+  /**
+   * Flex grow weight relative to sibling panes. Absent means "equal share",
+   * which is what every pane starts as and what closing back to one pane
+   * returns to.
+   */
+  readonly weight?: number;
 }
+
+/** Weights are only meaningful relative to each other, so the row is kept normalized to this. */
+const DEFAULT_PANE_WEIGHT = 1;
 
 export interface ChatPaneLayout {
   readonly version: 1;
@@ -164,4 +173,59 @@ export function reconcileFocusedRoute(
   target: ThreadRouteTarget,
 ): ChatPaneLayout {
   return replaceFocused(layout, target);
+}
+
+/** A stored weight is only trusted when it is a usable positive number. */
+export function chatPaneWeight(pane: ChatPane): number {
+  const { weight } = pane;
+  return typeof weight === "number" && Number.isFinite(weight) && weight > 0
+    ? weight
+    : DEFAULT_PANE_WEIGHT;
+}
+
+/**
+ * Re-weights the two panes on either side of a divider to the requested pixel
+ * widths.
+ *
+ * Their combined weight is preserved, so dragging one divider cannot move the
+ * panes beyond it — otherwise a drag in a three-pane row would visibly shove
+ * the far pane around. Callers clamp the widths to a minimum first; this is
+ * only the conversion from pixels back to relative weights.
+ */
+export function resizeChatPaneBoundary(
+  layout: ChatPaneLayout,
+  boundaryIndex: number,
+  leftWidth: number,
+  rightWidth: number,
+): ChatPaneLayout {
+  const left = layout.panes[boundaryIndex];
+  const right = layout.panes[boundaryIndex + 1];
+  if (!left || !right) return layout;
+
+  const total = leftWidth + rightWidth;
+  if (!Number.isFinite(total) || total <= 0 || leftWidth <= 0 || rightWidth <= 0) {
+    return layout;
+  }
+
+  const pairWeight = chatPaneWeight(left) + chatPaneWeight(right);
+  const nextLeftWeight = (pairWeight * leftWidth) / total;
+  const nextRightWeight = pairWeight - nextLeftWeight;
+
+  const panes = layout.panes.map((pane, index) => {
+    if (index === boundaryIndex) return { ...pane, weight: nextLeftWeight };
+    if (index === boundaryIndex + 1) return { ...pane, weight: nextRightWeight };
+    return pane;
+  }) as [ChatPane, ...ChatPane[]];
+
+  return { ...layout, panes };
+}
+
+/** Drops every stored weight, returning the row to equal shares. */
+export function resetChatPaneWeights(layout: ChatPaneLayout): ChatPaneLayout {
+  if (layout.panes.every((pane) => pane.weight === undefined)) return layout;
+  const panes = layout.panes.map(({ weight: _dropped, ...pane }) => pane) as [
+    ChatPane,
+    ...ChatPane[],
+  ];
+  return { ...layout, panes };
 }

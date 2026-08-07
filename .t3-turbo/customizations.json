@@ -349,6 +349,7 @@
           "path": "packages/contracts/src/settings.ts",
           "markers": [
             "export const TurboChatPaneLayout",
+            "export const TurboChatPaneWeight",
             "turboChatPaneLayout: CompatibleTurboChatPaneLayout"
           ]
         },
@@ -372,7 +373,16 @@
           "markers": [
             "Open new chat to the right",
             "Open new chat to the left",
-            "Close this chat pane"
+            "Close this chat pane",
+            "data-toolbar-control"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/chatPanes/ChatPaneDivider.tsx",
+          "markers": [
+            "export function ChatPaneDivider",
+            "export function clampPaneWidths",
+            "role=\"separator\""
           ]
         },
         {
