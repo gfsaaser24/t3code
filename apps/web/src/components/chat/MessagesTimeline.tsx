@@ -113,6 +113,7 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
+import { TimelineOrb, toolOrbState } from "../../turbo/orbs/TimelineOrb";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
@@ -1261,7 +1262,17 @@ const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
                 )}
                 aria-hidden
               >
-                {step.status === "completed" ? "✓" : step.status === "inProgress" ? "●" : "○"}
+                {/* The running step is an orb; the other two stay glyphs. Those
+                    render at whatever the interface font gives them, which is
+                    tolerable at rest but was the least stable part of a row
+                    that is meant to read as live. */}
+                {step.status === "inProgress" ? (
+                  <TimelineOrb state="shaping" label="Step in progress" />
+                ) : step.status === "completed" ? (
+                  "✓"
+                ) : (
+                  "○"
+                )}
               </span>
               <span
                 className={cn(
@@ -1288,10 +1299,11 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   return (
     <div className="py-0.5 pl-1.5">
       <div className="flex min-w-0 items-center gap-2 pt-1 text-secondary-label text-[11px] tabular-nums">
-        <span className="inline-flex items-center gap-[3px]">
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
+        {/* The working row only exists while the turn runs, so the orb needs no
+            condition of its own. It replaces three pulsing spans that each ran
+            their own CSS animation on a delay. */}
+        <span className="inline-flex items-center">
+          <TimelineOrb state="working" label="Working" />
         </span>
         <span className="shrink-0">
           {row.createdAt ? (
@@ -2194,7 +2206,13 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
       onClick={onOpenAgents}
       className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
     >
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+      {/* A live fan-out weaves; a settled one keeps the coloured dot that
+          distinguishes completed from failed, which an orb would not. */}
+      {live ? (
+        <TimelineOrb state="weaving" label={`${working} subagents working`} />
+      ) : (
+        <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+      )}
       <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate">
         <span className="font-medium">{lead}</span>
@@ -2294,10 +2312,17 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     >
       <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
         <span className={iconWrapperClass}>
-          <WorkEntryIconSvg
-            name={entryIconName}
-            className="block size-3.5 shrink-0 stroke-[1.8] opacity-80"
-          />
+          {/* A live tool swaps its icon for an orb, so motion marks exactly what
+              is still running; the row reverts to its normal icon the moment it
+              settles, keeping a long transcript quiet and scannable. */}
+          {workEntry.toolLifecycleStatus === "inProgress" ? (
+            <TimelineOrb state={toolOrbState(workEntry.itemType)} label={`${heading} — running`} />
+          ) : (
+            <WorkEntryIconSvg
+              name={entryIconName}
+              className="block size-3.5 shrink-0 stroke-[1.8] opacity-80"
+            />
+          )}
         </span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <div className="min-w-0 flex-1 overflow-hidden">

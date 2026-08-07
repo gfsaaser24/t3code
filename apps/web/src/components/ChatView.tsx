@@ -325,6 +325,8 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 import { useChatPaneActions, useCurrentChatPaneId } from "~/turbo/chatPanes/ChatPaneActionsContext";
+import { ComposerThinkingOrb } from "~/turbo/orbs/ChatActivityOrb";
+import { TimelineOrb } from "~/turbo/orbs/TimelineOrb";
 import {
   isChatPaneFocused,
   selectPaneTerminalMountKeys,
@@ -2215,6 +2217,9 @@ export function ChatViewContent(props: ChatViewProps) {
     threadError,
   });
   const isWorking = phase === "running" || isSendBusy || isConnecting || isRevertingCheckpoint;
+  // Activity orb, rendered beside the stop button. `liveCount` is the panel
+  // model's own count of pending/running/waiting subagents, so a fan-out shows
+  // as weaving without re-deriving anything here.
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -4254,6 +4259,7 @@ export function ChatViewContent(props: ChatViewProps) {
   // interrupting, and works by session, so no active turn is needed.
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
+  const activityOrb = <ComposerThinkingOrb />;
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command
@@ -4297,11 +4303,16 @@ export function ChatViewContent(props: ChatViewProps) {
     return {
       id: `background-liveness:${activeThread.id}`,
       variant: "default",
-      icon: (
-        <span
-          className={cn("size-1.5 rounded-full bg-foreground", working && "animate-status-pulse")}
-          aria-hidden="true"
+      // Working weaves if agents are behind it, breathes if the thread is only
+      // being watched. A stopped-but-not-cleared liveness keeps the static dot,
+      // since nothing is moving.
+      icon: working ? (
+        <TimelineOrb
+          state={liveCount > 0 ? "weaving" : "breathing"}
+          label={liveCount > 0 ? `${liveCount} agents working` : "Monitoring in the background"}
         />
+      ) : (
+        <span className="size-1.5 rounded-full bg-foreground" aria-hidden="true" />
       ),
       title: working
         ? liveCount > 0
@@ -6213,6 +6224,7 @@ export function ChatViewContent(props: ChatViewProps) {
                             projectSelectionRequired={isLocalDraftThread && activeProject === null}
                             phase={phase}
                             isConnecting={isConnecting}
+                            activityOrb={activityOrb}
                             isSendBusy={isSendBusy}
                             sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
                             isPreparingWorktree={isPreparingWorktree}

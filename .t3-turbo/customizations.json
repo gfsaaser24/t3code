@@ -386,6 +386,14 @@
           ]
         },
         {
+          "path": "apps/web/src/turbo/orbs/chatOrbState.ts",
+          "markers": ["export function resolveChatOrbState", "\"weaving\"", "\"breathing\""]
+        },
+        {
+          "path": "apps/web/src/components/chat/ComposerPrimaryActions.tsx",
+          "markers": ["activityOrb"]
+        },
+        {
           "path": "apps/web/src/routes/_chat.tsx",
           "markers": [
             "<ChatPaneActionsProvider routeTarget={routeTarget}>",
