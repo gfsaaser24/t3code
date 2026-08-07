@@ -1,7 +1,8 @@
 import type { ExpoConfig } from "expo/config";
 
-import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
+import { TURBO_BRAND_ASSET_PATHS } from "../../scripts/lib/turbo-brand-assets.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { MOBILE_PRODUCT_NAME } from "./src/lib/mobileBranding.ts";
 
 type AppVariant = "development" | "preview" | "production";
 
@@ -27,41 +28,41 @@ if (
 }
 
 const DEVELOPMENT_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  androidAdaptiveForeground: fromRepoRoot(BRAND_ASSET_PATHS.developmentUniversalIconPng),
+  appIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  iosIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  splashIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  androidAdaptiveForeground: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.universalIconPng),
   androidAdaptiveBackgroundColor: "#00639B",
-  androidMonochromeIcon: "./assets/android-icon-mark.png",
-  androidNotificationIcon: "./assets/android-notification-icon.png",
+  androidMonochromeIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng),
+  androidNotificationIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng),
   androidNotificationColor: "#00639B",
 } as const;
 
 const PREVIEW_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  androidAdaptiveForeground: fromRepoRoot(BRAND_ASSET_PATHS.nightlyLinuxIconPng),
+  appIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  iosIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  splashIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  androidAdaptiveForeground: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.universalIconPng),
   androidAdaptiveBackgroundColor: "#111533",
-  androidMonochromeIcon: "./assets/android-icon-mark.png",
-  androidNotificationIcon: "./assets/android-notification-icon.png",
+  androidMonochromeIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng),
+  androidNotificationIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng),
   androidNotificationColor: "#7565C7",
 } as const;
 
 const RELEASE_ASSETS = {
-  appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
-  splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  androidAdaptiveForeground: "./assets/android-icon-mark.png",
+  appIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  iosIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  splashIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.iosIconPng),
+  androidAdaptiveForeground: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.universalIconPng),
   androidAdaptiveBackgroundColor: "#000000",
-  androidMonochromeIcon: "./assets/android-icon-mark.png",
-  androidNotificationIcon: "./assets/android-notification-icon.png",
+  androidMonochromeIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.androidMonochromeIconPng),
+  androidNotificationIcon: fromRepoRoot(TURBO_BRAND_ASSET_PATHS.androidNotificationIconPng),
   androidNotificationColor: "#FFFFFF",
 } as const;
 
 const VARIANT_CONFIG = {
   development: {
-    appName: "T3 Code Dev",
+    appName: `${MOBILE_PRODUCT_NAME} Dev`,
     scheme: "t3code-dev",
     iosBundleIdentifier: "com.t3tools.t3code.dev",
     androidPackage: "com.t3tools.t3code.dev",
@@ -69,7 +70,7 @@ const VARIANT_CONFIG = {
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
-    appName: "T3 Code Preview",
+    appName: `${MOBILE_PRODUCT_NAME} Preview`,
     scheme: "t3code-preview",
     iosBundleIdentifier: "com.t3tools.t3code.preview",
     androidPackage: "com.t3tools.t3code.preview",
@@ -77,7 +78,7 @@ const VARIANT_CONFIG = {
     assets: PREVIEW_ASSETS,
   },
   production: {
-    appName: "T3 Code",
+    appName: MOBILE_PRODUCT_NAME,
     scheme: "t3code",
     iosBundleIdentifier: "com.t3tools.t3code",
     androidPackage: "com.t3tools.t3code",
@@ -121,7 +122,7 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
-        description: "Shows the current state of active T3 Code agents.",
+        description: `Shows the current state of active ${MOBILE_PRODUCT_NAME} agents.`,
         supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
       },
     ],
@@ -197,8 +198,7 @@ const config: ExpoConfig = {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
       },
-      NSLocalNetworkUsageDescription:
-        "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.",
+      NSLocalNetworkUsageDescription: `Allow ${MOBILE_PRODUCT_NAME} to connect to ${MOBILE_PRODUCT_NAME} servers on your local network or tailnet.`,
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that
@@ -292,7 +292,7 @@ const config: ExpoConfig = {
     [
       "expo-camera",
       {
-        cameraPermission: "Allow T3 Code to access your camera so you can scan pairing QR codes.",
+        cameraPermission: `Allow ${MOBILE_PRODUCT_NAME} to access your camera so you can scan pairing QR codes.`,
         microphonePermission: false,
         barcodeScannerEnabled: true,
         recordAudioAndroid: false,
