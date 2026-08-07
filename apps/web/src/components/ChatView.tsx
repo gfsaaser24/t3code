@@ -326,6 +326,7 @@ import {
 import { useAssetUrls } from "../assets/assetUrls";
 import { useChatPaneActions, useCurrentChatPaneId } from "~/turbo/chatPanes/ChatPaneActionsContext";
 import { ChatActivityOrb } from "~/turbo/orbs/ChatActivityOrb";
+import { selectChatOrbActivity } from "~/turbo/orbs/chatOrbState";
 import {
   isChatPaneFocused,
   selectPaneTerminalMountKeys,
@@ -2219,16 +2220,7 @@ export function ChatViewContent(props: ChatViewProps) {
   // Activity orb, rendered beside the stop button. `liveCount` is the panel
   // model's own count of pending/running/waiting subagents, so a fan-out shows
   // as weaving without re-deriving anything here.
-  const activityOrb = (
-    <ChatActivityOrb
-      turnRunning={phase === "running"}
-      awaitingUser={pendingApprovals.length > 0 || pendingUserInputs.length > 0}
-      monitoring={false}
-      activeSubagentCount={agentPanelModel.liveCount}
-      activeToolKind={null}
-      streamKind={null}
-    />
-  );
+  const orbActivity = useMemo(() => selectChatOrbActivity(workLogEntries), [workLogEntries]);
   const activeWorkStartedAt = deriveActiveWorkStartedAt(
     activeLatestTurn,
     activeThread?.session ?? null,
@@ -4268,6 +4260,19 @@ export function ChatViewContent(props: ChatViewProps) {
   // interrupting, and works by session, so no active turn is needed.
   const activeBackgroundLiveness =
     !isWorking && activeThread ? (activeThreadShell?.backgroundLiveness ?? null) : null;
+  // Defined here rather than beside the other derived state because monitoring
+  // is the one orb that outlives its turn, and that liveness is only known once
+  // the background banner's own condition has been resolved.
+  const activityOrb = (
+    <ChatActivityOrb
+      turnRunning={phase === "running"}
+      awaitingUser={pendingApprovals.length > 0 || pendingUserInputs.length > 0}
+      monitoring={activeBackgroundLiveness !== null}
+      activeSubagentCount={agentPanelModel.liveCount}
+      activeToolKind={orbActivity.activeToolKind}
+      streamKind={orbActivity.streamKind}
+    />
+  );
   const [isStoppingBackgroundWork, setIsStoppingBackgroundWork] = useState(false);
   useEffect(() => {
     // "Stopping..." holds until the liveness clears; the interrupt command

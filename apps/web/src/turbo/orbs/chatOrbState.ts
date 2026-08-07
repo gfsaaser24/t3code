@@ -114,6 +114,47 @@ const ORB_LABELS: Readonly<Record<ChatOrbState, string>> = {
   shaping: "Editing files",
 };
 
+/** The fields this module needs from a work-log entry. */
+export interface ChatOrbWorkLogEntry {
+  readonly tone: "thinking" | "tool" | "info" | "error";
+  readonly itemType?: ToolLifecycleItemType;
+  readonly toolLifecycleStatus?: "inProgress" | "completed" | "failed" | "declined" | "stopped";
+}
+
+/**
+ * Reads the in-flight tool and what the model is producing off the work log.
+ *
+ * Scans backwards because the log is append-ordered and only the newest state
+ * is current. A tool is only "active" while its lifecycle status is
+ * `inProgress`; a completed row lower down must not keep its orb alive.
+ *
+ * The work log does not carry the raw content-stream kind, so `thinking` is
+ * inferred from the entry tone — that is the same signal the timeline uses to
+ * render reasoning rows, and it is the distinction that matters here.
+ */
+export function selectChatOrbActivity(entries: ReadonlyArray<ChatOrbWorkLogEntry>): {
+  activeToolKind: ToolLifecycleItemType | null;
+  streamKind: ChatOrbStreamKind | null;
+} {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!entry) continue;
+
+    if (entry.itemType && entry.toolLifecycleStatus === "inProgress") {
+      return { activeToolKind: entry.itemType, streamKind: null };
+    }
+    // A finished tool ends the scan: anything older is older still, and the
+    // model has moved on to whatever follows it.
+    if (entry.itemType) break;
+
+    if (entry.tone === "thinking") {
+      return { activeToolKind: null, streamKind: "reasoning_text" };
+    }
+  }
+
+  return { activeToolKind: null, streamKind: null };
+}
+
 export function chatOrbLabel(state: ChatOrbState, activeSubagentCount = 0): string {
   if (state === "weaving" && activeSubagentCount > 0) {
     return `${activeSubagentCount} subagent${activeSubagentCount === 1 ? "" : "s"} working`;
