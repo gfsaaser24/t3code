@@ -642,6 +642,82 @@ it.effect("ProviderServiceLive writes canonical events to the emitting thread se
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("marks the persisted binding stopped when session.exited flows through the pump", () =>
+  Effect.gen(function* () {
+    const codex = makeFakeCodexAdapter();
+    const registry = makeAdapterRegistryMock({
+      [ProviderDriverKind.make("codex")]: codex.adapter,
+    });
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(defaultServerSettingsLayer),
+      Layer.provide(AnalyticsService.layerTest),
+      Layer.provide(
+        Layer.succeed(
+          ProviderEventLoggers.ProviderEventLoggers,
+          ProviderEventLoggers.NoOpProviderEventLoggers,
+        ),
+      ),
+    );
+
+    const threadId = asThreadId("thread-session-exit-binding");
+
+    // Single provide so every reference to the directory/repository layers
+    // resolves to the same in-memory database instance.
+    const testLayer = providerLayer.pipe(
+      Layer.provideMerge(directoryLayer),
+      Layer.provideMerge(runtimeRepositoryLayer),
+    );
+
+    // Adapter-internal exits (stream end, replace, adapter stopAll) never
+    // pass through ProviderService.stopSession; the pump must still leave
+    // the persisted binding stopped instead of a ghost `running` row.
+    yield* Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+      const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      yield* ProviderService.ProviderService;
+      yield* directory.upsert({
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        status: "running",
+      });
+      yield* advanceTestClock(10);
+      codex.emit({
+        eventId: asEventId("evt-session-exited-binding"),
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        type: "session.exited",
+        payload: {
+          reason: "Session stopped",
+          exitKind: "graceful",
+        },
+      });
+      yield* advanceTestClock(20);
+
+      // The pump processes the event on a forked fiber; poll briefly.
+      let runtime = yield* repository.getByThreadId({ threadId });
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (Option.isSome(runtime) && runtime.value.status === "stopped") {
+          break;
+        }
+        yield* Effect.yieldNow;
+        runtime = yield* repository.getByThreadId({ threadId });
+      }
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.status, "stopped");
+      }
+    }).pipe(Effect.provide(testLayer));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-service-"));

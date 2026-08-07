@@ -66,6 +66,26 @@ synchronization.
 3. [`CheckpointReactor`][checkpoint] captures workspace checkpoints on turn start and completion, and
    performs reverts.
 
+## Session teardown and background work
+
+Background tasks (subagent fleets, monitors, background shells) live inside the provider's child
+process, so no task survives its session. Three rules keep that honest:
+
+- **Teardown reports the loss.** When a Claude session tears down with tasks still tracked as live
+  (`liveTaskIds`), the adapter emits a terminal `task.completed(status: "stopped")` per task, and —
+  when the teardown was caused by the SDK stream ending rather than a user action — a
+  `runtime.error` naming the lost agents plus a structured `claude.session.stream-ended-with-live-tasks`
+  log capturing the exit shape. The session still tears down; resume happens through the normal
+  recovery path on the next message.
+- **The binding follows the session.** Every `session.exited` event that flows through
+  [`ProviderService`][service]'s event pump marks the persisted runtime binding `stopped`, so
+  adapter-internal exits (stream end, session replace, adapter stopAll) cannot leave ghost
+  `running` rows behind.
+- **The reaper respects background work.** `ProviderSessionReaper` skips idle sessions while
+  `ThreadBackgroundLivenessService` reports live work for the thread, up to a wedge cap
+  (`backgroundWorkMaxIdleMs`, default 4h) after which a session is reaped anyway — a task that
+  never reaches a terminal state must not pin its child process forever.
+
 ### Buffered assistant delivery
 
 A thread in `buffered` assistant delivery mode accumulates assistant text instead of streaming each
