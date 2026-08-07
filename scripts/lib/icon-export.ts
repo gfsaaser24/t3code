@@ -2,6 +2,8 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 
 export const WINDOWS_ICON_SIZES = [16, 24, 32, 48, 64, 128, 256] as const;
 
+export const MAC_ICON_SIZES = [16, 32, 64, 128, 256, 512, 1024] as const;
+
 export interface PngIconImage {
   readonly size: number;
   readonly contents: Buffer;
@@ -69,4 +71,48 @@ export function encodePngIco(images: ReadonlyArray<PngIconImage>): Buffer {
   });
 
   return Buffer.concat([header, ...images.map((image) => image.contents)]);
+}
+
+const ICNS_TYPE_BY_SIZE = new Map<number, string>([
+  [16, "icp4"],
+  [32, "icp5"],
+  [64, "icp6"],
+  [128, "ic07"],
+  [256, "ic08"],
+  [512, "ic09"],
+  [1024, "ic10"],
+]);
+
+/** Encodes modern PNG renditions into an ICNS container without platform tools. */
+export function encodePngIcns(images: ReadonlyArray<PngIconImage>): Buffer {
+  if (images.length === 0) {
+    throw new Error("An ICNS file requires at least one PNG rendition.");
+  }
+
+  const seenSizes = new Set<number>();
+  const entries = images.map((image) => {
+    const type = ICNS_TYPE_BY_SIZE.get(image.size);
+    if (type === undefined) {
+      throw new Error(`Unsupported ICNS rendition size ${image.size}.`);
+    }
+    if (seenSizes.has(image.size)) {
+      throw new Error(`ICNS rendition size ${image.size} was provided more than once.`);
+    }
+    if (image.contents.length === 0) {
+      throw new Error(`ICNS rendition ${image.size}x${image.size} is empty.`);
+    }
+    seenSizes.add(image.size);
+
+    const entry = Buffer.alloc(8 + image.contents.length);
+    entry.write(type, 0, "ascii");
+    entry.writeUInt32BE(entry.length, 4);
+    image.contents.copy(entry, 8);
+    return entry;
+  });
+
+  const totalLength = 8 + entries.reduce((sum, entry) => sum + entry.length, 0);
+  const header = Buffer.alloc(8);
+  header.write("icns", 0, "ascii");
+  header.writeUInt32BE(totalLength, 4);
+  return Buffer.concat([header, ...entries], totalLength);
 }
