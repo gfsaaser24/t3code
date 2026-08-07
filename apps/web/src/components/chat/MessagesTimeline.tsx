@@ -113,6 +113,8 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
+import { TimelineOrb, TimelineOrbSlot, toolOrbState } from "../../turbo/orbs/TimelineOrb";
+import { chatOrbLabel } from "../../turbo/orbs/chatOrbState";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
@@ -1261,6 +1263,12 @@ const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
                 )}
                 aria-hidden
               >
+                {/* Deliberately still glyphs. A plan renders from history as
+                    well as live, and its steps keep whatever status they held
+                    when the turn ended — an interrupted plan would animate
+                    forever. The card has no live-turn signal to gate on, and
+                    threading one through a shared component costs more than the
+                    glyph does. */}
                 {step.status === "completed" ? "✓" : step.status === "inProgress" ? "●" : "○"}
               </span>
               <span
@@ -1288,10 +1296,11 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   return (
     <div className="py-0.5 pl-1.5">
       <div className="flex min-w-0 items-center gap-2 pt-1 text-secondary-label text-[11px] tabular-nums">
-        <span className="inline-flex items-center gap-[3px]">
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:200ms]" />
-          <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-status-pulse [animation-delay:400ms]" />
+        {/* The working row only exists while the turn runs, so the orb needs no
+            condition of its own. It replaces three pulsing spans that each ran
+            their own CSS animation on a delay. */}
+        <span className="inline-flex items-center">
+          <TimelineOrb state="working" label="Working" />
         </span>
         <span className="shrink-0">
           {row.createdAt ? (
@@ -2194,7 +2203,15 @@ const AgentSpawnCtaRow = memo(function AgentSpawnCtaRow(props: { workEntry: Time
       onClick={onOpenAgents}
       className="-mx-1 flex w-full items-center gap-2 rounded-md border border-border/60 bg-card/50 px-2.5 py-1.5 text-left text-[13px] transition hover:bg-accent/50"
     >
-      <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", dotClass)} />
+      {/* A live fan-out weaves; a settled one keeps the coloured dot, which
+          still distinguishes completed from failed as an orb would not. Both
+          sit in the same 20px slot so the row does not jump sideways at the
+          moment the fan-out lands. */}
+      {live ? (
+        <TimelineOrb state="weaving" label={chatOrbLabel("weaving", working)} />
+      ) : (
+        <TimelineOrbSlot className={cn("size-1.5 rounded-full", dotClass)} />
+      )}
       <WorkEntryIconSvg name="bot" className="size-3.5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate">
         <span className="font-medium">{lead}</span>
@@ -2294,10 +2311,22 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     >
       <div className="flex select-none items-center gap-1.5 transition-[opacity,translate] duration-200">
         <span className={iconWrapperClass}>
-          <WorkEntryIconSvg
-            name={entryIconName}
-            className="block size-3.5 shrink-0 stroke-[1.8] opacity-80"
-          />
+          {/* A live tool swaps its icon for an orb, so motion marks exactly what
+              is still running; the row reverts to its normal icon the moment it
+              settles, keeping a long transcript quiet and scannable.
+
+              The turn has to still be running for that to be true. An
+              interrupted tool keeps `inProgress` forever, so on reload the row
+              would replay it as a permanently spinning orb sitting beside its
+              own result. */}
+          {workEntry.toolLifecycleStatus === "inProgress" && activity.activeTurnInProgress ? (
+            <TimelineOrb state={toolOrbState(workEntry.itemType)} label={`${heading} — running`} />
+          ) : (
+            <WorkEntryIconSvg
+              name={entryIconName}
+              className="block size-3.5 shrink-0 stroke-[1.8] opacity-80"
+            />
+          )}
         </span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <div className="min-w-0 flex-1 overflow-hidden">
