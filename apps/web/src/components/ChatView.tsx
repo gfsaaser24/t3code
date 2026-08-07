@@ -5922,10 +5922,11 @@ export function ChatViewContent(props: ChatViewProps) {
   // trailing controls: the header is a full-width flex row that reserved no
   // space for them, which only became visible once a split pane made the
   // header narrow enough for its content to reach the corner.
+  // PanelLayoutControls already owns its own flex layout, drag exemption and
+  // `data-panel-layout-controls` theming hook, so this only supplies the gap
+  // from the header content beside it.
   const inlinePanelLayoutControls = (
-    <div className="ml-1 flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-      {panelToggleControls}
-    </div>
+    <div className="ml-2 flex shrink-0 items-center">{panelToggleControls}</div>
   );
   const rightPanelContent = activeThreadRef ? (
     activeRightPanelSurface?.kind === "preview" ? (
