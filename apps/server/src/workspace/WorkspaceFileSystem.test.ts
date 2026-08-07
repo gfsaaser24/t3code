@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFSP from "node:fs/promises";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, describe, expect } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -96,13 +99,12 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         const cwd = yield* makeTempDir;
         const outsideDir = yield* makeTempDir;
         yield* writeTextFile(outsideDir, "secret.txt", "outside\n");
-        yield* fileSystem.symlink(
-          path.join(outsideDir, "secret.txt"),
-          path.join(cwd, "linked-secret.txt"),
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(outsideDir, path.join(cwd, "linked-outside"), "junction"),
         );
 
         const error = yield* workspaceFileSystem
-          .readFile({ cwd, relativePath: "linked-secret.txt" })
+          .readFile({ cwd, relativePath: "linked-outside/secret.txt" })
           .pipe(Effect.flip);
         const resolvedWorkspaceRoot = yield* fileSystem.realPath(cwd);
         const resolvedPath = yield* fileSystem.realPath(path.join(outsideDir, "secret.txt"));
@@ -110,7 +112,7 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
         expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
         expect(error).toMatchObject({
           workspaceRoot: cwd,
-          relativePath: "linked-secret.txt",
+          relativePath: "linked-outside/secret.txt",
           resolvedWorkspaceRoot,
           resolvedPath,
         });
@@ -262,6 +264,221 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
           .stat(escapedPath)
           .pipe(Effect.orElseSucceed(() => null));
         expect(escapedStat).toBeNull();
+      }),
+    );
+  });
+
+  describe("renameFile", () => {
+    it.effect("renames files and refreshes workspace entries", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes/draft.md", "draft\n");
+        yield* workspaceEntries.list({ cwd });
+
+        const result = yield* workspaceFileSystem.renameFile({
+          cwd,
+          relativePath: "notes/draft.md",
+          destinationRelativePath: "notes/final.md",
+        });
+
+        expect(result).toEqual({ relativePath: "notes/final.md" });
+        expect(
+          yield* fileSystem.readFileString(path.join(cwd, "notes/final.md")).pipe(Effect.orDie),
+        ).toBe("draft\n");
+        expect(
+          yield* fileSystem
+            .stat(path.join(cwd, "notes/draft.md"))
+            .pipe(Effect.orElseSucceed(() => null)),
+        ).toBeNull();
+        const entries = yield* workspaceEntries.list({ cwd });
+        expect(entries.entries.some((entry) => entry.path === "notes/draft.md")).toBe(false);
+        expect(entries.entries.some((entry) => entry.path === "notes/final.md")).toBe(true);
+      }),
+    );
+
+    it.effect("atomically rejects EEXIST destination collisions without overwriting", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "source.txt", "source");
+        yield* writeTextFile(cwd, "destination.txt", "destination");
+
+        const error = yield* workspaceFileSystem
+          .renameFile({
+            cwd,
+            relativePath: "source.txt",
+            destinationRelativePath: "destination.txt",
+          })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFileAlreadyExistsError);
+        expect(error).toMatchObject({
+          workspaceRoot: cwd,
+          relativePath: "destination.txt",
+        });
+        expect(yield* fileSystem.readFileString(path.join(cwd, "source.txt"))).toBe("source");
+        expect(yield* fileSystem.readFileString(path.join(cwd, "destination.txt"))).toBe(
+          "destination",
+        );
+      }),
+    );
+
+    it.effect("rejects destination parents that resolve outside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        yield* writeTextFile(cwd, "source.txt", "source");
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(outsideDir, path.join(cwd, "outside-link"), "junction"),
+        );
+
+        const error = yield* workspaceFileSystem
+          .renameFile({
+            cwd,
+            relativePath: "source.txt",
+            destinationRelativePath: "outside-link/renamed.txt",
+          })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+        expect(error).toMatchObject({
+          workspaceRoot: cwd,
+          relativePath: "outside-link/renamed.txt",
+        });
+        expect(
+          yield* fileSystem
+            .stat(path.join(outsideDir, "renamed.txt"))
+            .pipe(Effect.orElseSucceed(() => null)),
+        ).toBeNull();
+      }),
+    );
+  });
+
+  describe("duplicateFile", () => {
+    it.effect("chooses deterministic non-colliding sibling names and refreshes entries", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "notes.txt", "notes\n");
+        yield* workspaceEntries.list({ cwd });
+
+        const first = yield* workspaceFileSystem.duplicateFile({
+          cwd,
+          relativePath: "notes.txt",
+        });
+        const second = yield* workspaceFileSystem.duplicateFile({
+          cwd,
+          relativePath: "notes.txt",
+        });
+
+        expect(first).toEqual({ relativePath: "notes copy.txt" });
+        expect(second).toEqual({ relativePath: "notes copy 2.txt" });
+        expect(yield* fileSystem.readFileString(path.join(cwd, first.relativePath))).toBe(
+          "notes\n",
+        );
+        const entries = yield* workspaceEntries.list({ cwd });
+        expect(entries.entries.map((entry) => entry.path)).toEqual(
+          expect.arrayContaining(["notes copy.txt", "notes copy 2.txt"]),
+        );
+      }),
+    );
+
+    it.effect("rejects source symlinks that resolve outside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        yield* writeTextFile(outsideDir, "secret.txt", "outside\n");
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(outsideDir, path.join(cwd, "linked-outside"), "junction"),
+        );
+
+        const error = yield* workspaceFileSystem
+          .duplicateFile({ cwd, relativePath: "linked-outside/secret.txt" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+      }),
+    );
+  });
+
+  describe("deleteFile", () => {
+    it.effect("deletes files and refreshes workspace entries", () =>
+      Effect.gen(function* () {
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "obsolete.txt", "old\n");
+        yield* workspaceEntries.list({ cwd });
+
+        const result = yield* workspaceFileSystem.deleteFile({
+          cwd,
+          relativePath: "obsolete.txt",
+        });
+
+        expect(result).toEqual({ relativePath: "obsolete.txt" });
+        expect(
+          yield* fileSystem
+            .stat(path.join(cwd, "obsolete.txt"))
+            .pipe(Effect.orElseSucceed(() => null)),
+        ).toBeNull();
+        const entries = yield* workspaceEntries.list({ cwd });
+        expect(entries.entries.some((entry) => entry.path === "obsolete.txt")).toBe(false);
+      }),
+    );
+
+    it.effect("rejects directories and does not recursively delete them", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "directory/kept.txt", "keep\n");
+
+        const error = yield* workspaceFileSystem
+          .deleteFile({ cwd, relativePath: "directory" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspacePathNotFileError);
+        expect(yield* fileSystem.readFileString(path.join(cwd, "directory/kept.txt"))).toBe(
+          "keep\n",
+        );
+      }),
+    );
+
+    it.effect("rejects symlink escapes without deleting the outside file", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const outsideDir = yield* makeTempDir;
+        yield* writeTextFile(outsideDir, "kept.txt", "keep\n");
+        yield* Effect.promise(() =>
+          NodeFSP.symlink(outsideDir, path.join(cwd, "linked-outside"), "junction"),
+        );
+
+        const error = yield* workspaceFileSystem
+          .deleteFile({ cwd, relativePath: "linked-outside/kept.txt" })
+          .pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(WorkspaceFileSystem.WorkspaceFilePathEscapeError);
+        expect(yield* fileSystem.readFileString(path.join(outsideDir, "kept.txt"))).toBe("keep\n");
       }),
     );
   });

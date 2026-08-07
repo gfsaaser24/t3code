@@ -60,7 +60,19 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     yield* fs.writeFileString(filePath, `${encoded}\n`);
     return yield* Effect.acquireRelease(
       Effect.sync(() => NodeFS.openSync(filePath, "r")),
-      (fd) => Effect.sync(() => NodeFS.closeSync(fd)),
+      (fd) =>
+        Effect.sync(() => {
+          try {
+            NodeFS.closeSync(fd);
+          } catch (error) {
+            // Windows reads the inherited fd directly, so readBootstrapEnvelope's
+            // auto-closing stream already owns it. POSIX reads a duplicated fd,
+            // leaving this original descriptor for the test scope to release.
+            if ((error as NodeJS.ErrnoException).code !== "EBADF") {
+              throw error;
+            }
+          }
+        }),
     );
   });
 
@@ -281,8 +293,11 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
   it.effect("uses bootstrap envelope values as fallbacks when flags and env are absent", () =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const { join } = yield* Path.Path;
-      const baseDir = "/tmp/t3-bootstrap-home";
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-bootstrap-home-",
+      });
       const fd = yield* openBootstrapFd(
         makeDesktopBootstrap({
           port: 4888,

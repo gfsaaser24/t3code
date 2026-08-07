@@ -35,8 +35,11 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
+  ProjectDeleteFileError,
+  ProjectDuplicateFileError,
   ProjectListEntriesError,
   ProjectReadFileError,
+  ProjectRenameFileError,
   ProjectSearchContentsError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
@@ -250,6 +253,8 @@ function projectFileFailureContext(
       return { failure: "path_not_file", resolvedPath: error.resolvedPath };
     case "WorkspaceBinaryFileError":
       return { failure: "binary_file", resolvedPath: error.resolvedPath };
+    case "WorkspaceFileAlreadyExistsError":
+      return { failure: "destination_exists", resolvedPath: error.resolvedPath };
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -1688,6 +1693,55 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.projectsRenameFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsRenameFile,
+            workspaceFileSystem.renameFile(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectRenameFileError({
+                    cwd: input.cwd,
+                    relativePath: input.relativePath,
+                    destinationRelativePath: input.destinationRelativePath,
+                    ...projectFileFailureContext(cause),
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsDuplicateFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsDuplicateFile,
+            workspaceFileSystem.duplicateFile(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectDuplicateFileError({
+                    cwd: input.cwd,
+                    relativePath: input.relativePath,
+                    ...projectFileFailureContext(cause),
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsDeleteFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsDeleteFile,
+            workspaceFileSystem.deleteFile(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectDeleteFileError({
+                    cwd: input.cwd,
+                    relativePath: input.relativePath,
+                    ...projectFileFailureContext(cause),
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsWriteFile,
@@ -1708,6 +1762,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",
           }),
+        [WS_METHODS.shellOpenPath]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.shellOpenPath,
+            externalLauncher.launchPath(input.path).pipe(Effect.as({ path: input.path })),
+            {
+              "rpc.aggregate": "workspace",
+            },
+          ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           observeRpcEffect(
             WS_METHODS.filesystemBrowse,

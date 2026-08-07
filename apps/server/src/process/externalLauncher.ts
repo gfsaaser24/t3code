@@ -11,7 +11,9 @@ import {
   ExternalLauncherError,
   ExternalLauncherBrowserSpawnError,
   ExternalLauncherCommandNotFoundError,
+  ExternalLauncherDefaultAppSpawnError,
   ExternalLauncherEditorSpawnError,
+  ExternalLauncherInvalidPathError,
   ExternalLauncherUnknownEditorError,
   ExternalLauncherUnsupportedEditorError,
   type EditorId,
@@ -40,7 +42,9 @@ export {
   ExternalLauncherError,
   ExternalLauncherBrowserSpawnError,
   ExternalLauncherCommandNotFoundError,
+  ExternalLauncherDefaultAppSpawnError,
   ExternalLauncherEditorSpawnError,
+  ExternalLauncherInvalidPathError,
   ExternalLauncherUnknownEditorError,
   ExternalLauncherUnsupportedEditorError,
   isExternalLauncherError,
@@ -76,6 +80,7 @@ const POWERSHELL_ARGUMENTS_PREFIX = [
 
 const DETACHED_IGNORE_STDIO_OPTIONS = {
   detached: true,
+  shell: false,
   stdin: "ignore",
   stdout: "ignore",
   stderr: "ignore",
@@ -331,6 +336,8 @@ export class ExternalLauncher extends Context.Service<
     readonly resolveAvailableEditors: () => Effect.Effect<ReadonlyArray<EditorId>>;
     /** Launch a URL target in the default browser. */
     readonly launchBrowser: (target: string) => Effect.Effect<void, ExternalLauncherError>;
+    /** Launch an absolute path in the operating system's associated application. */
+    readonly launchPath: (target: string) => Effect.Effect<void, ExternalLauncherError>;
     /**
      * Launch a workspace path in a selected editor integration.
      *
@@ -407,6 +414,34 @@ const launchBrowser = Effect.fn("externalLauncher.launchBrowser")(function* (
     launch,
     (cause) =>
       new ExternalLauncherBrowserSpawnError({
+        target,
+        command: launch.command,
+        args: launch.args,
+        cause,
+      }),
+  );
+});
+
+const launchPath = Effect.fn("externalLauncher.launchPath")(function* (
+  target: string,
+): Effect.fn.Return<
+  void,
+  ExternalLauncherError,
+  ChildProcessSpawner.ChildProcessSpawner | Path.Path
+> {
+  const path = yield* Path.Path;
+  if (!path.isAbsolute(target)) {
+    return yield* new ExternalLauncherInvalidPathError({
+      path: target,
+      reason: "not_absolute",
+    });
+  }
+
+  const launch = yield* resolveBrowserLaunch(target);
+  return yield* launchAndUnref(
+    launch,
+    (cause) =>
+      new ExternalLauncherDefaultAppSpawnError({
         target,
         command: launch.command,
         args: launch.args,
@@ -492,6 +527,11 @@ export const make = Effect.gen(function* () {
     launchBrowser: (target) =>
       launchBrowser(target).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      ),
+    launchPath: (target) =>
+      launchPath(target).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(Path.Path, path),
       ),
     launchEditor: (input) =>
       provideCommandResolutionServices(
