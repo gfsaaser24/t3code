@@ -332,22 +332,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (lastTouch !== undefined && nowMs - lastTouch < BINDING_TOUCH_THROTTLE_MS) {
           return;
         }
-        lastBindingTouchAtMs.set(threadKey, nowMs);
       } else {
         lastBindingTouchAtMs.delete(threadKey);
-        // A session.exited that raced a replacement session must not stomp
-        // the fresh binding. Thread-level `hasSession` is not enough here:
-        // a Codex child-process crash emits session.exited without tearing
-        // down the adapter's map entry, so the dead session itself still
-        // reports live. Skip only when the adapter holds a session created
-        // AFTER this exit event — that can only be a replacement.
-        const activeSessions = yield* adapter.listSessions();
-        const current = activeSessions.find((session) => session.threadId === event.threadId);
-        const replacementIsLive =
-          current !== undefined && Date.parse(current.createdAt) > Date.parse(event.createdAt);
-        if (replacementIsLive) {
-          return;
-        }
       }
       const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
       const providerInstanceId = binding?.providerInstanceId;
@@ -357,6 +343,44 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         providerInstanceId === undefined
       ) {
         return;
+      }
+      if (isSessionExit) {
+        // A session.exited that raced a replacement session must not stomp
+        // the fresh binding.
+        //
+        // Cross-instance replacement: the pump stamps every event with the
+        // instance that emitted it, so a binding owned by a DIFFERENT
+        // instance means the thread has already moved on — this exit belongs
+        // to a superseded session and the fresh binding must survive.
+        // (The emitting adapter's own listSessions cannot see a replacement
+        // living on another instance, so this check has to come first.)
+        if (
+          event.providerInstanceId !== undefined &&
+          event.providerInstanceId !== providerInstanceId
+        ) {
+          return;
+        }
+        // Same-instance replacement: thread-level `hasSession` is not enough
+        // here — a Codex child-process crash emits session.exited without
+        // tearing down the adapter's map entry, so the dead session itself
+        // still reports live. Skip only when the adapter holds a session
+        // created strictly after this exit event — that can only be a
+        // replacement. NaN-safe on purpose: an unparseable timestamp must
+        // not count as a replacement, or the ghost `running` row this sync
+        // exists to prevent comes back.
+        const activeSessions = yield* adapter.listSessions();
+        const current = activeSessions.find((session) => session.threadId === event.threadId);
+        if (current !== undefined) {
+          const currentCreatedAtMs = Date.parse(current.createdAt);
+          const exitCreatedAtMs = Date.parse(event.createdAt);
+          const replacementIsLive =
+            Number.isFinite(currentCreatedAtMs) &&
+            Number.isFinite(exitCreatedAtMs) &&
+            currentCreatedAtMs > exitCreatedAtMs;
+          if (replacementIsLive) {
+            return;
+          }
+        }
       }
       const lastRuntimeEventAt = yield* nowIso;
       // On activity touches `status` is omitted so the directory preserves
@@ -372,6 +396,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           lastRuntimeEventAt,
         },
       });
+      if (!isSessionExit) {
+        // Spend the throttle only after the touch actually landed — a missing
+        // binding or a failed upsert must not suppress the next 60s of
+        // touches for a refresh that never happened.
+        lastBindingTouchAtMs.set(threadKey, yield* Clock.currentTimeMillis);
+      }
     }).pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("provider.session.binding-sync-failed", {

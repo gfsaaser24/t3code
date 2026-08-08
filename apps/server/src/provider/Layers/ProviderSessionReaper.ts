@@ -42,8 +42,15 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    // Floor STRICTLY above the inactivity threshold: the deferral branch only
+    // runs once idleDurationMs >= inactivityThresholdMs, so a cap equal to
+    // the threshold makes `idleDurationMs < backgroundWorkMaxIdleMs`
+    // unreachable and silently disables background-work deferral — the exact
+    // bug this reaper change exists to prevent. The floor is minimal (+1ms)
+    // on purpose: whether a sweep actually lands inside the deferral window
+    // is the caller's cadence choice, not something to silently rewrite.
     const backgroundWorkMaxIdleMs = Math.max(
-      inactivityThresholdMs,
+      inactivityThresholdMs + 1,
       options?.backgroundWorkMaxIdleMs ?? DEFAULT_BACKGROUND_WORK_MAX_IDLE_MS,
     );
 
@@ -156,6 +163,7 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
         yield* Effect.logInfo("provider.session.reaper.started", {
           inactivityThresholdMs,
           sweepIntervalMs,
+          backgroundWorkMaxIdleMs,
         });
       });
 

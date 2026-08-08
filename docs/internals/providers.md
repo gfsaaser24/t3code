@@ -80,10 +80,14 @@ process, so no task survives its session. Three rules keep that honest:
 - **The binding follows the session.** Every `session.exited` event that flows through
   [`ProviderService`][service]'s event pump marks the persisted runtime binding `stopped`, so
   adapter-internal exits (stream end, session replace, adapter stopAll) cannot leave ghost
-  `running` rows behind. The same pump touches the binding's `lastSeenAt` on `turn.started` and
-  `turn.completed`: turns the provider starts on its own (background task notifications waking
-  the agent) never route through `sendTurn`, and without the touch a thread doing autonomous
-  work reads as idle from the user's last message.
+  `running` rows behind. A stale exit cannot stomp a replacement session's binding: the pump
+  skips the sync when the binding is owned by a different provider instance than the one that
+  emitted the exit, or when the emitting adapter holds a session created after the exit event.
+  The same pump touches the binding's `lastSeenAt` on turn lifecycle (`turn.started`,
+  `turn.completed`) and task lifecycle (`task.started`, `task.progress`, `task.updated`,
+  `task.completed`) events, throttled per thread: turns the provider starts on its own
+  (background task notifications waking the agent) never route through `sendTurn`, and without
+  the touch a thread doing autonomous work reads as idle from the user's last message.
 - **The reaper respects background work.** `ProviderSessionReaper` skips idle sessions while
   `ThreadBackgroundLivenessService` reports live work for the thread, up to a wedge cap
   (`backgroundWorkMaxIdleMs`, default 4h) after which a session is reaped anyway — a task that

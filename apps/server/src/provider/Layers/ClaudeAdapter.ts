@@ -3654,7 +3654,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // instead of showing phantom running agents until the next resume.
     const drainLiveTasks = Effect.gen(function* () {
       for (const taskId of Array.from(context.liveTaskIds)) {
-        context.liveTaskIds.delete(taskId);
+        // A task_notification handler suspended mid-yield can resume between
+        // the snapshot above and this iteration and emit the task's real
+        // terminal event. `delete` returning false means exactly that — the
+        // task already settled, and emitting a second, contradictory
+        // `stopped` row here would overwrite its true final status.
+        if (!context.liveTaskIds.delete(taskId)) {
+          continue;
+        }
         const taskStamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
           type: "task.completed",
