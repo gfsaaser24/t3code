@@ -367,10 +367,21 @@ const ImportRuntimeState = Schema.Struct({ version: Schema.Literal(1), pid: Sche
 const decodeImportRuntimeState = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ImportRuntimeState),
 );
+/**
+ * Lock owner metadata.
+ *
+ * Version 2 adds `heartbeatIntervalMs`. The owner refreshes `owner.json`'s
+ * mtime on that interval for as long as it holds the lock, so a lock orphaned
+ * by a hard kill becomes reclaimable once the heartbeat stops — even when the
+ * recorded PID has since been recycled onto an unrelated live process. Version
+ * 1 locks carry no heartbeat, so their mtime stays at creation time and they
+ * age out under the same rule.
+ */
 const ImportLockOwner = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literals([1, 2]),
   pid: Schema.Int,
   token: Schema.String,
+  heartbeatIntervalMs: Schema.optional(Schema.Int),
 });
 const encodeImportLockOwner = Schema.encodeSync(Schema.fromJsonString(ImportLockOwner));
 const decodeImportLockOwner = Schema.decodeUnknownSync(Schema.fromJsonString(ImportLockOwner));
@@ -385,32 +396,139 @@ const sqliteStringLiteral = (value: string): string => `'${value.replaceAll("'",
 
 const sqliteIdentifier = (value: string): string => `"${value.replaceAll('"', '""')}"`;
 
-const isProcessAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM";
-  }
-};
-
 const errorCode = (cause: unknown): string | undefined =>
   cause instanceof Error && "code" in cause && typeof cause.code === "string"
     ? cause.code
     : undefined;
 
+/** How often a lock owner refreshes `owner.json`'s mtime while holding the lock. */
+const IMPORT_LOCK_HEARTBEAT_INTERVAL_MS = 5_000;
+
+/**
+ * Reclaim a lock whose heartbeat has not advanced for at least this long.
+ *
+ * Deliberately generous. Import work runs against `node:sqlite`'s synchronous
+ * API, so a large cutover can block the event loop — and with it the heartbeat
+ * timer — for a long stretch while the owner is perfectly healthy. The window
+ * has to exceed the longest plausible synchronous stall, or a live owner could
+ * have its lock stolen mid-import. Recovering an orphaned lock two minutes late
+ * is cheap; corrupting a running import is not.
+ */
+const IMPORT_LOCK_MIN_STALE_AFTER_MS = 120_000;
+
+/**
+ * Tri-state process liveness.
+ *
+ * `process.kill(pid, 0)` answers "does some process currently hold this PID",
+ * not "is it the process we recorded". PIDs are recycled — aggressively so on
+ * Windows — and EPERM specifically means "a process exists but is not ours to
+ * signal", which is exactly what a recycled PID landing on a SYSTEM-owned
+ * process reports. Neither answer proves the recorded owner is alive, so those
+ * cases are `unknown` and the heartbeat decides.
+ */
+const processLiveness = (pid: number): "alive" | "dead" | "unknown" => {
+  if (!Number.isInteger(pid) || pid <= 0) return "dead";
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (cause) {
+    return errorCode(cause) === "ESRCH" ? "dead" : "unknown";
+  }
+};
+
+/** Fail-closed liveness, for guards where blocking is safer than proceeding. */
+const isProcessAlive = (pid: number): boolean => processLiveness(pid) !== "dead";
+
+type ImportLockOwnerState = typeof ImportLockOwner.Type;
+
 interface ImportLockLease {
   readonly lockPath: string;
   readonly token: string;
+  readonly heartbeat: ReturnType<typeof setInterval>;
 }
+
+const ownerFilePath = (lockPath: string): string => NodePath.join(lockPath, "owner.json");
 
 const readImportLockOwner = async (lockPath: string) => {
   try {
-    const encoded = await NodeFSP.readFile(NodePath.join(lockPath, "owner.json"), "utf8");
+    const encoded = await NodeFSP.readFile(ownerFilePath(lockPath), "utf8");
     return decodeImportLockOwner(encoded);
   } catch {
     return null;
   }
+};
+
+/** Milliseconds since the owner last refreshed its heartbeat, or null if unreadable. */
+const heartbeatAgeMs = async (lockPath: string): Promise<number | null> => {
+  try {
+    const stats = await NodeFSP.stat(ownerFilePath(lockPath));
+    // @effect-diagnostics-next-line globalDate:off - Compared against a filesystem mtime, which is real wall-clock; Effect's Clock (a TestClock in particular) is not commensurable with it.
+    return Math.max(0, Date.now() - stats.mtimeMs);
+  } catch {
+    return null;
+  }
+};
+
+const staleAfterMsFor = (owner: ImportLockOwnerState | null): number =>
+  Math.max(
+    IMPORT_LOCK_MIN_STALE_AFTER_MS,
+    (owner?.heartbeatIntervalMs ?? IMPORT_LOCK_HEARTBEAT_INTERVAL_MS) * 3,
+  );
+
+const describeHeartbeat = (ageMs: number | null): string =>
+  ageMs === null ? "heartbeat unreadable" : `last heartbeat ${Math.round(ageMs / 1000)}s ago`;
+
+/**
+ * Decide whether an existing lock is still held.
+ *
+ * A lock is reclaimable when its owner is provably gone, or when its heartbeat
+ * has stopped advancing. The heartbeat is what makes recovery possible at all
+ * after a hard kill: the PID alone cannot distinguish a live owner from an
+ * unrelated process that inherited the recycled PID.
+ */
+const inspectExistingLock = async (
+  lockPath: string,
+): Promise<
+  | { readonly held: true; readonly ownerPid: number | null; readonly reason: string }
+  | { readonly held: false }
+> => {
+  const owner = await readImportLockOwner(lockPath);
+  const ageMs = await heartbeatAgeMs(lockPath);
+  const staleAfterMs = staleAfterMsFor(owner);
+  const heartbeatExpired = ageMs !== null && ageMs > staleAfterMs;
+
+  if (owner === null) {
+    // Malformed or half-written lock: reclaim once it is demonstrably not fresh.
+    return ageMs === null || heartbeatExpired
+      ? { held: false }
+      : { held: true, ownerPid: null, reason: "lock owner metadata is unavailable" };
+  }
+  const liveness = processLiveness(owner.pid);
+  if (liveness === "dead" || heartbeatExpired) {
+    return { held: false };
+  }
+  return {
+    held: true,
+    ownerPid: owner.pid,
+    reason:
+      liveness === "alive"
+        ? `owner is still running (${describeHeartbeat(ageMs)})`
+        : `owner liveness is unverifiable (${describeHeartbeat(ageMs)}); reclaimable after ` +
+          `${Math.round(staleAfterMs / 1000)}s without a heartbeat`,
+  };
+};
+
+/** Keep `owner.json`'s mtime advancing so peers can tell this owner is alive. */
+const startImportLockHeartbeat = (lockPath: string): ReturnType<typeof setInterval> => {
+  // @effect-diagnostics-next-line globalTimers:off - Lock liveness is an OS-level signal read by other processes; it must keep ticking on real time, independent of any Effect runtime or TestClock.
+  const timer = setInterval(() => {
+    // @effect-diagnostics-next-line globalDate:off - utimes writes a real filesystem mtime, the same wall-clock value peers compare against.
+    const stamp = new Date();
+    void NodeFSP.utimes(ownerFilePath(lockPath), stamp, stamp).catch(() => {});
+  }, IMPORT_LOCK_HEARTBEAT_INTERVAL_MS);
+  // A stalled heartbeat must never be the reason a process refuses to exit.
+  timer.unref();
+  return timer;
 };
 
 const acquireImportLock = Effect.fn("acquireOfficialImportLock")(function* (
@@ -427,12 +545,17 @@ const acquireImportLock = Effect.fn("acquireOfficialImportLock")(function* (
         try {
           await NodeFSP.writeFile(
             NodePath.join(temporaryPath, "owner.json"),
-            `${encodeImportLockOwner({ version: 1, pid: process.pid, token })}\n`,
+            `${encodeImportLockOwner({
+              version: 2,
+              pid: process.pid,
+              token,
+              heartbeatIntervalMs: IMPORT_LOCK_HEARTBEAT_INTERVAL_MS,
+            })}\n`,
             { flag: "wx", mode: 0o600 },
           );
           try {
             await NodeFSP.rename(temporaryPath, lockPath);
-            return { lockPath, token };
+            return { lockPath, token, heartbeat: startImportLockHeartbeat(lockPath) };
           } catch (cause) {
             if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(errorCode(cause) ?? "")) {
               throw cause;
@@ -442,13 +565,12 @@ const acquireImportLock = Effect.fn("acquireOfficialImportLock")(function* (
           await NodeFSP.rm(temporaryPath, { recursive: true, force: true });
         }
 
-        const owner = await readImportLockOwner(lockPath);
-        if (owner === null || isProcessAlive(owner.pid)) {
+        const existing = await inspectExistingLock(lockPath);
+        if (existing.held) {
           throw new OfficialImportLockError({
             lockPath,
-            ownerPid: owner?.pid ?? null,
-            reason:
-              owner === null ? "lock owner metadata is unavailable" : "owner is still running",
+            ownerPid: existing.ownerPid,
+            reason: existing.reason,
           });
         }
         const stalePath = `${lockPath}.stale-${NodeCrypto.randomUUID()}`;
@@ -482,6 +604,7 @@ const releaseImportLock = Effect.fn("releaseOfficialImportLock")(function* (
   lease: ImportLockLease,
 ) {
   yield* Effect.promise(async () => {
+    clearInterval(lease.heartbeat);
     const owner = await readImportLockOwner(lease.lockPath);
     if (owner?.token !== lease.token) return;
     const releasedPath = `${lease.lockPath}.released-${NodeCrypto.randomUUID()}`;
