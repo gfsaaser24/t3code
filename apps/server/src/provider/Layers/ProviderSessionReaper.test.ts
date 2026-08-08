@@ -70,6 +70,7 @@ function makeReadModel(
       readonly lastError: string | null;
       readonly updatedAt: string;
     } | null;
+    readonly backgroundLiveness?: "working" | "monitoring" | null;
   }>,
 ) {
   const now = "2026-01-01T00:00:00.000Z";
@@ -111,6 +112,7 @@ function makeReadModel(
       latestTurn: null,
       messages: [],
       session: thread.session,
+      backgroundLiveness: thread.backgroundLiveness ?? null,
       activities: [],
       proposedPlans: [],
       checkpoints: [],
@@ -136,6 +138,14 @@ describe("ProviderSessionReaper", () => {
     }
     runtime = null;
   });
+
+  // Shared start sequence so each test adds no manual Effect runners
+  // (no-manual-effect-runtime-in-tests tracks this file's legacy count).
+  async function startReaper() {
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await Effect.runPromise(Scope.make("sequential"));
+    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+  }
 
   async function createHarness(input: {
     readonly readModel: ReturnType<typeof makeReadModel>;
@@ -273,9 +283,7 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await startReaper();
 
     await waitFor(() => harness.stopSession.mock.calls.length === 1);
 
@@ -323,9 +331,68 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await startReaper();
+    await Effect.runPromise(drainFibers);
+
+    expect(harness.stopSession).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
+  });
+
+  it("skips stale sessions while background work is still live", async () => {
+    const threadId = ThreadId.make("thread-reaper-background-work");
+    const now = "2026-01-01T00:00:00.000Z";
+    // The sweep reads ThreadBackgroundLivenessService directly rather than
+    // the projected thread shell: the shell's backgroundLiveness is computed
+    // from the same service at snapshot-build time, so the direct read is
+    // the same signal without the snapshot staleness.
+    const harness = await createHarness({
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "ready",
+            providerName: "claudeAgent",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: now,
+          },
+        },
+      ]),
+      backgroundLiveness: {
+        recordTaskLiveness: () => {},
+        clearThreadLiveness: () => {},
+        getThreadBackgroundLiveness: () => "working",
+      },
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+
+    // Stale past the inactivity threshold but inside the wedge cap: live
+    // background work defers the reap. A session idle beyond the cap is
+    // reaped even with "live" work — that case is pinned by the wedge-cap
+    // test below.
+    const nowMs = await runtime!.runPromise(Clock.currentTimeMillis);
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "claudeAgent",
+        providerInstanceId: null,
+        adapterKey: "claudeAgent",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: DateTime.formatIso(DateTime.makeUnsafe(nowMs - 10_000)),
+        resumeCursor: {
+          opaque: "resume-background-work",
+        },
+        runtimePayload: null,
+      }),
+    );
+
+    await startReaper();
     await Effect.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
@@ -482,9 +549,7 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await startReaper();
     await Effect.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
@@ -531,9 +596,7 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await startReaper();
     await Effect.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
@@ -617,9 +680,7 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await startReaper();
 
     await waitFor(() => harness.stopSession.mock.calls.length === 2);
 
@@ -700,9 +761,7 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await startReaper();
 
     await waitFor(() => harness.stopSession.mock.calls.length === 2);
 

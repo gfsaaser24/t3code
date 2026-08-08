@@ -1,0 +1,27 @@
+{
+  "unpinOpus47LaunchEffort": true,
+  "unpinOpus48LaunchEffort": true,
+  "unpinFable5LaunchEffort": true,
+  "firstStartTime": "2026-08-08T00:43:27.244Z",
+  "machineID": "a050ab4f113ec96e12ff7ac5f303bb8f5c0576b4b5eab630647602e5299e49d8",
+  "opusProMigrationComplete": true,
+  "sonnet1m45MigrationComplete": true,
+  "seenNotifications": {},
+  "hasResetAutoModeOptInForDefaultOffer": true,
+  "migrationVersion": 13,
+  "userID": "9eb4afa469e4317273a605ad55cf471b576dd91a288da1024ff5736df66067a3",
+  "projects": {
+    "C:/code/t3-code-editor": {
+      "allowedTools": [],
+      "mcpContextUris": [],
+      "mcpServers": {},
+      "enabledMcpjsonServers": [],
+      "disabledMcpjsonServers": [],
+      "hasTrustDialogAccepted": false,
+      "projectOnboardingSeenCount": 0,
+      "hasClaudeMdExternalIncludesApproved": false,
+      "hasClaudeMdExternalIncludesWarningShown": false,
+      "hasUnseenTeamArtifacts": false
+    }
+  }
+}
