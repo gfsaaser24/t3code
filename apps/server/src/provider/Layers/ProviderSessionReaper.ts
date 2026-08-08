@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ThreadBackgroundLivenessService } from "../../orchestration/ThreadBackgroundLiveness.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -16,10 +17,17 @@ import { ProviderService } from "../Services/ProviderService.ts";
 
 const DEFAULT_INACTIVITY_THRESHOLD_MS = 30 * 60 * 1000;
 const DEFAULT_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+// Live background work (subagent fleets, monitors) runs outside a turn, so
+// `activeTurnId` alone reads those sessions as idle. Defer reaping while the
+// liveness registry reports work — but only up to this cap: a task that has
+// been "live" this long without reaching a terminal state is wedged, and
+// holding its session (and child process) forever is worse than reaping it.
+const DEFAULT_BACKGROUND_WORK_MAX_IDLE_MS = 4 * 60 * 60 * 1000;
 
 export interface ProviderSessionReaperLiveOptions {
   readonly inactivityThresholdMs?: number;
   readonly sweepIntervalMs?: number;
+  readonly backgroundWorkMaxIdleMs?: number;
 }
 
 const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =>
@@ -27,12 +35,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
 
     const inactivityThresholdMs = Math.max(
       1,
       options?.inactivityThresholdMs ?? DEFAULT_INACTIVITY_THRESHOLD_MS,
     );
     const sweepIntervalMs = Math.max(1, options?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+    const backgroundWorkMaxIdleMs = Math.max(
+      inactivityThresholdMs,
+      options?.backgroundWorkMaxIdleMs ?? DEFAULT_BACKGROUND_WORK_MAX_IDLE_MS,
+    );
 
     const sweep = Effect.gen(function* () {
       const bindings = yield* directory.listBindings();
@@ -66,6 +79,24 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           yield* Effect.logDebug("provider.session.reaper.skipped-active-turn", {
             threadId: binding.threadId,
             activeTurnId: thread.session.activeTurnId,
+            idleDurationMs,
+          });
+          continue;
+        }
+
+        // Background agents and monitors run on after the turn settles, with
+        // no activeTurnId and no lastSeenAt refresh. The liveness registry is
+        // the decaying signal for that work (entries clear on terminal task
+        // status, session exit, and server restart), so defer reaping while
+        // it reports work — up to the wedge cap. Info-level on purpose: rare
+        // and decision-bearing.
+        const backgroundLiveness = threadBackgroundLiveness.getThreadBackgroundLiveness(
+          binding.threadId,
+        );
+        if (backgroundLiveness !== null && idleDurationMs < backgroundWorkMaxIdleMs) {
+          yield* Effect.logInfo("provider.session.reaper.skipped-live-background-work", {
+            threadId: binding.threadId,
+            backgroundLiveness,
             idleDurationMs,
           });
           continue;
