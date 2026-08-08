@@ -410,10 +410,9 @@ export const runOfficialT3Import = DesktopIpc.makeIpcMethod({
 
     return yield* Effect.gen(function* () {
       // Every importer CLI invocation — including the planning pass —
-      // acquires the same official-import lock the running backend holds
-      // for its entire lifetime (src/cli/server.ts wraps runServer in
-      // withOfficialImportLock), so the backend must be stopped before
-      // the first importer call, not just before apply.
+      // refuses to run while a live backend owns the database
+      // (assertNoLiveImportServer reads server-runtime.json), so the backend
+      // must be stopped before the first importer call, not just before apply.
       const pool = yield* DesktopBackendPool.DesktopBackendPool;
       const primary = yield* pool.primary;
       const snapshot = yield* primary.snapshot;

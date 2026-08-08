@@ -1028,3 +1028,51 @@ it.effect("holds the filesystem import lock until the protected operation comple
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect("reclaims an import lock whose heartbeat stopped even when its PID is live", () =>
+  withTemporaryDirectory("t3-official-import-lock-recycled-", (directory) =>
+    Effect.gen(function* () {
+      const target = NodePath.join(directory, "state.sqlite");
+      const lockPath = `${target}.official-import.lock`;
+      // A v1 lock orphaned by a hard kill. `process.pid` stands in for the
+      // unrelated live process that later inherited the recycled PID — the
+      // shape that made a PID-existence check refuse the lock forever.
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(lockPath, { recursive: true });
+        const ownerPath = NodePath.join(lockPath, "owner.json");
+        await NodeFSP.writeFile(
+          ownerPath,
+          `{"version":1,"pid":${process.pid},"token":"orphaned"}\n`,
+        );
+        // Seconds since the epoch — long enough ago that the heartbeat is
+        // unambiguously expired without reading the current time.
+        const stopped = 1_000_000;
+        await NodeFSP.utimes(ownerPath, stopped, stopped);
+      });
+
+      yield* withOfficialImportLock(target, Effect.void);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("refuses an import lock whose owner is live and still heartbeating", () =>
+  withTemporaryDirectory("t3-official-import-lock-live-", (directory) =>
+    Effect.gen(function* () {
+      const target = NodePath.join(directory, "state.sqlite");
+      const lockPath = `${target}.official-import.lock`;
+      yield* Effect.promise(async () => {
+        await NodeFSP.mkdir(lockPath, { recursive: true });
+        await NodeFSP.writeFile(
+          NodePath.join(lockPath, "owner.json"),
+          `{"version":2,"pid":${process.pid},"token":"live","heartbeatIntervalMs":5000}\n`,
+        );
+      });
+
+      const contender = yield* withOfficialImportLock(target, Effect.void).pipe(Effect.result);
+      assert.equal(contender._tag, "Failure");
+      if (contender._tag === "Failure") {
+        assert.equal(contender.failure._tag, "OfficialImportLockError");
+      }
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
