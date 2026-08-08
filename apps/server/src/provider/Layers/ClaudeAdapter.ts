@@ -2263,7 +2263,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* Effect.logInfo("claude.turn.result-without-active-turn", {
         threadId: context.session.threadId,
         status,
-        numTurns: (result as { readonly num_turns?: number } | undefined)?.num_turns,
+        numTurns: result?.num_turns,
         hasUsage: result?.usage !== undefined,
         ...(errorMessage ? { errorMessage } : {}),
       });
