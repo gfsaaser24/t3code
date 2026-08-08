@@ -15,7 +15,10 @@ import * as DesktopAppIdentity from "./DesktopAppIdentity.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfiguration.ts";
+import * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as FileSystem from "effect/FileSystem";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopLifecycle from "./DesktopLifecycle.ts";
 import * as DesktopLinuxUrlHandler from "./DesktopLinuxUrlHandler.ts";
@@ -215,6 +218,59 @@ const bootstrap = Effect.gen(function* () {
     // in parallel rather than blocking primary readiness on a possibly
     // slow first wsl.exe spawn.
     yield* Effect.forkScoped(wslBackend.reconcile);
+    // Personal T3 Code home: when ~/.t3 (the pre-rebrand home the standalone
+    // t3code app used to serve) still holds a database, host it as a second
+    // local backend so the personal T3 Code + Clerk environment survives
+    // without a second app install. Forked for the same reason as WSL: a
+    // port scan or spawn must never block primary readiness. Port scan
+    // starts at primary+2 — the WSL secondary scans from primary+1.
+    yield* Effect.forkScoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const net = yield* NetService.NetService;
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const personalHome = environment.path.join(
+          environment.path.dirname(environment.baseDir),
+          ".t3",
+        );
+        const hasData = yield* fs
+          .exists(environment.path.join(personalHome, "userdata", "state.sqlite"))
+          .pipe(Effect.orElseSucceed(() => false));
+        if (!hasData) {
+          return;
+        }
+        let personalPort: number | null = null;
+        for (let candidate = backendPort + 2; candidate <= 65535; candidate += 1) {
+          if (yield* net.canListenOnHost(candidate, "127.0.0.1")) {
+            personalPort = candidate;
+            break;
+          }
+        }
+        if (personalPort === null) {
+          yield* logBootstrapInfo("no loopback port for the personal T3 backend; skipping");
+          return;
+        }
+        yield* logBootstrapInfo("registering personal T3 backend", {
+          home: personalHome,
+          port: personalPort,
+        });
+        const instance = yield* pool.register({
+          id: DesktopBackendManager.BackendInstanceId("local:t3"),
+          label: Effect.succeed("T3 Code (personal)"),
+          configResolve: configuration.resolveLocalHome({
+            port: personalPort,
+            t3Home: personalHome,
+          }),
+        });
+        yield* instance.start;
+      }).pipe(
+        Effect.catchCause((cause) =>
+          logBootstrapInfo("personal T3 backend registration failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      ),
+    );
   }
 }).pipe(Effect.withSpan("desktop.bootstrap"));
 

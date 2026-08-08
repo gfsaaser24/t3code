@@ -55,6 +55,18 @@ export class DesktopBackendConfiguration extends Context.Service<
       DesktopBackendManager.DesktopBackendStartConfig,
       PlatformError.PlatformError
     >;
+    // Build a start config for a secondary local backend serving another T3
+    // home directory (e.g. ~/.t3 — the pre-rebrand home the standalone t3code
+    // app used to serve), so the personal T3 Code + Clerk environment stays
+    // available without a second app install. Loopback-only: the primary owns
+    // LAN exposure.
+    readonly resolveLocalHome: (input: {
+      readonly port: number;
+      readonly t3Home: string;
+    }) => Effect.Effect<
+      DesktopBackendManager.DesktopBackendStartConfig,
+      PlatformError.PlatformError
+    >;
     // The renderer-facing label for the primary instance, derived from the
     // same decision resolvePrimary makes (including the WSL-availability
     // fall-back to Windows), so the env switcher can't show "WSL" for a
@@ -414,6 +426,59 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   },
 );
 
+const resolveLocalHomeStartConfig = Effect.fn("desktop.backendConfiguration.resolveLocalHome")(
+  function* (
+    input: SharedBootstrapInput & {
+      readonly port: number;
+      readonly t3Home: string;
+    },
+  ): Effect.fn.Return<
+    DesktopBackendManager.DesktopBackendStartConfig,
+    never,
+    DesktopEnvironment.DesktopEnvironment
+  > {
+    const environment = yield* DesktopEnvironment.DesktopEnvironment;
+
+    const bootstrap = {
+      mode: "desktop" as const,
+      noBrowser: true,
+      port: input.port,
+      t3Home: input.t3Home,
+      // Loopback-only on purpose: this secondary serves a personal local
+      // environment; the primary owns LAN/tailscale exposure when the user
+      // opts in.
+      host: "127.0.0.1",
+      desktopBootstrapToken: input.bootstrapToken,
+      // PortSchema rejects 0, so the disabled pair still needs a valid
+      // number; the backend reads tailscaleServePort only when serve is
+      // enabled, so the value is inert.
+      tailscaleServeEnabled: false,
+      tailscaleServePort: 443,
+      // No telemetry fds and no resource-monitor sidecar: those pipelines
+      // belong to the primary. Like the WSL secondary, this instance reports
+      // resource telemetry unavailable.
+      ...buildObservabilityFragment(input.observabilitySettings),
+    };
+
+    return {
+      executablePath: process.execPath,
+      args: [environment.backendEntryPath, "--bootstrap-fd", "3"],
+      entryPath: environment.backendEntryPath,
+      cwd: environment.backendCwd,
+      env: {
+        ...backendChildEnvPatch(),
+        ELECTRON_RUN_AS_NODE: "1",
+      },
+      extendEnv: true,
+      bootstrap,
+      bootstrapDelivery: "fd3",
+      httpBaseUrl: new URL(`http://127.0.0.1:${input.port}`),
+      captureOutput: true,
+      preflightFailure: Option.none(),
+    } satisfies DesktopBackendManager.DesktopBackendStartConfig;
+  },
+);
+
 const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl")(function* (
   input: SharedBootstrapInput & {
     readonly port: number;
@@ -732,6 +797,17 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.withSpan("desktop.backendConfiguration.resolveWsl", {
           attributes: { port: input.port, distro: input.distro ?? null },
+        }),
+      ),
+    resolveLocalHome: (input) =>
+      Effect.gen(function* () {
+        const shared = yield* sharedInputs;
+        return yield* resolveLocalHomeStartConfig({ ...shared, ...input }).pipe(
+          Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+        );
+      }).pipe(
+        Effect.withSpan("desktop.backendConfiguration.resolveLocalHome", {
+          attributes: { port: input.port, t3Home: input.t3Home },
         }),
       ),
   });
