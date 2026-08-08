@@ -19,12 +19,18 @@ export const runServerCommand = (
   Effect.gen(function* () {
     const logLevel = yield* GlobalFlag.LogLevel;
     const config = yield* resolveServerConfig(flags, logLevel, options);
-    return yield* withOfficialImportLock(
+    // Hold the import lock for crash recovery only — never for the server's
+    // whole lifetime. The lock is a directory on disk with no OS-backed
+    // reclamation, so a lifetime-scoped hold leaks it on every hard kill (which
+    // is how the supervisor stops the backend) and blocks the next launch.
+    // Importer runs are kept out by `server-runtime.json` instead: see
+    // `assertNoLiveImportServer`, the purpose-built guard for "a live backend
+    // owns this database".
+    yield* withOfficialImportLock(
       config.dbPath,
-      recoverOfficialImportTransactionsWithinLock(config.dbPath).pipe(
-        Effect.andThen(runServer.pipe(Effect.provideService(ServerConfig, config))),
-      ),
+      recoverOfficialImportTransactionsWithinLock(config.dbPath),
     );
+    return yield* runServer.pipe(Effect.provideService(ServerConfig, config));
   });
 
 export const startCommand = Command.make("start", { ...sharedServerCommandFlags }).pipe(
