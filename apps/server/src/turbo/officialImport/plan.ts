@@ -482,6 +482,12 @@ export const transformOfficialImportEvent = (
         ...base,
         payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
       };
+    case "thread.pin-reordered":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
     case "thread.unpinned":
       return {
         ...event,
@@ -736,6 +742,7 @@ const visitOfficialImportEventIdentities = (
       case "thread.archived":
       case "thread.unarchived":
       case "thread.pinned":
+      case "thread.pin-reordered":
       case "thread.unpinned":
       case "thread.settled":
       case "thread.unsettled":
