@@ -806,6 +806,84 @@ it.effect(
 );
 
 it.effect(
+  "does not mark the binding stopped when the exit comes from a different provider instance",
+  () =>
+    Effect.gen(function* () {
+      const codex = makeFakeCodexAdapter();
+      const registry = makeAdapterRegistryMock({
+        [ProviderDriverKind.make("codex")]: codex.adapter,
+      });
+      const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry.ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(defaultServerSettingsLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          Layer.succeed(
+            ProviderEventLoggers.ProviderEventLoggers,
+            ProviderEventLoggers.NoOpProviderEventLoggers,
+          ),
+        ),
+      );
+
+      const threadId = asThreadId("thread-cross-instance-exit-guard");
+
+      const testLayer = providerLayer.pipe(
+        Layer.provideMerge(directoryLayer),
+        Layer.provideMerge(runtimeRepositoryLayer),
+      );
+
+      // Cross-instance replacement: the thread has moved to a session on a
+      // DIFFERENT provider instance, then the old instance's queued exit
+      // drains through the pump. The old adapter's listSessions cannot see
+      // the replacement, so only the instance-id comparison protects the
+      // fresh binding — it must stay running.
+      yield* Effect.gen(function* () {
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+        const repository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+        yield* ProviderService.ProviderService;
+        yield* directory.upsert({
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex-replacement"),
+          threadId,
+          status: "running",
+        });
+        yield* advanceTestClock(10);
+        // No session exists in this adapter for the thread (the replacement
+        // lives elsewhere), and the exit event is stamped with this
+        // adapter's instance id ("codex") by the pump.
+        codex.emit({
+          eventId: asEventId("evt-cross-instance-session-exited"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          createdAt: "2026-01-01T00:00:10.000Z",
+          type: "session.exited",
+          payload: {
+            reason: "Session stopped",
+            exitKind: "graceful",
+          },
+        });
+        yield* advanceTestClock(20);
+        for (let attempt = 0; attempt < 50; attempt++) {
+          yield* Effect.yieldNow;
+        }
+
+        const runtime = yield* repository.getByThreadId({ threadId });
+        assert.equal(Option.isSome(runtime), true);
+        if (Option.isSome(runtime)) {
+          assert.equal(runtime.value.status, "running");
+        }
+      }).pipe(Effect.provide(testLayer));
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
   "marks the binding stopped for a crash exit even when the adapter still reports the session",
   () =>
     Effect.gen(function* () {
