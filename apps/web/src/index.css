@@ -1121,6 +1121,22 @@ html.dark[data-theme-id] {
   --terminal-selection-background: var(--app-theme-terminal-selection-background);
   --terminal-scrollbar: var(--app-theme-terminal-scrollbar);
   --terminal-scrollbar-hover: var(--app-theme-terminal-scrollbar-hover);
+  --menu-surface: var(--app-theme-menu-surface);
+  --menu-foreground: var(--app-theme-menu-foreground);
+  --menu-border: var(--app-theme-menu-border);
+  --menu-item-hover: var(--app-theme-menu-item-hover);
+  --menu-item-hover-foreground: var(--app-theme-menu-item-hover-foreground);
+  --menu-separator: var(--app-theme-menu-separator);
+  --sidebar-card-surface: var(--app-theme-sidebar-card-surface);
+  --sidebar-card-border: var(--app-theme-sidebar-card-border);
+  --sidebar-card-title: var(--app-theme-sidebar-card-title);
+  --sidebar-card-meta: var(--app-theme-sidebar-card-meta);
+  --composer-surface: var(--app-theme-composer-surface);
+  --composer-foreground: var(--app-theme-composer-foreground);
+  --composer-placeholder: var(--app-theme-composer-placeholder);
+  --composer-border: var(--app-theme-composer-border);
+  --composer-control: var(--app-theme-composer-control);
+  --composer-control-foreground: var(--app-theme-composer-control-foreground);
 }
 
 /* T3 Chat's composer is a translucent lift over --chat-background. Route its
@@ -1273,6 +1289,65 @@ html[data-theme-id] [data-chat-header] [data-toolbar-control][data-pressed] {
 
 html[data-theme-id] [data-chat-header] [data-slot="separator"] {
   background-color: var(--toolbar-border);
+}
+
+/* Overlay surfaces own their palette.
+   Every popup in the app reads the same four variables: the popup itself is
+   bg-popover/text-popover-foreground, a highlighted row is
+   bg-accent/text-accent-foreground, and a divider is bg-border. Rebinding those
+   four inside the popup is what separates menus from the rest of the theme, so
+   no popup markup has to change. Anything Base UI adds later that follows the
+   same convention is themed the moment its slot is listed here. */
+html[data-theme-id] :is([data-slot="menu-popup"], [data-slot="menu-sub-content"]),
+html[data-theme-id] :is([data-slot="select-popup"], [data-slot="combobox-popup"]),
+html[data-theme-id] :is([data-slot="autocomplete-popup"], [data-slot="popover-popup"]),
+html[data-theme-id] [data-slot="tooltip-popup"] {
+  --popover: var(--menu-surface);
+  --popover-foreground: var(--menu-foreground);
+  --accent: var(--menu-item-hover);
+  --accent-foreground: var(--menu-item-hover-foreground);
+  --border: var(--menu-separator);
+  border-color: var(--menu-border);
+}
+
+/* The sidebar card is a distinct object inside the rail: it may sit on its own
+   surface with its own edge, and its title and metadata are separately
+   weighted. Previously all four inherited the rail's foregrounds, so a palette
+   could not lift a card off its background at all. */
+/* Rebind rather than paint: the row already swaps its background for hover,
+   active and selected. Setting background-color here would win over all three
+   and freeze the card, so the card's own roles feed the variables the row
+   already reads and every interaction state survives. */
+html[data-theme-id] [data-sidebar-card] {
+  --sidebar-control-surface: var(--sidebar-card-surface);
+  --sidebar-border: var(--sidebar-card-border);
+}
+
+html[data-theme-id] [data-sidebar-card-title] {
+  color: var(--sidebar-card-title);
+}
+
+html[data-theme-id] [data-sidebar-card-meta] {
+  color: var(--sidebar-card-meta);
+}
+
+/* The composer is the one surface a user stares at while typing, so it gets its
+   own roles rather than borrowing the raised surface. The controls inside it
+   (model, effort, access) are toolbar-shaped but belong to the composer, not
+   the header, and the popups they open stay under the overlay rules above. */
+html[data-theme-id] [data-chat-composer] {
+  --foreground: var(--composer-foreground);
+  --placeholder: var(--composer-placeholder);
+  --border: var(--composer-border);
+  --toolbar-control: var(--composer-control);
+  --toolbar-control-foreground: var(--composer-control-foreground);
+  color: var(--composer-foreground);
+}
+
+html[data-theme-id] [data-chat-composer] :is([data-slot="button"], [data-slot="menu-trigger"]),
+html[data-theme-id] [data-chat-composer] [data-toolbar-control] {
+  --control-icon-color: var(--composer-control-foreground);
+  color: var(--composer-control-foreground);
 }
 
 /* Chat code blocks join the other code surfaces on the code tokens. The
