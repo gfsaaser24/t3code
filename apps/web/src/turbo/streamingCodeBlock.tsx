@@ -197,6 +197,16 @@ export function useStreamingCodeStall(code: string, isStreaming: boolean): Strea
 
 /** Deterministic bar widths — code-shaped variation without a random per render. */
 const PLACEHOLDER_LINE_WIDTHS = [82, 54, 71, 38, 90, 63, 47, 76, 59, 85, 33, 68] as const;
+/**
+ * One stable key per possible skeleton row. Position is the identity for a
+ * fixed-length placeholder list, so keys are minted once at module load rather
+ * than from the render-loop index (which trips `react/no-array-index-key`).
+ */
+const PLACEHOLDER_LINE_ROWS: ReadonlyArray<{ readonly key: string; readonly width: number }> =
+  Array.from({ length: STREAMING_CODE_MAX_PLACEHOLDER_ROWS }, (_unused, index) => ({
+    key: `streaming-code-line-${index}`,
+    width: PLACEHOLDER_LINE_WIDTHS[index % PLACEHOLDER_LINE_WIDTHS.length] ?? 60,
+  }));
 
 /**
  * Memoized on the line count alone: while a fence streams, the parent
@@ -215,14 +225,7 @@ export const StreamingCodeBlockPlaceholder = memo(function StreamingCodeBlockPla
   const renderedRows = Math.min(total, STREAMING_CODE_MAX_PLACEHOLDER_ROWS);
   const spacerLines = total - renderedRows;
 
-  const lineWidths = useMemo(
-    () =>
-      Array.from(
-        { length: renderedRows },
-        (_unused, index) => PLACEHOLDER_LINE_WIDTHS[index % PLACEHOLDER_LINE_WIDTHS.length] ?? 60,
-      ),
-    [renderedRows],
-  );
+  const lineRows = useMemo(() => PLACEHOLDER_LINE_ROWS.slice(0, renderedRows), [renderedRows]);
 
   return (
     <div
@@ -235,18 +238,14 @@ export const StreamingCodeBlockPlaceholder = memo(function StreamingCodeBlockPla
     >
       <pre aria-hidden="true">
         <code className="block">
-          {lineWidths.map((width, index) => (
-            <span
-              key={`streaming-code-line-${index}`}
-              className="block"
-              data-streaming-code-line=""
-            >
+          {lineRows.map((row) => (
+            <span key={row.key} className="block" data-streaming-code-line="">
               {/* `Skeleton` carries the duty-cycled `animate-skeleton` sweep.
                   `animate-pulse` repaints every frame for the life of the
                   stream, which AGENTS.md "Taste" rules out. */}
               <Skeleton
                 className="inline-block h-[0.7em] align-middle"
-                style={{ width: `${width}%` }}
+                style={{ width: `${row.width}%` }}
               />
               {"​"}
             </span>

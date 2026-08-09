@@ -24,16 +24,16 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import * as NodeFileSystem from "node:fs";
+import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeURL from "node:url";
 
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
 import { sortThreadActivities } from "../../../../packages/client-runtime/src/state/threadActivityOrder.ts";
 import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 
-const HERE = NodePath.dirname(fileURLToPath(import.meta.url));
+const HERE = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const REPO_ROOT = NodePath.resolve(HERE, "../../../..");
 
 const SNAPSHOT_QUERY_PATH = NodePath.join(
@@ -176,7 +176,7 @@ const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 layer("thread activity order — SQL vs TS equivalence", (it) => {
   it("ships each ORDER BY clause verbatim in its source file", () => {
     for (const clause of SHIPPED_CLAUSES) {
-      const source = NodeFileSystem.readFileSync(clause.sourcePath, "utf8");
+      const source = NodeFS.readFileSync(clause.sourcePath, "utf8");
       assert.include(
         normalize(source),
         normalize(`ORDER BY ${clause.orderBy}`),
