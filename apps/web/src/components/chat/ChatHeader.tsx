@@ -50,6 +50,7 @@ interface ChatHeaderProps {
   changeRequestState: ChangeRequestStateLike | null;
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
+  activeProjectFaviconPath: string | null;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
@@ -102,6 +103,7 @@ export const ChatHeader = memo(function ChatHeader({
   changeRequestState,
   activeProjectName,
   activeProjectCwd,
+  activeProjectFaviconPath,
   openInCwd,
   activeProjectScripts,
   preferredScriptId,
@@ -230,6 +232,7 @@ export const ChatHeader = memo(function ChatHeader({
                 <ProjectFavicon
                   environmentId={activeThreadEnvironmentId}
                   cwd={activeProjectCwd ?? ""}
+                  faviconPath={activeProjectFaviconPath}
                   className="size-3.5"
                 />
                 <span className="max-w-40 truncate text-sm font-medium">{activeProjectName}</span>

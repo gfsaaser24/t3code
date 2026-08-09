@@ -1,8 +1,8 @@
 {
   "repository": "pingdotgg/t3code",
   "branch": "main",
-  "mainSha": "239ef1c54df2f657912ccb5b8e25193d49d90417",
-  "nightlyTag": "v0.0.32-nightly.20260807.1023",
-  "nightlySha": "23f0a1ae38cb1fc510a499ef2b3602f5ae98d0c9",
-  "version": "0.0.32-nightly.20260803.986"
+  "mainSha": "1a003e383ac6b10258b8100c2617d938c4f06c69",
+  "nightlyTag": "v0.0.33-nightly.20260809.1042",
+  "nightlySha": "963ebf5bd7cce00d40ff60c258b34c12dcab271e",
+  "version": "0.0.33-nightly.20260809.1042"
 }
