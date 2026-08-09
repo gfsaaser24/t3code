@@ -22,6 +22,8 @@ per-commit — the ingestion PR entry records the upstream range instead.
 - Redeployed the hosted web app at `app.t3turbo.pro` from this tip (Worker version `19a7ea87`),
   clearing the hosted side of the version-skew banner.
 - Added this changelog and the [operator runbook](./turbo-runbook.md).
+- Recorded a four-surface performance audit (server, web, relay, client runtime) as
+  `.plans/23-turbo-performance-audit.md` — the ranked backlog for the Turbo speed push.
 
 ## 0.0.37 — 2026-08-08
 
