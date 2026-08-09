@@ -23,7 +23,8 @@ per-commit — the ingestion PR entry records the upstream range instead.
   clearing the hosted side of the version-skew banner.
 - Added this changelog and the [operator runbook](./turbo-runbook.md).
 - Recorded a four-surface performance audit (server, web, relay, client runtime) as
-  `.plans/23-turbo-performance-audit.md` — the ranked backlog for the Turbo speed push.
+  `.plans/23-turbo-performance-audit.md` — the ranked backlog for the Turbo speed push,
+  written in plain language: each item states the problem, the change, and the perf gain.
 
 ## 0.0.37 — 2026-08-08
 
