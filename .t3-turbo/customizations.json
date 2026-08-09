@@ -790,7 +790,40 @@
         },
         {
           "path": "SEAM.md",
-          "markers": ["**Tuned** `packages/client-runtime/src/state/terminalSession.ts`"]
+          "markers": [
+            "**Tuned** `packages/client-runtime/src/state/terminalSession.ts`",
+            "**Tuned** `packages/client-runtime/src/state/terminalSession.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "terminal-drawer-redraw-gate",
+      "status": "implemented",
+      "summary": "The terminal drawer decides a redraw from the buffer and error it is about to write, not from a version counter that a reconnect restarts at 1 and a pooled burst can land on twice.",
+      "checks": [
+        {
+          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+          "markers": [
+            "export function terminalNeedsRedraw(",
+            "current.buffer !== previous.buffer ||",
+            "current.error !== previous.error ||",
+            "if (!terminalNeedsRedraw(previous, current)) {"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/terminalDrawerRedraw.test.ts",
+          "markers": [
+            "redraws a reconnect that reuses the version number the screen already drew",
+            "still redraws on a version bump, which is what drives the mount focus"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `apps/web/src/components/ThreadTerminalDrawer.tsx`",
+            "**Additive** `apps/web/src/turbo/terminalDrawerRedraw.test.ts`"
+          ]
         }
       ]
     },
@@ -1123,6 +1156,15 @@
           ]
         },
         {
+          "path": "apps/web/src/session-logic.test.ts",
+          "markers": [
+            "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
+            "derivePendingApprovals(sortThreadActivities(activities))",
+            "derivePendingUserInputs(sortThreadActivities(activities))",
+            "deriveWorkLogEntries(sortThreadActivities(activities))"
+          ]
+        },
+        {
           "path": "apps/server/src/persistence/Layers/ProjectionThreadActivities.ts",
           "markers": [
             "CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC",
@@ -1143,7 +1185,9 @@
           "markers": [
             "**Additive** `packages/client-runtime/src/state/threadActivityOrder.ts`",
             "**Tuned** `packages/client-runtime/src/state/threadReducer.ts`",
-            "**Tuned** `apps/mobile/src/lib/threadActivity.ts`"
+            "**Tuned** `apps/mobile/src/lib/threadActivity.ts`",
+            "**Tuned** `apps/web/src/session-logic.test.ts`",
+            "**Optional** `packages/client-runtime/package.json`"
           ]
         }
       ]

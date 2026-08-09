@@ -157,6 +157,10 @@ fork's change.
   On conflict, take the upstream comparator bodies and re-swap only the timestamp operands, then
   re-delete the activity re-sorts; never touch the `id.localeCompare` tiebreaks — ids are not
   fixed-width and the collation decides real ordering there.
+- **Tuned** `apps/web/src/session-logic.test.ts` — the four cases that feed the activity
+  derivations wrap their fixtures in `sortThreadActivities`, because those derivations now take
+  canonical order as a precondition instead of re-sorting. On conflict, take the upstream cases and
+  re-wrap only the fixture arrays; the expectations are upstream's.
 - **Additive** `packages/client-runtime/src/state/threadActivityOrder.ts` — the ONE canonical
   activity comparator for the four **client-visible** orderings (`sequence`, with un-sequenced
   rows LAST via `MAX_SAFE_INTEGER`, then `createdAt`, then lifecycle phase, then id compared by
@@ -173,6 +177,9 @@ fork's change.
   missing-sequence convention (including a mixed thread whose live checkpoint row must land at the
   END) and the phantom-pending-approval tie (resolved stays after requested). On conflict, keep
   the fork file.
+- **Optional** `packages/client-runtime/package.json` — the exports map carries
+  `./state/thread-activity-order` so web and mobile can import the shared comparator. On conflict,
+  re-add the entry; exports-map collisions are routine rebase surface.
 - **Additive** `apps/server/src/turbo/threadActivityOrderEquivalence.test.ts` — the drift guard
   for the four shipped `ORDER BY` copies: each clause must appear verbatim in its source file AND
   must return exactly `sortThreadActivities(corpus)` when run over a generated corpus in an
@@ -271,6 +278,19 @@ fork's change.
   would silently unbind), the over-threshold branch must trim to the cap rather than dropping a
   chunk, and `trimBufferToBytes` must keep its continuation-byte safety loop. This file is shared
   with mobile, so keep it Hermes-safe — the byte count uses a `charCodeAt` loop, not `TextEncoder`.
+- **Tuned** `packages/client-runtime/src/state/terminalSession.test.ts` — adds the byte-budget and
+  slack-threshold cases next to upstream's. On conflict, keep the upstream cases and re-add the
+  fork ones.
+- **Tuned** `apps/web/src/components/ThreadTerminalDrawer.tsx` — the write effect's "nothing
+  changed" gate is `terminalNeedsRedraw(previous, current)` instead of a bare version comparison. A
+  reconnect rebuilds the buffer state from a fresh snapshot with the version restarted at 1, so a
+  reconnect burst delivered as one update can land on the version the screen already drew and skip
+  the redraw — stale until the next byte of output, which on an idle terminal never comes. On
+  conflict, keep upstream's write body and re-swap only the guard; the version must stay part of
+  the test, because `previous.version === 0` is what drives the mount focus.
+- **Additive** `apps/web/src/turbo/terminalDrawerRedraw.test.ts` — pins the reconnect-at-the-same-
+  version case and the version-bump case the mount focus depends on. On conflict, keep the fork
+  file.
 - **Tuned** `apps/web/src/components/ChatMarkdown.tsx` — the `pre` renderer wraps its Shiki subtree
   in `StreamingCodeBlockFrame` (`apps/web/src/turbo/streamingCodeBlock.tsx`), so a streaming fence
   shows a line-counted placeholder inside the block frame and is highlighted exactly once, when the

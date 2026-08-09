@@ -51,6 +51,9 @@ interface PoolItem {
 // number of yields having been "enough".
 const YIELD_BUDGET = 200;
 
+const decodeThreadStreamItem = Schema.decodeUnknownSync(OrchestrationThreadStreamItem);
+const decodeShellStreamItem = Schema.decodeUnknownSync(OrchestrationShellStreamItem);
+
 function session(client: WsRpcProtocolClient): RpcSession {
   return {
     client,
@@ -369,12 +372,8 @@ describe("per-session stream pool", () => {
     // `flushesImmediately` duck-types `kind === "synchronized"`. If the contracts rename that
     // literal, the bypass silently stops firing and every approval prompt picks up the window's
     // delay, so the marker is built through the schemas rather than written out again here.
-    const threadMarker = Schema.decodeUnknownSync(OrchestrationThreadStreamItem)({
-      kind: "synchronized",
-    });
-    const shellMarker = Schema.decodeUnknownSync(OrchestrationShellStreamItem)({
-      kind: "synchronized",
-    });
+    const threadMarker = decodeThreadStreamItem({ kind: "synchronized" });
+    const shellMarker = decodeShellStreamItem({ kind: "synchronized" });
 
     expect(flushesImmediately(threadMarker)).toBe(true);
     expect(flushesImmediately(shellMarker)).toBe(true);
