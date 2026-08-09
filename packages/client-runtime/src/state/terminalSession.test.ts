@@ -114,22 +114,45 @@ describe("terminal session reducers", () => {
       type: "snapshot",
       snapshot: BASE_SNAPSHOT,
     });
-    const output = applyTerminalAttachStreamEvent(
+    // Cap 8 bytes, slack 25% -> appends stay verbatim until the buffer passes 10 bytes.
+    const withinSlack = applyTerminalAttachStreamEvent(
       snapshot,
       {
         type: "output",
         threadId: TARGET.threadId,
         terminalId: TARGET.terminalId,
-        data: " world",
+        data: " wor",
+      },
+      8,
+    );
+    const pastSlack = applyTerminalAttachStreamEvent(
+      withinSlack,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "ld",
       },
       8,
     );
 
-    expect(output).toMatchObject({
-      buffer: "lo world",
+    // Inside the slack window the append is a pure suffix: the buffer keeps the previous
+    // one as its prefix, so the consumer can draw incrementally instead of repainting.
+    expect(withinSlack).toMatchObject({
+      buffer: "hello wor",
+      bufferBytes: 9,
       status: "running",
       error: null,
       version: 2,
+    });
+    expect(withinSlack.buffer.startsWith(snapshot.buffer)).toBe(true);
+    // Crossing the slack threshold trims all the way down to the cap, never a chunk.
+    expect(pastSlack).toMatchObject({
+      buffer: "lo world",
+      bufferBytes: 8,
+      status: "running",
+      error: null,
+      version: 3,
     });
   });
 
@@ -170,8 +193,9 @@ describe("terminal session reducers", () => {
     expect(removed).toEqual([]);
   });
 
-  it("caps retained output by UTF-8 byte length", () => {
-    const state = applyTerminalAttachStreamEvent(
+  it("caps retained output by UTF-8 byte length once the slack threshold is crossed", () => {
+    // Cap 6 bytes, slack 25% -> trims once the buffer passes 8 bytes.
+    const withinSlack = applyTerminalAttachStreamEvent(
       EMPTY_TERMINAL_BUFFER_STATE,
       {
         type: "output",
@@ -179,9 +203,24 @@ describe("terminal session reducers", () => {
         terminalId: TARGET.terminalId,
         data: "🙂🙂",
       },
-      4,
+      6,
+    );
+    const pastSlack = applyTerminalAttachStreamEvent(
+      withinSlack,
+      {
+        type: "output",
+        threadId: TARGET.threadId,
+        terminalId: TARGET.terminalId,
+        data: "🙂",
+      },
+      6,
     );
 
-    expect(state.buffer).toBe("🙂");
+    // Multi-byte output is counted, not re-measured: 8 bytes is over the cap but inside slack.
+    expect(withinSlack.buffer).toBe("🙂🙂");
+    expect(withinSlack.bufferBytes).toBe(8);
+    // The trim never splits a character, so it lands under the cap rather than on it.
+    expect(pastSlack.buffer).toBe("🙂");
+    expect(pastSlack.bufferBytes).toBe(4);
   });
 });

@@ -22,6 +22,13 @@ fork's change.
 - **Optional** `infra/relay/scripts/deploy.ts` — accepts absent tracing outputs while retaining the
   relay URL requirement.
 - **Optional** `infra/relay/src/Config.ts` — APNs is a complete optional group.
+- **Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts` — an APNs-off
+  `AgentActivityPublisher` layer that keeps upstream's row write verbatim and skips the delivery
+  prep whose results the disabled delivery layer discards. On conflict, keep the fork file and
+  re-copy upstream's `publish` row-write branch into it if that branch changed.
+- **Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.test.ts` — proves
+  the APNs-off publisher stores the same row and returns the same response as upstream's. On
+  conflict, keep the fork file.
 - **Optional** `infra/relay/src/agentActivity/ApnsDeliveries.test.ts` — adapts delivery tests to the
   optional APNs type.
 - **Optional** `infra/relay/src/agentActivity/ApnsDeliveries.ts` — supplies the disabled APNs layer.
@@ -32,7 +39,11 @@ fork's change.
 - **Additive** `infra/relay/src/deploymentConfiguration.test.ts` — covers complete and absent
   provider groups.
 - **Optional** `infra/relay/src/observability.ts` — Axiom resources require the complete pair.
-- **Optional** `infra/relay/src/worker.ts` — APNs queues and tracing layers are conditional.
+- **Optional** `infra/relay/src/worker.ts` — APNs queues and tracing layers are conditional, and the
+  same `apnsDeliveryQueueSender === null` test that picks `ApnsDeliveries.layerDisabled` also picks
+  `AgentActivityPublisherApnsDisabled.layer` over `AgentActivityPublisher.layer`. On conflict, take
+  upstream's `runtimeLayer` and re-swap only that one `Layer.provideMerge` argument for
+  `agentActivityPublisherLayer`.
 - **Tuned** `infra/relay/src/environments/EnvironmentConnector.ts` —
   `ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS` is 7s so the mint budget can actually expire inside the
   relay's 9s `RELAY_REQUEST_DEADLINE_MS`; upstream's 10s never fires. On conflict, keep the
@@ -79,6 +90,14 @@ fork's change.
 - **Additive** `packages/contracts/src/turbo/baseSchemas.test.ts` — pins both-directions trimming
   (including the encode-without-decode path), per-element drop-on-failure, and the single-decode
   count. On conflict, keep the fork file.
+- **Tuned** `packages/client-runtime/src/state/terminalSession.ts` — `TerminalBufferState` carries
+  a running `bufferBytes` count, and `applyTerminalAttachStreamEvent` only re-encodes the buffer
+  once the total passes `cap + TERMINAL_BUFFER_TRIM_SLACK_RATIO * cap`, then trims back down **to**
+  the cap. On conflict, take the upstream reducer and re-apply three things: `bufferBytes` must stay
+  a field on the state object (the reducer is handed to `Stream.scan` by reference, so a parameter
+  would silently unbind), the over-threshold branch must trim to the cap rather than dropping a
+  chunk, and `trimBufferToBytes` must keep its continuation-byte safety loop. This file is shared
+  with mobile, so keep it Hermes-safe — the byte count uses a `charCodeAt` loop, not `TextEncoder`.
 
 ## Nightly sync conflicts
 

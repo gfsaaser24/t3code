@@ -632,6 +632,72 @@
       ]
     },
     {
+      "id": "terminal-buffer-byte-budget",
+      "status": "implemented",
+      "summary": "The client terminal buffer tracks its UTF-8 byte length in the reducer state and only re-encodes to trim once the total passes the cap plus a 25% slack window, then trims back down to the cap while keeping the multi-byte safety loop.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/state/terminalSession.ts",
+          "markers": [
+            "readonly bufferBytes: number;",
+            "export const TERMINAL_BUFFER_TRIM_SLACK_RATIO = 0.25;",
+            "function utf8ByteLength(text: string): number",
+            "appendedBytes <= terminalBufferTrimThreshold(maxBufferBytes)",
+            "(byte & 0b1100_0000) !== 0b1000_0000"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/terminalSession.test.ts",
+          "markers": [
+            "caps retained output by UTF-8 byte length once the slack threshold is crossed",
+            "expect(withinSlack.buffer.startsWith(snapshot.buffer)).toBe(true);"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/client-runtime/src/state/terminalSession.ts`"]
+        }
+      ]
+    },
+    {
+      "id": "relay-apns-off-publish-skip",
+      "status": "implemented",
+      "summary": "With APNs off the relay's agent-activity publish keeps its row write verbatim and skips the delivery-user, active-row and Live Activity target queries whose results the disabled delivery layer discards; the APNs-on wiring is untouched.",
+      "checks": [
+        {
+          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts",
+          "markers": [
+            "export const layer = Layer.effect(AgentActivityPublisher, make);",
+            "return { ok: true, deliveries: [] } satisfies RelayPublishResponse;",
+            "yield* rows.upsert({"
+          ]
+        },
+        {
+          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.test.ts",
+          "markers": [
+            "stores the same row as the upstream publisher and returns the same response",
+            "skips the delivery prep the disabled delivery layer throws away"
+          ]
+        },
+        {
+          "path": "infra/relay/src/worker.ts",
+          "markers": [
+            "const agentActivityPublisherLayer =",
+            "? AgentActivityPublisherApnsDisabled.layer",
+            ": AgentActivityPublisher.layer;",
+            "Layer.provideMerge(agentActivityPublisherLayer),"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts`",
+            "**Optional** `infra/relay/src/worker.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-request-budget-and-clerk-client",
       "status": "implemented",
       "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",
