@@ -1151,17 +1151,20 @@
     {
       "id": "pooled-subscription-frame",
       "status": "implemented",
-      "summary": "Durable RPC subscriptions pool one frame (16 ms) of already-arrived stream items inside the per-session stream and release them as a single chunk, so a burst costs the screen one blip per frame instead of one per item; the pool is created and shut down with the session, and the \"synchronized\" connection marker is never held back by the window.",
+      "summary": "Durable RPC subscriptions pool one frame (16 ms) of already-arrived stream items inside the per-session stream and release them as a single chunk, so a burst costs the screen one blip per frame instead of one per item; the pool is created and shut down with the session, and the \"synchronized\" connection marker is never held back by the window; subscriptions whose items are distinct facts rather than cumulative state (preview events, automation requests) bypass the pool entirely, because a chunk-collapsing atom consumer would otherwise drop all but the last item of a window.",
       "checks": [
         {
           "path": "packages/client-runtime/src/rpc/client.ts",
           "markers": [
             "export const POOL_WINDOW: Duration.Input = \"16 millis\";",
-            "const flushesImmediately = (item: unknown): boolean =>",
+            "export const flushesImmediately = (item: unknown): boolean =>",
             "Effect.uninterruptibleMask((restore) =>",
             "(item as { readonly kind: unknown }).kind === \"synchronized\";",
             "function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {",
-            "return poolWithinFrame(method(input)).pipe("
+            "const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([",
+            "WS_METHODS.subscribePreviewEvents,",
+            "WS_METHODS.previewAutomationConnect,",
+            "NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)"
           ]
         },
         {
@@ -1178,7 +1181,9 @@
             "drops pooled leftovers when the session dies",
             "releases the synchronized marker without waiting out the window",
             "releases one window's items as a single ordered chunk",
-            "never drops an item at a window boundary"
+            "never drops an item at a window boundary",
+            "never pools a subscription whose items are distinct facts",
+            "keeps the immediate-release bypass tied to the contracts literal"
           ]
         },
         {

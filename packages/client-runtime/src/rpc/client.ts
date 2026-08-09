@@ -182,9 +182,33 @@ export const POOL_WINDOW: Duration.Input = "16 millis";
 // backpressure altogether and let a long replay grow the backlog without limit.
 const POOL_CAPACITY = 1024;
 
+// Pooling moves a chunk boundary and nothing else. That is invisible to a consumer that applies
+// every item in order (`Stream.runForEach`, which is what the store does), and it is DATA LOSS for
+// one that collapses a chunk to a single value -- which is exactly what effect-atom's
+// `Atom.makeStream` does: it sets one atom value per pulled chunk, from the chunk's last item.
+//
+// Most subscriptions are cumulative, so collapsing is correct for them: every item carries the
+// whole current state (terminal attach, vcs status, welcome, auth, and the thread/shell streams,
+// which the store applies item by item anyway). These two are not. Their items are distinct facts:
+// an `opened(tabA)` and a `navigated(tabB)` inside one window would lose tabA entirely, and a
+// dropped automation request never receives its keyed response, so the automation hangs forever.
+//
+// The exemption is keyed on the TAG rather than supplied at the call site because it is a property
+// of what the payload MEANS, not of who subscribes. A future subscriber of these streams -- or a
+// second atom family over the same tag -- cannot forget to opt out.
+const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([
+  WS_METHODS.subscribePreviewEvents,
+  WS_METHODS.previewAutomationConnect,
+]);
+
 // The connection "synchronized" marker is what flips a subscription to "live",
 // so it is released the moment it arrives rather than waiting out the window.
-const flushesImmediately = (item: unknown): boolean =>
+//
+// This is a duck-type on a contracts literal: the marker is `{ kind: "synchronized" }` in
+// `OrchestrationThreadStreamItem` and `OrchestrationShellStreamItem`. A rename there would silently
+// turn the bypass off and put a 16 ms delay in front of every approval prompt, so
+// `turbo/streamPool.test.ts` pins the literal against the schemas rather than against a string.
+export const flushesImmediately = (item: unknown): boolean =>
   typeof item === "object" &&
   item !== null &&
   "kind" in item &&
@@ -326,7 +350,10 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                       });
                       // The pool is created here, inside the per-session
                       // subscription, so it dies with the session.
-                      return poolWithinFrame(method(input)).pipe(
+                      const items = method(input);
+                      return (
+                        NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)
+                      ).pipe(
                         Stream.ensuring(completeObservation),
                         Stream.catchCause((cause) => {
                           const hasOnlyExpectedFailures =

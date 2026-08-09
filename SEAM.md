@@ -318,8 +318,11 @@ fork's change.
   the suites it serves ever drops below 250 ms, lower `MAX_POOL_WINDOWS` to stay under it.
 - **Additive** `packages/client-runtime/src/turbo/streamPool.test.ts` — pins the placement (a dead
   session's pooled items never apply after the replacement session's snapshot), the immediate
-  `synchronized` release, the one-chunk-per-window shape, and zero drops at a hammered window
-  boundary. On conflict, keep the fork file.
+  `synchronized` release (built through the contracts schemas, so a renamed literal fails here
+  rather than silently disabling the bypass), the one-chunk-per-window shape, zero drops at a
+  hammered window boundary, and the non-cumulative tags reaching a chunk-collapsing consumer
+  intact. Its fake transport emits ONE item per chunk — a queue-backed source would batch first and
+  the pool's own chunking would stop being what is under test. On conflict, keep the fork file.
 - **Tuned** `packages/client-runtime/src/state/threads-sync.test.ts`,
   `packages/client-runtime/src/state/threads-pagination.test.ts`,
   `packages/client-runtime/src/state/shell-sync.test.ts`, and
