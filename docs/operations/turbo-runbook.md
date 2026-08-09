@@ -24,6 +24,10 @@ both files in the same PR.
 4. Run `pnpm --dir scripts turbo:customizations:verify` — must pass before merge.
 5. Append a [changelog](./turbo-changelog.md) entry in the same PR.
 
+**Gotcha:** a commit staging _only_ `.plans/` files fails the pre-commit hook — the formatter
+ignore-lists that directory and errors on an empty target set. Stage a formatter-eligible file
+in the same commit (a changelog or runbook line usually belongs in it anyway).
+
 ## Nightly sync operations
 
 Full state model: [t3-turbo-nightly-inbound.md](../internals/t3-turbo-nightly-inbound.md).
