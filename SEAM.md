@@ -53,14 +53,22 @@ fork's change.
 - **Tuned** `apps/web/src/session-logic.ts` — a local `compareIsoTimestamps` helper replaces
   `String.prototype.localeCompare` at the seven timestamp comparison sites (pending approvals,
   pending user inputs, both proposed-plan picks, activity order, timeline order, checkpoint turn
-  counts). On conflict, take the upstream comparator bodies and re-swap only the timestamp
-  operands; never touch the `id.localeCompare` tiebreaks — ids are not fixed-width and the
-  collation decides real ordering there.
-- **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar` and
-  `sortSettledThreadsForSidebar` are decorate-sorts: the sort key is resolved once per row instead
-  of inside the comparator. On conflict, take the upstream comparator verbatim and re-wrap it in
-  the decoration; the comparator body, the `id.localeCompare` tiebreak, and the pinned-thread
-  ordering path must stay as upstream ships them.
+  counts), and `findLatestProposedPlan` takes a single-pass max (`latestProposedPlanBy`) instead of
+  two copy-filter-sort-`at(-1)` pipelines. On conflict, take the upstream comparator bodies and
+  re-swap only the timestamp operands; never touch the `id.localeCompare` tiebreaks — ids are not
+  fixed-width and the collation decides real ordering there — and keep the `<= 0` in the max loop,
+  which is what reproduces `.at(-1)`'s "last of an equal run".
+- **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar`,
+  `sortSettledThreadsForSidebar`, and the fork-added `sortSnoozedThreadsForSidebar` are
+  decorate-sorts: the sort key is resolved once per row instead of inside the comparator, and the
+  settled key goes through the file's own NaN-sinking `parseTimestampMs`. On conflict, take the
+  upstream comparator verbatim and re-wrap it in the decoration; the comparator body, the
+  `id.localeCompare` tiebreak, and the pinned-thread ordering path must stay as upstream ships
+  them.
+- **Tuned** `apps/web/src/components/Sidebar.tsx` (timestamp seam) — the snoozed shelf calls
+  `sortSnoozedThreadsForSidebar` instead of resolving `firstValidTimestampMs` inside an inline
+  comparator. On conflict, keep upstream's bucket partition and swap only that one `toSorted` call;
+  the ordering rule (soonest wake first, no id tiebreak) must not change.
 - **Tuned** `packages/client-runtime/src/state/threadSort.ts` — the keyless half of
   `sortPinnedThreadsByOrderKey` orders by plain `createdAt` string comparison when
   `isCanonicalIsoTimestamp` accepts BOTH operands, and otherwise falls back to the upstream

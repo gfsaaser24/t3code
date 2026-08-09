@@ -502,6 +502,22 @@ export function firstValidTimestamp(
   return null;
 }
 
+// Snoozed shelf: soonest wake first — "what comes back next" is the shelf's
+// question. Decorate-sort for the same reason as the other two buckets:
+// firstValidTimestampMs parses, so resolving it inside the comparator cost a
+// parse pair per comparison. No id tiebreak here, and `sort` is stable, so
+// rows with equal wake times keep their input order exactly as before.
+export function sortSnoozedThreadsForSidebar<
+  T extends { readonly snoozedUntil?: string | null | undefined },
+>(threads: readonly T[]): T[] {
+  const decorated = threads.map((thread) => ({
+    thread,
+    wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null),
+  }));
+  decorated.sort((left, right) => left.wakeAtMs - right.wakeAtMs);
+  return decorated.map((entry) => entry.thread);
+}
+
 // Sidebar sort: static creation order, newest thread on top. Activity NEVER
 // reorders the list — a row holds its position from open until settled, so
 // the screen only moves at lifecycle transitions. Status (including pending
@@ -587,7 +603,10 @@ export function sortSettledThreadsForSidebar<
   // times. Same comparator, same id tiebreak, same stable ordering of ties.
   const decorated = threads.map((thread) => {
     const timestamp = resolveSettledTimestamp(thread);
-    return { thread, settledAtMs: timestamp === null ? 0 : Date.parse(timestamp) };
+    // parseTimestampMs, not a hand-rolled Date.parse: the active bucket sinks a
+    // malformed stamp to the epoch through that helper, and the two buckets
+    // have to keep agreeing about it.
+    return { thread, settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp) };
   });
   decorated.sort(
     (left, right) =>

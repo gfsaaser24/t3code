@@ -570,9 +570,15 @@
           "markers": [
             "createdAtMs: parseTimestampMs(thread.createdAt)",
             "right.createdAtMs - left.createdAtMs",
-            "settledAtMs: timestamp === null ? 0 : Date.parse(timestamp)",
-            "right.settledAtMs - left.settledAtMs"
+            "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
+            "right.settledAtMs - left.settledAtMs",
+            "export function sortSnoozedThreadsForSidebar",
+            "wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null)"
           ]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["snoozedThreads: sortSnoozedThreadsForSidebar(snoozed)"]
         },
         {
           "path": "packages/client-runtime/src/state/threadSort.ts",
@@ -595,7 +601,8 @@
           "path": "apps/web/src/turbo/sortOrderEquivalence.test.ts",
           "markers": [
             "orders every pair of product-minted timestamps exactly as localeCompare did",
-            "emits the pre-decorate order, ties included"
+            "emits the pre-decorate order, ties included",
+            "sortSnoozedThreadsForSidebar (snoozed shelf)"
           ]
         },
         {
