@@ -4,6 +4,8 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   countStreamingCodeLines,
   resolveStreamingCodeBlockView,
+  STREAMING_CODE_FIRST_DELTA_MS,
+  STREAMING_CODE_STALL_MS,
   StreamingCodeBlockFrameView,
   StreamingCodeBlockPlaceholder,
 } from "./streamingCodeBlock";
@@ -62,25 +64,52 @@ describe("streaming code block placeholder", () => {
 
 describe("resolveStreamingCodeBlockView", () => {
   it("colours the block once the message stops streaming", () => {
-    expect(resolveStreamingCodeBlockView({ isStreaming: false, stalled: false })).toBe(
+    expect(resolveStreamingCodeBlockView({ isStreaming: false, stall: "none" })).toBe(
       "highlighted",
     );
-    expect(resolveStreamingCodeBlockView({ isStreaming: false, stalled: true })).toBe(
+    expect(resolveStreamingCodeBlockView({ isStreaming: false, stall: "dropped" })).toBe(
+      "highlighted",
+    );
+    expect(resolveStreamingCodeBlockView({ isStreaming: false, stall: "never-started" })).toBe(
       "highlighted",
     );
   });
 
   it("holds the placeholder while the fence is still growing", () => {
-    expect(resolveStreamingCodeBlockView({ isStreaming: true, stalled: false })).toBe(
-      "placeholder",
-    );
+    expect(resolveStreamingCodeBlockView({ isStreaming: true, stall: "none" })).toBe("placeholder");
   });
 
   // Guard 3: a dropped stream must never leave a card pulsing forever.
-  it("falls back to partial text when the fence goes quiet mid-stream", () => {
-    expect(resolveStreamingCodeBlockView({ isStreaming: true, stalled: true })).toBe(
+  it("falls back to partial text when a growing fence goes quiet mid-stream", () => {
+    expect(resolveStreamingCodeBlockView({ isStreaming: true, stall: "dropped" })).toBe(
       "partial-text",
     );
+  });
+
+  // Aborted and errored turns leave `streaming` stuck true forever, and it is
+  // persisted that way. Those messages are finished history, not a dropped
+  // stream: they must keep their syntax highlighting instead of decaying to
+  // plain text on every mount, permanently.
+  it("colours a fence that never grew, even though the message still claims to stream", () => {
+    expect(resolveStreamingCodeBlockView({ isStreaming: true, stall: "never-started" })).toBe(
+      "highlighted",
+    );
+  });
+
+  it("keeps the two stall verdicts distinct so history never renders as a drop", () => {
+    const views = (["none", "dropped", "never-started"] as const).map((stall) =>
+      resolveStreamingCodeBlockView({ isStreaming: true, stall }),
+    );
+
+    expect(views).toEqual(["placeholder", "partial-text", "highlighted"]);
+  });
+});
+
+describe("stall windows", () => {
+  // A stopped turn's history spends the first-delta window pulsing before it
+  // gets highlighted, so it must be much shorter than the drop window.
+  it("probes for liveness far faster than it declares a drop", () => {
+    expect(STREAMING_CODE_FIRST_DELTA_MS).toBeLessThan(STREAMING_CODE_STALL_MS);
   });
 });
 

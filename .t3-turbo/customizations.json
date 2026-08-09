@@ -677,9 +677,11 @@
           "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
           "markers": [
             "export const STREAMING_CODE_STALL_MS = 4_000;",
+            "export const STREAMING_CODE_FIRST_DELTA_MS = 500;",
+            "if (input.stall === \"never-started\") return \"highlighted\";",
             "export function countStreamingCodeLines(code: string): number",
             "export function resolveStreamingCodeBlockView(input: {",
-            "export function useStreamingCodeStall(code: string, isStreaming: boolean): boolean",
+            "export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall",
             "export function StreamingCodeBlockFrame({",
             "data-streaming-code-placeholder"
           ]
@@ -697,7 +699,8 @@
           "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
           "markers": [
             "grows one placeholder line per accumulated code line",
-            "falls back to partial text when the fence goes quiet mid-stream",
+            "falls back to partial text when a growing fence goes quiet mid-stream",
+            "colours a fence that never grew, even though the message still claims to stream",
             "shows the partial text when the stream drops mid-block"
           ]
         },
