@@ -576,13 +576,19 @@
         },
         {
           "path": "packages/client-runtime/src/state/threadSort.ts",
-          "markers": ["const leftCreatedAt = left.createdAt;", "leftCreatedAt > rightCreatedAt"]
+          "markers": [
+            "const leftCreatedAt = left.createdAt;",
+            "leftCreatedAt > rightCreatedAt",
+            "function isCanonicalIsoTimestamp(value: string): boolean",
+            "isCanonicalIsoTimestamp(leftCreatedAt) && isCanonicalIsoTimestamp(rightCreatedAt)"
+          ]
         },
         {
           "path": "packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts",
           "markers": [
             "legacySortPinnedThreadsByOrderKey",
-            "emits the pre-swap order for product-minted timestamps, ties included"
+            "emits the pre-swap order for product-minted timestamps, ties included",
+            "emits the pre-swap order for non-canonical and malformed stamps too"
           ]
         },
         {

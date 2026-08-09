@@ -62,10 +62,12 @@ fork's change.
   the decoration; the comparator body, the `id.localeCompare` tiebreak, and the pinned-thread
   ordering path must stay as upstream ships them.
 - **Tuned** `packages/client-runtime/src/state/threadSort.ts` — the keyless half of
-  `sortPinnedThreadsByOrderKey` orders by plain `createdAt` string comparison instead of a
-  `Date.parse` pair per comparison; this file is shared with mobile, so keep it Hermes-safe. On
-  conflict, keep the upstream keyed sort and `identityTiebreak` untouched and re-apply only the
-  keyless comparator.
+  `sortPinnedThreadsByOrderKey` orders by plain `createdAt` string comparison when
+  `isCanonicalIsoTimestamp` accepts BOTH operands, and otherwise falls back to the upstream
+  `Date.parse` pair with its NaN-sinks-to-epoch behavior; this file is shared with mobile, so keep
+  it Hermes-safe. On conflict, keep the upstream keyed sort and `identityTiebreak` untouched and
+  re-apply only the keyless comparator — never drop the fallback branch, `IsoDateTime` is
+  `Schema.String` and a malformed stamp must keep sinking to the bottom of the block.
 - **Additive** `packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts` — pins the
   keyless pinned order against the pre-swap implementation, ties included. On conflict, keep the
   fork file.
