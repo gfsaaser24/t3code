@@ -65,28 +65,48 @@ old orderings and the old wire bytes ship with the wave.
 - **Threads sort themselves once, the same way everywhere (W2+W3).** The store, the web chat view,
   mobile, and the server's SQL each carried their own idea of how a thread's activities are ordered,
   and the web layer re-sorted the same list five more times on the way to the screen. There is now
-  one canonical comparator in the client runtime — sequence number first (rows minted before
-  sequence numbers existed sort first), then creation time, then lifecycle phase, then id — and
-  every surface calls it. The server query orders by the same columns with a code-unit id tiebreak,
-  so SQL and JavaScript agree character for character. The older-page merge sorts its output, so
-  pagination can no longer hand the view an out-of-order page, and the five per-derivation re-sorts
-  collapse into one memoized sort at the view boundary. New seam `unified-activity-order`.
+  one canonical comparator in the client runtime — sequence number first, then creation time, then
+  lifecycle phase, then id — and every surface calls it. Rows with no sequence number sort **last**,
+  which is what the thread timeline has always shown: a missing sequence does not mean "old", it
+  means "not part of the provider's numbered stream", and the rows that carry no sequence include
+  the "Checkpoint captured" line every turn writes. All four of the server's activity queries spell
+  that out explicitly (SQLite's own default is the opposite) along with the same lifecycle tiebreak
+  and a code-unit id tiebreak, so SQL and JavaScript agree character for character — and a
+  fork-owned test replays a generated corpus through every one of those queries and through the
+  comparator and asserts the two orders are identical, so a future edit to any single copy fails
+  there instead of in someone's thread. The older-page merge sorts its output, so pagination can no
+  longer hand the view an out-of-order page, and the five per-derivation re-sorts collapse into one
+  memoized sort at the view boundary. New seam `unified-activity-order`.
 - **Streaming code blocks stop re-colouring on every delta (W1).** A code fence was syntax
   highlighted from scratch on every delta while the model typed it — the most expensive render in
   the chat, repeated hundreds of times per block. It now shows a placeholder card inside the normal
-  code-block frame that grows one line per line of code received, and gets exactly one coloured
-  render when the message completes. Because "completes" is not guaranteed, a three-way stall
-  watchdog covers the rest: a fence that was growing and then went quiet for four seconds reveals
-  its partial text, a fence that never started (an old message still flagged as streaming) is
-  highlighted immediately, and a dropped stream shows what actually arrived instead of a placeholder
-  that never resolves. New seam `deferred-streaming-code-blocks`.
+  code-block frame that reserves one line of height per line of code received, and gets exactly one
+  coloured render when the message completes. The placeholder draws at most two dozen shimmer rows
+  and reserves the rest as a single spacer, counts new lines by looking only at the text that just
+  arrived, and uses the app's existing duty-cycled shimmer rather than an animation that repaints
+  every frame for the life of the stream. An old message still flagged as streaming — those exist in
+  saved history — is highlighted immediately instead of pulsing forever.
+- **A message that stops streaming now says so (W1 follow-up).** "This message is streaming" was
+  only ever turned off by the message's own final chunk. If a turn ended any other way — the
+  provider errored or exited, the session stopped, or you pressed stop — that chunk never arrived,
+  the flag stayed on, and it was saved that way. One flag, five symptoms: code blocks that shimmered
+  forever, an "empty response" label, a missing message footer, a copy button stuck in its streaming
+  state, and turns grouped wrongly. The thread reducer now turns the flag off wherever it already
+  ends a turn, and none of those five places needed touching. New seam
+  `streaming-flag-cleared-on-turn-settle`; the code-fence work keeps the seam
+  `deferred-streaming-code-blocks`.
 - **The server terminal stops rebuilding its scrollback per chunk (S2).** Every PTY chunk chopped
   and re-glued the whole retained scrollback string. A session now keeps scrollback as a list of
   lines with incremental capping, and batches history-side appends on a ~16 ms coalescing worker.
   Every read flushes the batch first, so the string handed to a client stays byte-identical to what
   upstream produced; a dirty-since-persist flag — not the last flush's result — decides whether a
-  write is still owed, so a read racing the batch tick cannot strand the tail. The wire cadence to
-  the terminal is unchanged: this is history-side only. New seam `terminal-scrollback-batching`.
+  write is still owed, so a read racing the batch tick cannot strand the tail. Each session waits
+  out its own ~16 ms window: the coalescing worker is a single worker shared by every terminal, so
+  waiting inside it made eight busy terminals queue behind one another — their batches stretched to
+  eight times the intended window, one noisy terminal could hold up the rest, and Clear, Restart and
+  Close waited out unrelated terminals' timers before they could act. The window is also armed once
+  per burst of output instead of once per chunk from the shell. The wire cadence to the terminal is
+  unchanged: this is history-side only. New seam `terminal-scrollback-batching`.
 - **The client terminal buffer stops re-encoding itself to measure itself (C1).** Enforcing the byte
   cap re-encoded the entire retained buffer on every append just to learn how big it was. The
   reducer now carries a running byte count and only re-encodes once the total passes the cap plus a
@@ -111,10 +131,21 @@ old orderings and the old wire bytes ship with the wave.
   seconds, and a failed verification is never remembered. The links-only lookup answers from a
   5-second memo. The allocation record that carries the compare-and-swap token and the credential
   check that enforces instant revocation are never cached. New seam `relay-auth-and-link-memos`.
+- **Mobile's copy of the streaming-code problem is written down, not fixed (W1 companion).**
+  `.plans/23b-w1-mobile-companion.md`: the mobile chat caches highlighted code under a key that
+  includes the code itself, so a streaming fence starts a fresh highlight job per delta and keeps
+  every intermediate version of the block in memory for five minutes. That is the same shape W1
+  fixed on web, but the mobile fix needs a product decision (plain text while streaming, or a mobile
+  placeholder) rather than a mechanical port, and mobile was not one of the surfaces this audit
+  measured. Filed so the asymmetry is visible: after this wave, web streams code cheaply and mobile
+  does not. No product code changed.
 
-Three trades this wave accepts, stated plainly: a revoked principal can keep working for up to 30
+Four trades this wave accepts, stated plainly: a revoked principal can keep working for up to 30
 seconds before the verification memo expires; for up to 5 seconds after an unlink a lookup can still
-return the old link record; and terminal echo can lag by up to one frame (~16 ms) under the pool.
+return the old link record; terminal echo can lag by up to one frame (~16 ms) under the pool; and in
+threads old enough to predate activity sequence numbers, those oldest rows now sit at the bottom of
+the thread rather than the top. The last one is the price of putting every turn's "Checkpoint
+captured" line in the right place, and it matches what the store and the mobile app always did.
 
 No version manifests were bumped: this work ships with the next release, per the
 [runbook's version rules](./turbo-runbook.md).

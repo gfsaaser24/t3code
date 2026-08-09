@@ -2198,9 +2198,12 @@ export function ChatViewContent(props: ChatViewProps) {
   const agentPanelModel = useMemo(
     () =>
       deriveAgentPanelModel({
-        agents: foldSubagentActivities(threadActivities, { sessionLive: agentSessionLive }),
+        // T3 Turbo: the same canonically ordered array every other derivation
+        // takes, so the Agents surface folds the identical sequence the work
+        // log and turn plans read.
+        agents: foldSubagentActivities(orderedActivities, { sessionLive: agentSessionLive }),
       }),
-    [agentSessionLive, threadActivities],
+    [agentSessionLive, orderedActivities],
   );
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(orderedActivities),
