@@ -25,8 +25,11 @@ per-commit — the ingestion PR entry records the upstream range instead.
 - Recorded a four-surface performance audit (server, web, relay, client runtime) as
   `.plans/23-turbo-performance-audit.md` — the ranked backlog for the Turbo speed push,
   written in plain language: each item states the problem, the change, and the perf gain.
-  Scope decision: streaming code blocks will not render live — they show a placeholder card
-  and blip in fully formatted on completion (plan item W1).
+  Scope decisions: streaming code blocks will not render live — they show a placeholder card
+  and blip in fully formatted on completion (W1); screen updates pool-and-blip in batches
+  with no change to the streaming protocol (C2); W6/W7/W8 (glow, orbs) and R2 (replay
+  protection) are skipped. Corrected: the relay database is the `openclaw` Hetzner box in
+  Ashburn, Virginia — not Germany.
 
 ## 0.0.37 — 2026-08-08
 

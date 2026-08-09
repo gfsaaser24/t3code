@@ -158,38 +158,16 @@ the repetition and the same hardware suddenly feels twice as fast — that's the
 - **The perf gain:** another slice of per-word streaming cost gone, basically for free.
 - <sub>`apps/web/src/session-logic.ts:1573-1606`</sub>
 
-### ⭐ W6. Calm the ultrathink glow
-- **The problem:** when an ultrathink model is selected, the composer's rainbow glow redraws
-  itself **165 times every second, forever** — even while you're just reading — using the
-  most expensive kind of visual effects to redraw. It's the graphics-card equivalent of
-  leaving the engine revving at a red light. (The team already invented the fix for the
-  little status dots: step the animation down to a few frames per second. This glow just
-  never got it.)
-- **What we'd change:** apply that same stepping trick — a slow rainbow at 3 fps looks
-  identical to one at 165 fps — and respect the system "reduce motion" setting.
-- **The perf gain:** GPU usage while idle drops to nearly zero, fans stay quiet, laptop
-  battery lasts longer. You will not be able to see the difference.
-- <sub>`apps/web/src/index.css:2091-2176`</sub>
+### W6. ~~Calm the ultrathink glow~~ — SKIPPED (operator decision 2026-08-09)
+Leave the ultrathink glow exactly as it is. (Was: step its always-on animations down to a few
+frames per second to cut idle GPU use.) Not doing it.
 
-### ⭐ W7. Tell the thinking orbs what theme we're in — our own 3-line fix
-- **The problem:** our thinking orbs need to know if the app is in dark or light mode. We
-  never tell them — so *each orb* sets up a watcher on **the entire page** and re-checks on
-  every tiny change anywhere (every hover, every streamed word). Ten visible orbs = ten
-  whole-page watchers running constantly. Funny part: if you just tell the orb the theme, it
-  skips the watcher entirely.
-- **What we'd change:** pass the theme we already know. About three lines, in our own code.
-- **The perf gain:** an invisible tax on every single interaction disappears. The cheapest
-  fix in this whole document.
-- <sub>`apps/web/src/turbo/orbs/TimelineOrb.tsx:38, 68`</sub>
+### W7. ~~Pass the theme to the thinking orbs~~ — SKIPPED (operator decision 2026-08-09)
+Leave the orbs untouched. (Was: pass a `theme` prop so each orb stops watching the whole page
+for theme changes.) Not doing it.
 
-### W8. Let the orbs chill at 30 fps
-- **The problem:** each visible orb runs its own private animation loop drawing ~300 tiny
-  particles per frame, as fast as your monitor allows. Six to ten concurrent tool rows means
-  six to ten of these loops racing your 165 Hz display simultaneously.
-- **What we'd change:** cap orb animation at ~30 fps — they're mood lighting, not data.
-- **The perf gain:** big parallel-agent fan-outs stay silky instead of turning the page into
-  a particle-physics benchmark.
-- <sub>`apps/web/src/turbo/orbs/TimelineOrb.tsx`</sub>
+### W8. ~~Cap orb animation at 30 fps~~ — SKIPPED (operator decision 2026-08-09)
+Leave the orbs at full frame rate. Not doing it.
 
 ### W9 + W10. Make the sidebar mind its own business
 - **The problem:** while a thread streams, its bookkeeping fields change constantly — and
@@ -220,15 +198,24 @@ the repetition and the same hardware suddenly feels twice as fast — that's the
 
 Good news first: your actual chat traffic **already bypasses the relay** — it flows straight
 from your devices to your PC through the tunnel. The relay only handles logins, linking, and
-status pings. But its database is one server in Germany while the relay itself runs at
-Cloudflare's edge — so every question it asks the database is an intercontinental phone call.
-The whole game here is: make fewer calls.
+status pings.
+
+**Where the relay's database actually lives** (corrected — the first draft wrongly said
+"Germany"): the relay code runs on Cloudflare's network, answering from whichever Cloudflare
+location is closest to the device asking. Its database is the Supabase Postgres running on
+your `openclaw` Hetzner server in **Ashburn, Virginia** — the same box that runs OpenClaw
+(`178.156.253.60`, confirmed against your Hetzner account; ~10 ms from your desk on a clean
+path). So every question the relay asks its database is a hop from Cloudflare to that one
+Virginia box and back. Short from home; longer from a phone on the road hitting a distant
+Cloudflare location. Either way the math is the same: **asking six questions when two will do
+makes every request several times slower than it needs to be** — the game here is simply
+"make fewer trips," and every gain below stands regardless of geography.
 
 ### ⭐ R1. Stop preparing push notifications we will never send
 - **The problem:** the relay's busiest endpoint fires on every agent status change. Most of
-  the long-distance database calls it makes exist to prepare **push notifications** — for the
-  Apple push system this fork has permanently *disabled*. It gathers the data, hands it to a
-  component whose job is "do nothing," and throws it all away. Every time.
+  the database trips it makes exist to prepare **push notifications** — for the Apple push
+  system this fork has permanently *disabled*. It gathers the data, hands it to a component
+  whose job is "do nothing," and throws it all away. Every time.
 - **What we'd change:** a "store the record, skip the notification prep" version of that
   component, plugged in from our own fork-owned wiring — same pattern we already use to
   disable Apple push. Zero upstream code touched.
@@ -258,24 +245,18 @@ The whole game here is: make fewer calls.
 
 ### R4. Remember answers that almost never change
 - **The problem:** "which environment belongs to this user?" only changes when you link or
-  unlink a device — maybe once a month. The relay asks Germany this question fresh on
-  **every request**.
-- **What we'd change:** remember those answers at the edge for 5–15 seconds, and forget them
-  instantly on the three operations that can change them. Built in our own wiring layer.
-- **The perf gain:** connection and status checks go from two intercontinental calls to
-  usually **zero** — they answer from memory at the edge, right next to you.
+  unlink a device — maybe once a month. The relay asks the Virginia database this question
+  fresh on **every request**.
+- **What we'd change:** remember those answers inside the relay for 5–15 seconds, and forget
+  them instantly on the three operations that can change them. Built in our own wiring layer.
+- **The perf gain:** connection and status checks go from two database trips to usually
+  **zero** — answered from the relay's own short-term memory.
 - <sub>fork-owned layers over `infra/relay/src/environments/*`</sub>
 
-### R2. Move the "have I seen this request before?" check to the edge (the big one, do last)
-- **The problem:** for security, every authenticated request first writes a small
-  "seen-it" note — to the Germany database, before doing anything else. Even read-only
-  requests pay this intercontinental toll at the front door.
-- **What we'd change:** keep those notes in a Cloudflare Durable Object — a tiny bit of
-  storage that lives at the edge and is purpose-built for exactly this kind of check. More
-  engineering than the others, which is why it's last.
-- **The perf gain:** every mobile and CLI request drops one full long-distance round trip —
-  the single biggest latency cut the relay has to give.
-- <sub>`infra/relay/src/auth/DpopProofs.ts:53-81`</sub>
+### R2. ~~Move the replay-protection check to the edge~~ — SKIPPED (operator decision 2026-08-09)
+Not touching this. (Was: move the per-request "have I seen this request before?" security
+note from Postgres into a Cloudflare Durable Object.) It's the most invasive relay change and
+touches security-critical code — staying away by choice.
 
 > ⚠️ One booby trap for whoever implements relay changes: never hand a raw database query
 > object to `Effect.all` — it locks the Worker at 100 % CPU. Some code here is sequential
@@ -296,15 +277,23 @@ The whole game here is: make fewer calls.
   for the phone app.
 - <sub>`packages/client-runtime/src/state/terminalSession.ts:65-141`</sub>
 
-### ⭐ C2. Deliver streamed words by the trayful, not one at a time
-- **The problem:** every streamed word individually takes a lock, updates state six times,
-  and triggers a screen re-render — like a waiter making thirty separate kitchen trips for
-  thirty fries. Your screen only refreshes 60–165 times a second anyway; updates between
-  refreshes are invisible.
-- **What we'd change:** collect everything that arrives within ~16 ms and apply it in one
-  batch — one trip, one render, same order, same result.
-- **The perf gain:** cuts the cost of *everything else in this list that happens per word* by
-  3–5×. This is the multiplier fix — it makes every other streaming fix count more.
+### ⭐ C2. Pool incoming words and blip them onto the screen in batches
+- **First, what this does NOT touch:** nothing about "streaming" as a technology changes.
+  The agent connection, the wire protocol, the server — all untouched. Words arrive from the
+  network exactly as they do today. This item is *only* about how often the **screen**
+  processes what already arrived. It is exactly "pool responses and blip them in."
+- **The problem:** today, every single arriving word is processed the instant it lands —
+  each one takes a lock, updates state six times, and triggers a screen re-render. That's
+  like a waiter making thirty separate kitchen trips for thirty fries. Your screen only
+  refreshes 60–165 times a second anyway, so most of those individual updates were never
+  even visible.
+- **What we'd change:** pool whatever arrived and blip it in as one batch. The pooling
+  window is a knob we choose: ~16 ms pools per screen-frame (text looks exactly as "live" as
+  today), or coarser — say 100–250 ms — where text visibly arrives in small chunks and the
+  app does even less work. Same words, same order, same result either way.
+- **The perf gain:** cuts the cost of everything else that happens per word by 3–5× at the
+  16 ms setting, more at coarser settings. This is the multiplier fix — it makes every other
+  fix in this list count more.
 - <sub>`packages/client-runtime/src/state/threads.ts:255-292, 402-406`</sub>
 
 ### ⭐ C6-check. Five minutes that might save mobile 8× its data
@@ -361,10 +350,9 @@ The whole game here is: make fewer calls.
 # The order we'd do it in
 
 **Wave 1 — an afternoon of tiny, zero-risk changes:**
-S4 (database fast mode) · W3 (delete the five re-sorts) · W4 (cheap comparisons) · W7 (tell
-orbs the theme) · W6 (calm the glow) · R5 (timeout constant) · C6-check (phone compression).
-Each is a few lines; several are pure deletions. Together they already make streaming, idle
-GPU, and relay errors noticeably better.
+S4 (database fast mode) · W3 (delete the five re-sorts) · W4 (cheap comparisons) · R5
+(timeout constant) · C6-check (phone compression). Each is a few lines; several are pure
+deletions.
 
 **Wave 2 — the two "quadratic monsters" and the relay hot path:**
 W1 (code blocks blip in complete instead of rendering while streaming) · S2 + C1 (terminal,
@@ -373,8 +361,11 @@ This wave is where "Turbo feels twice as fast" actually happens.
 
 **Wave 3 — the bigger rebuilds, measuring as we go:**
 S1 + S5 (small lookups) · S3 (projector map) · W11 (bundle splitting) · W9/C3 (keyed stores)
-· C4 (cheaper unpacking) · S6 (shared fan-out) · S8/S9 (lazy diffs) · R4 (edge memory) ·
-C6/C7 (small envelopes) · R2 (edge security check).
+· C4 (cheaper unpacking) · S6 (shared fan-out) · S8/S9 (lazy diffs) · R4 (relay short-term
+memory) · C6/C7 (small envelopes).
+
+**Skipped by operator decision (2026-08-09):** W6, W7, W8 (glow and orbs stay exactly as
+they are) · R2 (replay-protection stays in Postgres).
 
 **Who owns what:** our own code (relay wiring, orbs, Turbo seams) we change directly. For
 fixes in Theo's code, the smart move is often to send them upstream as small PRs — perf
