@@ -33,6 +33,17 @@ fork's change.
   provider groups.
 - **Optional** `infra/relay/src/observability.ts` — Axiom resources require the complete pair.
 - **Optional** `infra/relay/src/worker.ts` — APNs queues and tracing layers are conditional.
+- **Tuned** `infra/relay/src/environments/EnvironmentConnector.ts` —
+  `ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS` is 7s so the mint budget can actually expire inside the
+  relay's 9s `RELAY_REQUEST_DEADLINE_MS`; upstream's 10s never fires. On conflict, keep the
+  upstream timeout machinery and re-set only that constant; never raise it to or above the
+  request deadline.
+- **Tuned** `infra/relay/src/http/Api.ts` — the Clerk OAuth fallback reuses one
+  `createClerkClient` instance per relay configuration (`clerkOAuthClient`, a `WeakMap` keyed on
+  the config service) instead of building one per request. On conflict, take the upstream
+  `verifyClerkOAuthBearerToken` body and re-swap only the inline `createClerkClient({...})` call
+  for `clerkOAuthClient(config)`; the session-JWT path, the fallback order, the client options,
+  and the `ClerkTokenVerificationFailed` mapping stay as upstream ships them.
 - **Tuned** `apps/server/src/persistence/Layers/Sqlite.ts` — the shared `setup` layer adds
   `PRAGMA synchronous = NORMAL;` (the standard WAL companion) after the existing `foreign_keys`
   and `journal_mode` pragmas. On conflict, take the upstream `setup` body and re-add only the

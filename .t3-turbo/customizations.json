@@ -603,6 +603,33 @@
       ]
     },
     {
+      "id": "relay-request-budget-and-clerk-client",
+      "status": "implemented",
+      "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",
+      "checks": [
+        {
+          "path": "infra/relay/src/http/Api.ts",
+          "markers": [
+            "const clerkOAuthClients = new WeakMap<",
+            "function clerkOAuthClient(config: RelayConfiguration.RelayConfiguration[\"Service\"])",
+            "const client = clerkOAuthClient(config);",
+            "export const RELAY_REQUEST_DEADLINE_MS = 9_000;"
+          ]
+        },
+        {
+          "path": "infra/relay/src/environments/EnvironmentConnector.ts",
+          "markers": ["export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `infra/relay/src/http/Api.ts`",
+            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-policy",
       "status": "policy",
       "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",

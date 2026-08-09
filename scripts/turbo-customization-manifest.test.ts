@@ -152,6 +152,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "official-data-import",
     "product-identity-and-updater",
     "relay-policy",
+    "relay-request-budget-and-clerk-client",
     "sqlite-fast-mode-pragma",
     "workspace-image-preview",
   ]);

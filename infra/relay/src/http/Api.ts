@@ -1182,16 +1182,35 @@ function verifyClerkBearerToken(
   );
 }
 
+// The Clerk backend client is a stateless credential holder, so rebuilding it on
+// every OAuth fallback only re-parses its options and re-allocates its fetch
+// machinery. The relay configuration service is a per-runtime singleton, so key
+// the client on it: built once per configuration and collected with it.
+const clerkOAuthClients = new WeakMap<
+  RelayConfiguration.RelayConfiguration["Service"],
+  ReturnType<typeof createClerkClient>
+>();
+
+function clerkOAuthClient(config: RelayConfiguration.RelayConfiguration["Service"]) {
+  const cached = clerkOAuthClients.get(config);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const client = createClerkClient({
+    secretKey: Redacted.value(config.clerkSecretKey),
+    publishableKey: config.clerkPublishableKey,
+  });
+  clerkOAuthClients.set(config, client);
+  return client;
+}
+
 function verifyClerkOAuthBearerToken(
   config: RelayConfiguration.RelayConfiguration["Service"],
   token: string,
 ) {
   return Effect.tryPromise({
     try: async () => {
-      const client = createClerkClient({
-        secretKey: Redacted.value(config.clerkSecretKey),
-        publishableKey: config.clerkPublishableKey,
-      });
+      const client = clerkOAuthClient(config);
       const state = await client.authenticateRequest(
         new Request(config.relayIssuer, {
           headers: { authorization: `Bearer ${token}` },
