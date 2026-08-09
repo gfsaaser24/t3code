@@ -141,7 +141,10 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     { id: "relay-portal", ref: "refs/heads/infra/t3turbo-relay" },
   ]);
   assert.deepStrictEqual(result.manifest.seams.map((seam) => seam.id).sort(), [
+    "agent-docs-operating-model",
     "canonical-icon-pipeline",
+    "changelog-and-runbook",
+    "cheap-timestamp-and-sort-keys",
     "file-explorer",
     "markdown-preview-preference",
     "multi-chat-pane-workspace",
@@ -149,6 +152,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "official-data-import",
     "product-identity-and-updater",
     "relay-policy",
+    "sqlite-fast-mode-pragma",
     "workspace-image-preview",
   ]);
   assert.strictEqual(multiChat?.status, "implemented");

@@ -39,6 +39,25 @@ fork's change.
   `synchronous` line, still after `journal_mode`; never change the other two pragmas.
 - **Additive** `apps/server/src/persistence/Layers/SqlitePragmas.test.ts` — asserts the pragma is
   live on fresh in-memory and file-backed connections. On conflict, keep the fork file.
+- **Tuned** `apps/web/src/session-logic.ts` — a local `compareIsoTimestamps` helper replaces
+  `String.prototype.localeCompare` at the seven timestamp comparison sites (pending approvals,
+  pending user inputs, both proposed-plan picks, activity order, timeline order, checkpoint turn
+  counts). On conflict, take the upstream comparator bodies and re-swap only the timestamp
+  operands; never touch the `id.localeCompare` tiebreaks — ids are not fixed-width and the
+  collation decides real ordering there.
+- **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar` and
+  `sortSettledThreadsForSidebar` are decorate-sorts: the sort key is resolved once per row instead
+  of inside the comparator. On conflict, take the upstream comparator verbatim and re-wrap it in
+  the decoration; the comparator body, the `id.localeCompare` tiebreak, and the pinned-thread
+  ordering path must stay as upstream ships them.
+- **Tuned** `packages/client-runtime/src/state/threadSort.ts` — the keyless half of
+  `sortPinnedThreadsByOrderKey` orders by plain `createdAt` string comparison instead of a
+  `Date.parse` pair per comparison; this file is shared with mobile, so keep it Hermes-safe. On
+  conflict, keep the upstream keyed sort and `identityTiebreak` untouched and re-apply only the
+  keyless comparator.
+- **Additive** `packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts` — pins the
+  keyless pinned order against the pre-swap implementation, ties included. On conflict, keep the
+  fork file.
 
 ## Nightly sync conflicts
 

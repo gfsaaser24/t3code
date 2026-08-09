@@ -551,6 +551,58 @@
       ]
     },
     {
+      "id": "cheap-timestamp-and-sort-keys",
+      "status": "implemented",
+      "summary": "Product timestamps compare as plain fixed-width ISO strings instead of through the ICU collator, and the sidebar bucket sorts plus the keyless pinned block resolve each row's sort key once instead of per comparison.",
+      "checks": [
+        {
+          "path": "apps/web/src/session-logic.ts",
+          "markers": [
+            "export function compareIsoTimestamps",
+            "compareIsoTimestamps(left.createdAt, right.createdAt)",
+            "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
+            "compareIsoTimestamps(a.createdAt, b.createdAt)",
+            "compareIsoTimestamps(a.completedAt, b.completedAt)"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.logic.ts",
+          "markers": [
+            "createdAtMs: parseTimestampMs(thread.createdAt)",
+            "right.createdAtMs - left.createdAtMs",
+            "settledAtMs: timestamp === null ? 0 : Date.parse(timestamp)",
+            "right.settledAtMs - left.settledAtMs"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSort.ts",
+          "markers": ["const leftCreatedAt = left.createdAt;", "leftCreatedAt > rightCreatedAt"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts",
+          "markers": [
+            "legacySortPinnedThreadsByOrderKey",
+            "emits the pre-swap order for product-minted timestamps, ties included"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/sortOrderEquivalence.test.ts",
+          "markers": [
+            "orders every pair of product-minted timestamps exactly as localeCompare did",
+            "emits the pre-decorate order, ties included"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `apps/web/src/session-logic.ts`",
+            "**Tuned** `apps/web/src/components/Sidebar.logic.ts`",
+            "**Tuned** `packages/client-runtime/src/state/threadSort.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-policy",
       "status": "policy",
       "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",

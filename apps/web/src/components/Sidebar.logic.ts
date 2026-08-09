@@ -509,11 +509,18 @@ export function firstValidTimestamp(
 export function sortThreadsForSidebar<
   T extends { readonly id: string; readonly createdAt: string },
 >(threads: readonly T[]): T[] {
-  return [...threads].toSorted(
+  // Decorate-sort: one parse per row instead of two per comparison. The
+  // comparator and its id tiebreak are unchanged, and both `sort` and the
+  // `toSorted` it replaces are stable, so equal rows keep their input order.
+  const decorated = threads.map((thread) => ({
+    thread,
+    createdAtMs: parseTimestampMs(thread.createdAt),
+  }));
+  decorated.sort(
     (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
+      right.createdAtMs - left.createdAtMs || left.thread.id.localeCompare(right.thread.id),
   );
+  return decorated.map((entry) => entry.thread);
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
@@ -575,13 +582,18 @@ export function resolveSettledTimestamp(thread: SettledTimestampInput): string |
 export function sortSettledThreadsForSidebar<
   T extends SettledTimestampInput & { readonly id: string },
 >(threads: readonly T[]): T[] {
-  const timestampMs = (thread: T) => {
+  // Decorate-sort: resolveSettledTimestamp walks four candidates and parses
+  // each, so calling it from inside the comparator paid that walk O(n log n)
+  // times. Same comparator, same id tiebreak, same stable ordering of ties.
+  const decorated = threads.map((thread) => {
     const timestamp = resolveSettledTimestamp(thread);
-    return timestamp === null ? 0 : Date.parse(timestamp);
-  };
-  return [...threads].toSorted(
-    (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
+    return { thread, settledAtMs: timestamp === null ? 0 : Date.parse(timestamp) };
+  });
+  decorated.sort(
+    (left, right) =>
+      right.settledAtMs - left.settledAtMs || left.thread.id.localeCompare(right.thread.id),
   );
+  return decorated.map((entry) => entry.thread);
 }
 
 /** The timestamp a working thread's elapsed label counts from: the running

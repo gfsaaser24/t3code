@@ -244,13 +244,17 @@ export function sortPinnedThreadsByOrderKey<
     const rightKey = right.pinOrderKey!;
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : identityTiebreak(left, right);
   });
+  // createdAt is minted fixed width (`DateTime.formatIso`), so newest-first is
+  // a plain string comparison — the same shape as the keyed sort above, and no
+  // Date.parse pair per comparison on a list that re-sorts as threads stream.
   keyless.sort((left, right) => {
-    const leftMs = Date.parse(left.createdAt);
-    const rightMs = Date.parse(right.createdAt);
-    return (
-      (Number.isNaN(rightMs) ? 0 : rightMs) - (Number.isNaN(leftMs) ? 0 : leftMs) ||
-      identityTiebreak(left, right)
-    );
+    const leftCreatedAt = left.createdAt;
+    const rightCreatedAt = right.createdAt;
+    return leftCreatedAt > rightCreatedAt
+      ? -1
+      : leftCreatedAt < rightCreatedAt
+        ? 1
+        : identityTiebreak(left, right);
   });
   return [...keyed, ...keyless];
 }

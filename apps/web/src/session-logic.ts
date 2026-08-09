@@ -383,6 +383,17 @@ function isStalePendingRequestFailureDetail(detail: string | undefined): boolean
   );
 }
 
+/**
+ * Timestamp ordering for sort comparators. Every timestamp on the wire is
+ * minted fixed width (`DateTime.formatIso` / `toISOString`), so two operands
+ * differ first at a digit sitting at the same index — code-unit order is then
+ * identical to `localeCompare`'s, without the collator. These comparators run
+ * inside sorts that re-run per streamed word, so the collation is pure cost.
+ */
+export function compareIsoTimestamps(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function derivePendingApprovals(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
@@ -435,7 +446,7 @@ export function derivePendingApprovals(
   }
 
   return [...openByRequestId.values()].toSorted((left, right) =>
-    left.createdAt.localeCompare(right.createdAt),
+    compareIsoTimestamps(left.createdAt, right.createdAt),
   );
 }
 
@@ -534,7 +545,7 @@ export function derivePendingUserInputs(
   }
 
   return [...openByRequestId.values()].toSorted((left, right) =>
-    left.createdAt.localeCompare(right.createdAt),
+    compareIsoTimestamps(left.createdAt, right.createdAt),
   );
 }
 
@@ -654,7 +665,7 @@ export function findLatestProposedPlan(
       .filter((proposedPlan) => proposedPlan.turnId === latestTurnId)
       .toSorted(
         (left, right) =>
-          left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
+          compareIsoTimestamps(left.updatedAt, right.updatedAt) || left.id.localeCompare(right.id),
       )
       .at(-1);
     if (matchingTurnPlan) {
@@ -665,7 +676,7 @@ export function findLatestProposedPlan(
   const latestPlan = [...proposedPlans]
     .toSorted(
       (left, right) =>
-        left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
+        compareIsoTimestamps(left.updatedAt, right.updatedAt) || left.id.localeCompare(right.id),
     )
     .at(-1);
   if (!latestPlan) {
@@ -1543,7 +1554,7 @@ function compareActivitiesByOrder(
     return -1;
   }
 
-  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  const createdAtComparison = compareIsoTimestamps(left.createdAt, right.createdAt);
   if (createdAtComparison !== 0) {
     return createdAtComparison;
   }
@@ -1601,14 +1612,16 @@ export function deriveTimelineEntries(
     entry,
   }));
   return [...messageRows, ...proposedPlanRows, ...turnPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
+    compareIsoTimestamps(a.createdAt, b.createdAt),
   );
 }
 
 export function inferCheckpointTurnCountByTurnId(
   summaries: ReadonlyArray<TurnDiffSummary>,
 ): Record<TurnId, number> {
-  const sorted = [...summaries].toSorted((a, b) => a.completedAt.localeCompare(b.completedAt));
+  const sorted = [...summaries].toSorted((a, b) =>
+    compareIsoTimestamps(a.completedAt, b.completedAt),
+  );
   const result: Record<TurnId, number> = {};
   for (let index = 0; index < sorted.length; index += 1) {
     const summary = sorted[index];
