@@ -30,6 +30,8 @@ per-commit — the ingestion PR entry records the upstream range instead.
   with no change to the streaming protocol (C2); W6/W7/W8 (glow, orbs) and R2 (replay
   protection) are skipped. Corrected: the relay database is the `openclaw` Hetzner box in
   Ashburn, Virginia — not Germany.
+- Preserved the full working-session record behind the speed plan as
+  `.plans/24-speedplan-session-log.md`, carried with the docs on the `speedplan` branch.
 - Adversarially verified the speed plan with four Opus 5 reviewers (one per surface). Five
   original items collided with real functionality and were rescoped: W2+W3 (four divergent
   sort orders; naive deletion could show phantom pending approvals), R4 (caching would break
