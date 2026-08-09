@@ -1,8 +1,13 @@
 # Upstream seam
 
-`git show --name-status 774c53df b4904491` identifies these 16 unique upstream-owned paths. The
-label is the nature of this fork's change.
+`git show --name-status 774c53df b4904491` identifies 16 of these upstream-owned paths; the agent
+docs (`AGENTS.md`, `CLAUDE.md`) were added to the seam later. The label is the nature of this
+fork's change.
 
+- **Prepended** `AGENTS.md` — the "T3 Turbo — how this branch operates" section above the upstream
+  agent guide. On conflict, take the new upstream body and reapply the Turbo header verbatim.
+- **Replaced** `CLAUDE.md` — Turbo preamble plus an explicit `@AGENTS.md` import (upstream ships a
+  bare pointer). On conflict, keep the fork file.
 - **Gated** `.github/workflows/deploy-relay.yml` — fork-safe credential detection, manual dispatch,
   and external-database/optional-service inputs.
 - **Gated** `.github/workflows/release.yml` — release artifacts remain buildable when Connect is not

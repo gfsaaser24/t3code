@@ -9,6 +9,30 @@
   ],
   "seams": [
     {
+      "id": "agent-docs-operating-model",
+      "status": "implemented",
+      "summary": "Agent docs carry the T3 Turbo operating model above the upstream guide and register the seam.",
+      "checks": [
+        {
+          "path": "AGENTS.md",
+          "markers": [
+            "T3 Turbo — how this branch operates",
+            "write anything to `pingdotgg/t3code`",
+            "Turbo changes always survive ingestion",
+            "Turbo state is isolated from the official T3 install"
+          ]
+        },
+        {
+          "path": "CLAUDE.md",
+          "markers": ["@AGENTS.md", "gfsaaser24/t3code"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Prepended** `AGENTS.md`", "**Replaced** `CLAUDE.md`"]
+        }
+      ]
+    },
+    {
       "id": "product-identity-and-updater",
       "status": "implemented",
       "summary": "T3 Turbo has an isolated desktop identity, state home, and fork-owned update feed.",

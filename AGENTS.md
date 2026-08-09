@@ -1,3 +1,83 @@
+# T3 Turbo — how this branch operates
+
+> **Read this section before anything else.** This is the `turbo` branch of the
+> `gfsaaser24/t3code` fork. It is a downstream operator build of T3 Code, not the official
+> product. The upstream T3 Code agent guide follows below and still governs how you write code
+> here — but the rules in this section override it wherever they touch the fork's identity,
+> infrastructure, or upstream relationship.
+
+## The operating model
+
+1. **We do not use the stock T3 Code Connect relay.** T3 Turbo runs its own private Connect
+   stack: a self-hosted relay at `https://relay.t3turbo.pro` (Cloudflare Worker + tunnel), our
+   own Clerk instance, and self-hosted Supabase Postgres. No Axiom, no APNs. The master runbook
+   is `infra/README.md`. Client builds bake this config in from a repo-root `.env.local`
+   (gitignored) whose authoritative values are the fork's GitHub Actions variables — see
+   `docs/operations/local-build.md`. A build made without them silently compiles the Connect
+   stack out.
+
+2. **Customizations live in a seam.** Fork changes to upstream-owned files are centralized and
+   tracked in two places: `SEAM.md` (human conflict guidance per file) and
+   `.t3-turbo/customizations.json` (the machine-readable preservation contract, verified with
+   `pnpm --dir scripts turbo:customizations:verify`). If you modify an upstream-owned file,
+   register it in both. Keep Turbo-only work as a small, reviewable commit stack above the
+   upstream SHA recorded in `.t3-turbo/upstream.json`.
+
+3. **We ingest ALL upstream code daily.** The scheduled `turbo-nightly-sync.yml` workflow
+   (11:00 PM Eastern) reads official `main` from `pingdotgg/t3code` and rebases the Turbo commit
+   stack onto it. Upstream is strictly read-only from our side — **never push, open PRs, or
+   write anything to `pingdotgg/t3code`.** The only push target is `gfsaaser24/t3code`.
+
+4. **We ingest both main commits and official Nightly releases.** The newest published official
+   Nightly source tag is the deterministic version anchor; ordinary commits pushed between
+   Nightlies come along with `main`. We never download or republish an official installer —
+   Turbo installers are always built from source in our own pipeline.
+
+5. **Turbo changes always survive ingestion.** Every rebase candidate must pass the
+   customization manifest before it can be built. On conflict, automation aborts, uploads a
+   collision report, and opens an issue — it never chooses a resolution. When you resolve one:
+   start from the new upstream file, reapply only the fork behavior described in `SEAM.md`, and
+   drop a fork hunk only when upstream now provides the equivalent. Never hand-edit
+   `.t3-turbo/upstream.json` and never delete checks to make a run green.
+
+6. **Turbo state is isolated from the official T3 install.** The desktop app has its own
+   identity (`com.gabef.t3turbo`, product name "T3 Turbo"), its own state home `~/.t3-turbo`
+   (official uses `~/.t3`), and a fork-owned update feed (`nightly.yml` published only in
+   `gfsaaser24/t3code`). Moving official data into Turbo happens only through the guarded
+   one-way official import (`apps/server/src/turbo/officialImport/`): official state is opened
+   read-only, the official app must be closed, and the staging/install path is serialized by a
+   heartbeat-owned `.official-import.lock`. Never share a database, credentials, or environment
+   identity between the two installs, and never modify official state.
+
+7. **Official Turbo builds cover every ecosystem.** Published builds must include all desktop
+   platforms — macOS (arm64 + x64 dmg), Linux (AppImage), and Windows (nsis) — using the
+   platform matrix already in `.github/workflows/release.yml`, plus Android mobile via the
+   inherited EAS workflows (this operator kit is Android-only; no APNs, so iOS is out of
+   scope). The nightly sync currently publishes Windows x64 only; treat that as a gap to
+   close, not the target state.
+
+## Hard rules for agents on this branch
+
+- Upstream `pingdotgg/t3code` is read-only. All pushes go to `gfsaaser24/t3code`.
+- No secret values in this repository, ever. Placeholders in `<angle brackets>` resolve from the
+  operator's private vault at deploy time. Client-public identifiers belong in `.env.local`, not
+  in committed files.
+- The `turbo-nightly-sync.yml` workflow file must stay byte-identical on `main` and `turbo`.
+- Registered infrastructure branches (e.g. `infra/t3turbo-relay`) use normal reviewed merges and
+  are never rebased or force-pushed by product ingestion.
+- Some root scripts and docs inherited from upstream still assume the official repo or deploy
+  targets. Check where a script points before running anything that publishes, deploys, or
+  syncs.
+
+Deeper reading: `docs/internals/t3-turbo-nightly-inbound.md` (full ingestion state model),
+`.t3-turbo/README.md` (sync bootstrap), `infra/README.md` (self-host stack),
+`docs/operations/local-build.md` (local installer builds).
+
+---
+
+_The upstream T3 Code agent guide follows. It applies unless it conflicts with the Turbo rules
+above._
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs (Codex, Claude Code, Cursor, Grok, OpenCode) and serves web, desktop, and mobile clients.
