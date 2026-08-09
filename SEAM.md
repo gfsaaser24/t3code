@@ -245,6 +245,11 @@ fork's change.
   truncation window, but it does mean a very long thread's un-sequenced rows are the first to be
   dropped. Do not "fix" it during a rebase, and do not read this seam as a claim that every
   activity sort in the repo runs the shared comparator.
+- **Tuned** `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts` — the shell
+  vs detail ordering pin expects the un-sequenced row **last** (summary `"unsequenced last"`),
+  matching the shared comparator. Upstream's copy of this test put the un-sequenced row first
+  because SQLite's bare `sequence ASC` is NULLs-FIRST. On conflict, keep the fixture data and
+  put the un-sequenced expectation at the end of the array again.
 - **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar`,
   `sortSettledThreadsForSidebar`, and the fork-added `sortSnoozedThreadsForSidebar` are
   decorate-sorts: the sort key is resolved once per row instead of inside the comparator, and the

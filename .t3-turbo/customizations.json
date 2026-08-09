@@ -1184,12 +1184,20 @@
           ]
         },
         {
+          "path": "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+          "markers": [
+            "unsequenced last",
+            "keeps thread detail activity ordering consistent with shell snapshot ordering"
+          ]
+        },
+        {
           "path": "SEAM.md",
           "markers": [
             "**Additive** `packages/client-runtime/src/state/threadActivityOrder.ts`",
             "**Tuned** `packages/client-runtime/src/state/threadReducer.ts`",
             "**Tuned** `apps/mobile/src/lib/threadActivity.ts`",
             "**Tuned** `apps/web/src/session-logic.test.ts`",
+            "**Tuned** `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts`",
             "**Optional** `packages/client-runtime/package.json`"
           ]
         }

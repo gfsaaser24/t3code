@@ -1058,6 +1058,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
+      // T3 Turbo: un-sequenced rows sort LAST (store/mobile convention). A
+      // missing sequence means "not part of the provider's numbered stream",
+      // not "oldest" — checkpoint.captured fires every turn without a sequence
+      // and must not jump to the top of the thread. The fixture below still
+      // inserts the un-sequenced row first in the SQL text; only the ORDER BY
+      // puts it last in the returned array.
       yield* sql`
         INSERT INTO projection_thread_activities (
           activity_id,
@@ -1077,7 +1083,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             NULL,
             'info',
             'runtime.note',
-            'unsequenced first',
+            'unsequenced last',
             '{"source":"unsequenced"}',
             NULL,
             '2026-04-01T00:00:06.000Z'
@@ -1116,15 +1122,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       assert.deepEqual(snapshot.threads[0]?.activities ?? [], [
         {
-          id: asEventId("activity-unsequenced"),
-          tone: "info",
-          kind: "runtime.note",
-          summary: "unsequenced first",
-          payload: { source: "unsequenced" },
-          turnId: null,
-          createdAt: "2026-04-01T00:00:06.000Z",
-        },
-        {
           id: asEventId("activity-sequence-1"),
           tone: "info",
           kind: "runtime.note",
@@ -1143,6 +1140,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           turnId: null,
           sequence: 2,
           createdAt: "2026-04-01T00:00:04.000Z",
+        },
+        {
+          id: asEventId("activity-unsequenced"),
+          tone: "info",
+          kind: "runtime.note",
+          summary: "unsequenced last",
+          payload: { source: "unsequenced" },
+          turnId: null,
+          createdAt: "2026-04-01T00:00:06.000Z",
         },
       ]);
     }),
