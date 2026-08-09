@@ -155,6 +155,8 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
   assert.isTrue(
     multiChat?.checks.some((check) => check.path.startsWith("apps/web/src/turbo/chatPanes/")),
   );
+  // Upstream 0de954073 renamed SidebarV2.tsx to Sidebar.tsx; the pane seam's
+  // marker moved with it, so only the surviving path is registered.
   assert.deepStrictEqual(
     multiChat?.checks
       .map((check) => check.path)
@@ -164,7 +166,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
           path === "apps/web/src/components/SidebarV2.tsx",
       )
       .sort(),
-    ["apps/web/src/components/Sidebar.tsx", "apps/web/src/components/SidebarV2.tsx"],
+    ["apps/web/src/components/Sidebar.tsx"],
   );
   assert.isTrue(
     multiChat?.checks.some((check) => check.path.endsWith("chatPanePersistence.test.ts")),

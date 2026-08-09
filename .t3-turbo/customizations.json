@@ -48,7 +48,10 @@
       "status": "implemented",
       "summary": "The canonical Turbo icon and registered web, desktop, mobile, marketing, and widget derivatives remain present.",
       "checks": [
-        { "path": "t3turbo.png", "markers": [] },
+        {
+          "path": "t3turbo.png",
+          "markers": []
+        },
         {
           "path": "scripts/lib/turbo-brand-assets.ts",
           "markers": [
@@ -65,13 +68,34 @@
           "path": "scripts/export-turbo-icons.ts",
           "markers": ["TURBO_BRAND_ASSET_PATHS", "--check"]
         },
-        { "path": "assets/turbo/t3turbo-windows.ico", "markers": [] },
-        { "path": "assets/turbo/t3turbo.icns", "markers": [] },
-        { "path": "assets/turbo/t3turbo-ios-1024.png", "markers": [] },
-        { "path": "assets/turbo/t3turbo-web-favicon.ico", "markers": [] },
-        { "path": "apps/mobile/assets/t3turbo-android-monochrome.png", "markers": [] },
-        { "path": "apps/mobile/assets/t3turbo-android-notification.png", "markers": [] },
-        { "path": "apps/mobile/assets/widget/T3Mark.png", "markers": [] },
+        {
+          "path": "assets/turbo/t3turbo-windows.ico",
+          "markers": []
+        },
+        {
+          "path": "assets/turbo/t3turbo.icns",
+          "markers": []
+        },
+        {
+          "path": "assets/turbo/t3turbo-ios-1024.png",
+          "markers": []
+        },
+        {
+          "path": "assets/turbo/t3turbo-web-favicon.ico",
+          "markers": []
+        },
+        {
+          "path": "apps/mobile/assets/t3turbo-android-monochrome.png",
+          "markers": []
+        },
+        {
+          "path": "apps/mobile/assets/t3turbo-android-notification.png",
+          "markers": []
+        },
+        {
+          "path": "apps/mobile/assets/widget/T3Mark.png",
+          "markers": []
+        },
         {
           "path": "apps/mobile/app.config.ts",
           "markers": [
@@ -433,10 +457,6 @@
         },
         {
           "path": "apps/web/src/components/Sidebar.tsx",
-          "markers": ["openChatPaneTarget({ kind: \"server\", threadRef }, chatPaneSide)"]
-        },
-        {
-          "path": "apps/web/src/components/SidebarV2.tsx",
           "markers": ["openChatPaneTarget({ kind: \"server\", threadRef }, chatPaneSide)"]
         },
         {
