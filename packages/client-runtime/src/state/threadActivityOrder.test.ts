@@ -40,25 +40,45 @@ function activity(
 }
 
 describe("compareThreadActivities — the missing-sequence convention", () => {
-  it("sorts un-numbered legacy rows before every numbered row", () => {
-    // Migration 008 added `sequence` with no backfill, so the rows without it
-    // are by construction the oldest rows in their thread. Both the server SQL
-    // (SQLite orders NULL first under ASC) and the pre-unification web
-    // comparator put them first; the store and mobile used MAX_SAFE_INTEGER
-    // and put them last. First wins: it is the chronologically correct one and
-    // the one the rendered web timeline already showed.
-    const legacy = activity("a-legacy", "tool.started");
+  it("sorts un-sequenced rows after every numbered row", () => {
+    // A missing sequence does NOT mean "oldest". Only
+    // ProviderRuntimeIngestion numbers what it emits; CheckpointReactor,
+    // ws.ts's setup scripts and ProviderCommandReactor's error rows all append
+    // un-sequenced activities on LIVE threads. MAX_SAFE_INTEGER sinks them,
+    // which is what the store reducer and mobile always did and therefore what
+    // the rendered thread timeline has always shown.
+    const unsequenced = activity("a-unsequenced", "tool.started");
     const numbered = activity("b-numbered", "tool.started", { sequence: 0 });
 
-    expect(compareThreadActivities(legacy, numbered)).toBe(-1);
-    expect(compareThreadActivities(numbered, legacy)).toBe(1);
-    expect(sortThreadActivities([numbered, legacy]).map((row) => row.id)).toEqual([
-      "a-legacy",
+    expect(compareThreadActivities(unsequenced, numbered)).toBe(1);
+    expect(compareThreadActivities(numbered, unsequenced)).toBe(-1);
+    expect(sortThreadActivities([unsequenced, numbered]).map((row) => row.id)).toEqual([
       "b-numbered",
+      "a-unsequenced",
     ]);
   });
 
-  it("falls through to createdAt when both rows are un-numbered", () => {
+  it("keeps a live checkpoint row at the END of a mixed thread", () => {
+    // The regression this convention exists to prevent: every turn's
+    // "Checkpoint captured" row is emitted with no sequence, so under a
+    // missing-FIRST convention it hoists itself above the thread's very first
+    // provider row.
+    const window: ReadonlyArray<OrchestrationThreadActivity> = [
+      activity("checkpoint-1", "checkpoint.captured", {
+        createdAt: "2026-08-09T12:00:09.000Z",
+      }),
+      activity("a-started", "tool.started", { sequence: 1 }),
+      activity("b-completed", "tool.completed", { sequence: 2 }),
+    ];
+
+    expect(sortThreadActivities(window).map((row) => row.id)).toEqual([
+      "a-started",
+      "b-completed",
+      "checkpoint-1",
+    ]);
+  });
+
+  it("falls through to createdAt when both rows are un-sequenced", () => {
     const earlier = activity("z-earlier", "tool.started", { createdAt: DEFAULT_CREATED_AT });
     const later = activity("a-later", "tool.started", {
       createdAt: "2026-08-09T12:00:01.000Z",
@@ -103,14 +123,14 @@ describe("compareThreadActivities — the phantom pending-approval hazard", () =
     const window: ReadonlyArray<OrchestrationThreadActivity> = [
       activity("d-resolved", "approval.resolved", { sequence: 4 }),
       activity("c-requested", "approval.requested", { sequence: 4 }),
-      activity("legacy-1", "session.started"),
+      activity("unsequenced-1", "session.started"),
       activity("b-completed", "tool.completed", { sequence: 1 }),
       activity("a-started", "tool.started", { sequence: 1 }),
     ];
 
     const ids = sortThreadActivities(window).map((row) => row.id);
 
-    expect(ids).toEqual(["legacy-1", "a-started", "b-completed", "c-requested", "d-resolved"]);
+    expect(ids).toEqual(["a-started", "b-completed", "c-requested", "d-resolved", "unsequenced-1"]);
     // Sorting an already-sorted window is idempotent: the boundary sort cannot
     // shuffle what the store handed it.
     expect(sortThreadActivities(sortThreadActivities(window)).map((row) => row.id)).toEqual(ids);

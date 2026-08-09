@@ -125,18 +125,32 @@ fork's change.
   re-delete the activity re-sorts; never touch the `id.localeCompare` tiebreaks — ids are not
   fixed-width and the collation decides real ordering there.
 - **Additive** `packages/client-runtime/src/state/threadActivityOrder.ts` — the ONE canonical
-  activity comparator for the four **client-visible** orderings (`sequence`, with un-numbered
-  legacy rows first, then `createdAt`, then lifecycle phase, then id compared by code unit) plus
-  `compareIsoTimestamps`. Shared by the store, the older-page merge, web, and mobile; it is loaded
-  by mobile, so it must stay Hermes-safe — never reintroduce `localeCompare` here, on the ids or
-  anywhere else. On conflict, keep the fork file.
+  activity comparator for the four **client-visible** orderings (`sequence`, with un-sequenced
+  rows LAST via `MAX_SAFE_INTEGER`, then `createdAt`, then lifecycle phase, then id compared by
+  code unit) plus `compareIsoTimestamps`. Shared by the store, the older-page merge, web, and
+  mobile; it is loaded by mobile, so it must stay Hermes-safe — never reintroduce `localeCompare`
+  here, on the ids or anywhere else. The missing-sequence convention is load-bearing and easy to
+  get backwards: un-sequenced is NOT a legacy-only population, because `CheckpointReactor`
+  ("Checkpoint captured", every turn), `ws.ts`'s setup-script rows and `ProviderCommandReactor`'s
+  error rows all append with no sequence on live threads. Sinking them is what the store reducer
+  and mobile always did and therefore what the rendered timeline has always shown; hoisting them
+  puts every turn's checkpoint row above the thread's first activity. On conflict, keep the fork
+  file.
 - **Additive** `packages/client-runtime/src/state/threadActivityOrder.test.ts` — pins the
-  missing-sequence convention and the phantom-pending-approval tie (resolved stays after
-  requested). On conflict, keep the fork file.
+  missing-sequence convention (including a mixed thread whose live checkpoint row must land at the
+  END) and the phantom-pending-approval tie (resolved stays after requested). On conflict, keep
+  the fork file.
+- **Additive** `apps/server/src/turbo/threadActivityOrderEquivalence.test.ts` — the drift guard
+  for the four shipped `ORDER BY` copies: each clause must appear verbatim in its source file AND
+  must return exactly `sortThreadActivities(corpus)` when run over a generated corpus in an
+  in-memory SQLite. It reaches the comparator by relative path because `apps/server` does not
+  depend on `@t3tools/client-runtime`. On conflict, keep the fork file; if upstream rewrites an
+  `ORDER BY`, update the matching entry in `SHIPPED_CLAUSES` rather than deleting the test.
 - **Tuned** `packages/client-runtime/src/state/threadReducer.ts` — the local `activityOrder`
   combinator is replaced by the shared `threadActivityOrder` (it now also carries the lifecycle
-  tiebreak, and un-numbered rows sort first instead of last). On conflict, keep the upstream
-  reducer body and re-point only the `Arr.sort` argument.
+  tiebreak; the `?? Number.MAX_SAFE_INTEGER` missing-sequence convention is unchanged from
+  upstream). On conflict, keep the upstream reducer body and re-point only the `Arr.sort`
+  argument.
 - **Tuned** `packages/client-runtime/src/state/threads.ts` — `mergeOlderPage` runs its merged
   `activities` through `sortThreadActivities`, because consumers no longer re-sort defensively.
   On conflict, keep the upstream merge and re-wrap only that one field.
@@ -149,21 +163,29 @@ fork's change.
   `sortThreadActivities`. On conflict, delete the upstream local comparator again rather than
   keeping two.
 - **Tuned** `apps/server/src/persistence/Layers/ProjectionThreadActivities.ts` and
-  `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` — both activity `ORDER BY`
-  clauses carry the lifecycle-rank `CASE` (started → 0, completed/resolved → 2, else 1) between
-  `created_at` and the id, so the SQL emits the same total order as the shared comparator: NULL
-  sequences first (SQLite's NULLs-first under ASC), then `created_at`, then that `CASE`, then
-  `activity_id ASC` under the BINARY collation — which is why the shared comparator's id tiebreak
-  is code-unit and not `localeCompare`. On conflict, take the upstream `ORDER BY` and re-insert
-  only that `CASE`; leave the NULL-sequence handling alone.
+  `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` — **all four** activity
+  `ORDER BY` clauses (`listProjectionThreadActivityRows`, and `listThreadActivityRows`,
+  `listThreadActivityRowsByThread`, `listThreadActivityRowsByThreadWindow`) carry the identical
+  pair of `CASE`s so the SQL emits the same total order as the shared comparator:
+  `CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC` (un-sequenced rows LAST — mandatory, because
+  SQLite defaults to NULLs-FIRST and a bare `sequence ASC` disagrees with the comparator), then
+  `sequence`, then `created_at`, then the lifecycle-rank `CASE` (started → 0, completed/resolved
+  → 2, else 1), then `activity_id ASC` under the BINARY collation — which is why the shared
+  comparator's id tiebreak is code-unit and not `localeCompare`. The last two of those four feed
+  `getThreadDetailById`, the primary thread-detail snapshot, so a copy missing a `CASE` shows up
+  as a mis-ordered thread rather than a test failure. On conflict, take the upstream `ORDER BY`
+  and re-insert both `CASE`s into every copy;
+  `apps/server/src/turbo/threadActivityOrderEquivalence.test.ts` is the mechanical guard and will
+  name whichever copy drifted.
   Scope note for a future rebaser: the unification covers the **four client-visible** orderings
-  (store, web view layer, mobile, and these two projection queries). A **fifth** activity
-  comparator lives in upstream `apps/server/src/orchestration/projector.ts:171-186` — deliberately
-  left alone. It only decides which rows survive the `.slice(-500)` truncation window at
-  `projector.ts:790`, never reaches a client, and already agrees on the missing-sequence
-  convention (un-numbered first); it has no lifecycle rank. Do not "fix" it during a rebase, and
-  do not read this seam as a claim that every activity sort in the repo runs the shared
-  comparator.
+  (store, web view layer, mobile, and these projection queries). A **fifth** activity comparator
+  lives in upstream `apps/server/src/orchestration/projector.ts:171-186` — deliberately left
+  alone. It only decides which rows survive the `.slice(-500)` truncation window at
+  `projector.ts:790` and never reaches a client. It orders un-sequenced rows FIRST, which is the
+  opposite of the shared comparator; that is tolerable precisely because it only picks a
+  truncation window, but it does mean a very long thread's un-sequenced rows are the first to be
+  dropped. Do not "fix" it during a rebase, and do not read this seam as a claim that every
+  activity sort in the repo runs the shared comparator.
 - **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar`,
   `sortSettledThreadsForSidebar`, and the fork-added `sortSnoozedThreadsForSidebar` are
   decorate-sorts: the sort key is resolved once per row instead of inside the comparator, and the

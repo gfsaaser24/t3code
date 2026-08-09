@@ -968,7 +968,7 @@
     {
       "id": "unified-activity-order",
       "status": "implemented",
-      "summary": "One canonical activity comparator (sequence with un-numbered legacy rows first, then createdAt, then lifecycle phase, then id) replaces four divergent orderings across the store, the web view layer, mobile, and the server SQL; the older-page merge sorts its output and the five per-derivation re-sorts in web collapse into one boundary sort.",
+      "summary": "One canonical activity comparator (sequence with un-sequenced rows LAST via MAX_SAFE_INTEGER, then createdAt, then lifecycle phase, then id) replaces four divergent orderings across the store, the web view layer, mobile, and the server SQL; all four server ORDER BY clauses spell the null sink and the lifecycle rank out explicitly, a fork-owned equivalence test pins SQL against TS, the older-page merge sorts its output and the five per-derivation re-sorts in web collapse into one boundary sort.",
       "checks": [
         {
           "path": "packages/client-runtime/src/state/threadActivityOrder.ts",
@@ -976,15 +976,24 @@
             "export function compareThreadActivities",
             "export function compareIsoTimestamps",
             "export function activityLifecycleRank",
-            "const MISSING_SEQUENCE = -1;",
+            "const MISSING_SEQUENCE = Number.MAX_SAFE_INTEGER;",
             "export function sortThreadActivities"
           ]
         },
         {
           "path": "packages/client-runtime/src/state/threadActivityOrder.test.ts",
           "markers": [
-            "sorts un-numbered legacy rows before every numbered row",
+            "sorts un-sequenced rows after every numbered row",
+            "keeps a live checkpoint row at the END of a mixed thread",
             "keeps resolved after requested through the full pipeline order"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/threadActivityOrderEquivalence.test.ts",
+          "markers": [
+            "const SHIPPED_CLAUSES: ReadonlyArray<ShippedClause>",
+            "ships each ORDER BY clause verbatim in its source file",
+            "returns sortThreadActivities' order under every shipped clause"
           ]
         },
         {
@@ -1023,6 +1032,7 @@
         {
           "path": "apps/server/src/persistence/Layers/ProjectionThreadActivities.ts",
           "markers": [
+            "CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC",
             "WHEN kind LIKE '%.started' THEN 0",
             "WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2"
           ]
@@ -1030,6 +1040,7 @@
         {
           "path": "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts",
           "markers": [
+            "CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC",
             "WHEN kind LIKE '%.started' THEN 0",
             "WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2"
           ]

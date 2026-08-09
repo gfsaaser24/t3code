@@ -36,16 +36,33 @@ export function activityLifecycleRank(kind: string): number {
 /**
  * Sort key for an activity that has no `sequence`.
  *
- * Migration `008_ProjectionThreadActivitySequence` added the column with **no
- * backfill**, so every row written before it ran carries `sequence: undefined`
- * — and those rows are, by construction, the oldest rows in their thread.
- * Sequence numbers are `NonNegativeInt`, so `-1` places the un-numbered legacy
- * rows ahead of every numbered one, which is both chronologically right and
- * the convention the server already ships: SQLite orders `NULL` first under
- * `ORDER BY sequence ASC`, and `ProjectionThreadActivities` spells that out
- * with `CASE WHEN sequence IS NULL THEN 0 ELSE 1 END`.
+ * Un-numbered rows are NOT a legacy-only population. Migration
+ * `008_ProjectionThreadActivitySequence` added the column with no backfill, so
+ * pre-008 rows have no sequence — but several LIVE emitters also append
+ * `thread.activity.append` with no `sequence` at all: `CheckpointReactor`
+ * ("Checkpoint captured", every turn, plus the capture/revert failure rows),
+ * `ws.ts`'s setup-script activities, and `ProviderCommandReactor`'s error
+ * rows. Only `ProviderRuntimeIngestion.runtimeEventToActivities` numbers what
+ * it emits.
+ *
+ * So a missing sequence means "not part of the provider's numbered stream",
+ * not "oldest". `MAX_SAFE_INTEGER` sinks those rows below the numbered ones
+ * and lets `createdAt` order them among themselves — which is what the store
+ * reducer and mobile always did, and therefore what the rendered thread
+ * timeline has always shown. Under a missing-FIRST convention every turn's
+ * "Checkpoint captured" row would hoist itself above the thread's very first
+ * activity.
+ *
+ * The cost is that genuine pre-008 rows sit at the BOTTOM of an old thread
+ * rather than the top. That is the accepted trade — it is the behavior the
+ * store and mobile already shipped, and it is the only convention that keeps
+ * live un-sequenced rows in place.
+ *
+ * All four server ORDER BY clauses spell the same thing out explicitly with
+ * `CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC`, because SQLite's default
+ * is NULLs-FIRST and a bare `sequence ASC` would disagree with this file.
  */
-const MISSING_SEQUENCE = -1;
+const MISSING_SEQUENCE = Number.MAX_SAFE_INTEGER;
 
 /**
  * The one canonical order for `OrchestrationThreadActivity` rows: sequence,
