@@ -40,6 +40,10 @@ vi.mock("@clerk/backend", () => ({
   verifyToken: vi.fn(),
 }));
 
+// Test trap: `Api.ts` caches one `createClerkClient` instance per configuration
+// in a module-level WeakMap keyed on this very object. A second test that
+// exercises the OAuth fallback must build its OWN settings object, or it will
+// silently reuse the client the first OAuth test mocked and assert nothing.
 const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   relayIssuer: "https://relay.example.test",
   apns: {

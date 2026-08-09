@@ -73,6 +73,12 @@ fork's change.
 - **Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts` — pins the 5s link
   window and proves the allocation and credential lookups still reach the database every time.
   On conflict, keep the fork file.
+- **Tuned** `infra/relay/src/http/Api.test.ts` — comment only: records that the shared
+  `relaySettings` object is the WeakMap key, so a second OAuth-path test needs its own settings
+  object or it silently reuses the first test's mocked client. On conflict, re-add the comment.
+- **Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts` — asserts the relation the tuning
+  exists for: `ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS < RELAY_REQUEST_DEADLINE_MS`. On conflict, keep
+  the fork file.
 - **Tuned** `apps/server/src/persistence/Layers/Sqlite.ts` — the shared `setup` layer adds
   `PRAGMA synchronous = NORMAL;` (the standard WAL companion) after the existing `foreign_keys`
   and `journal_mode` pragmas. On conflict, take the upstream `setup` body and re-add only the
@@ -112,6 +118,9 @@ fork's change.
   `compareActivitiesByOrder`/`compareActivityLifecycleRank` pair and the five
   `toSorted(compareActivitiesByOrder)` re-sorts inside the activity derivations are gone — the
   derivations take canonical order as a precondition and `ChatView` sorts once at the boundary.
+  `findLatestProposedPlan` takes a single-pass max (`latestProposedPlanBy`) instead of two
+  copy-filter-sort-`at(-1)` pipelines; keep the `<= 0` in the max loop, which is what reproduces
+  `.at(-1)`'s "last of an equal run".
   On conflict, take the upstream comparator bodies and re-swap only the timestamp operands, then
   re-delete the activity re-sorts; never touch the `id.localeCompare` tiebreaks — ids are not
   fixed-width and the collation decides real ordering there.
@@ -155,16 +164,24 @@ fork's change.
   convention (un-numbered first); it has no lifecycle rank. Do not "fix" it during a rebase, and
   do not read this seam as a claim that every activity sort in the repo runs the shared
   comparator.
-- **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar` and
-  `sortSettledThreadsForSidebar` are decorate-sorts: the sort key is resolved once per row instead
-  of inside the comparator. On conflict, take the upstream comparator verbatim and re-wrap it in
-  the decoration; the comparator body, the `id.localeCompare` tiebreak, and the pinned-thread
-  ordering path must stay as upstream ships them.
+- **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar`,
+  `sortSettledThreadsForSidebar`, and the fork-added `sortSnoozedThreadsForSidebar` are
+  decorate-sorts: the sort key is resolved once per row instead of inside the comparator, and the
+  settled key goes through the file's own NaN-sinking `parseTimestampMs`. On conflict, take the
+  upstream comparator verbatim and re-wrap it in the decoration; the comparator body, the
+  `id.localeCompare` tiebreak, and the pinned-thread ordering path must stay as upstream ships
+  them.
+- **Tuned** `apps/web/src/components/Sidebar.tsx` (timestamp seam) — the snoozed shelf calls
+  `sortSnoozedThreadsForSidebar` instead of resolving `firstValidTimestampMs` inside an inline
+  comparator. On conflict, keep upstream's bucket partition and swap only that one `toSorted` call;
+  the ordering rule (soonest wake first, no id tiebreak) must not change.
 - **Tuned** `packages/client-runtime/src/state/threadSort.ts` — the keyless half of
-  `sortPinnedThreadsByOrderKey` orders by plain `createdAt` string comparison instead of a
-  `Date.parse` pair per comparison; this file is shared with mobile, so keep it Hermes-safe. On
-  conflict, keep the upstream keyed sort and `identityTiebreak` untouched and re-apply only the
-  keyless comparator.
+  `sortPinnedThreadsByOrderKey` orders by plain `createdAt` string comparison when
+  `isCanonicalIsoTimestamp` accepts BOTH operands, and otherwise falls back to the upstream
+  `Date.parse` pair with its NaN-sinks-to-epoch behavior; this file is shared with mobile, so keep
+  it Hermes-safe. On conflict, keep the upstream keyed sort and `identityTiebreak` untouched and
+  re-apply only the keyless comparator — never drop the fallback branch, `IsoDateTime` is
+  `Schema.String` and a malformed stamp must keep sinking to the bottom of the block.
 - **Additive** `packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts` — pins the
   keyless pinned order against the pre-swap implementation, ties included. On conflict, keep the
   fork file.
@@ -175,9 +192,12 @@ fork's change.
   re-apply both swaps. Two invariants are non-negotiable: the trim must run on **both** `decode`
   and `encode` — never substitute `SchemaTransformation.trim()`, which trims on decode only — and
   `ForwardCompatibleArray` must keep per-element drop-on-failure plus its `Effect.logDebug` line.
+  The encode path must also keep wrapping a failing element's issue in a
+  `SchemaIssue.Pointer([index], …)` — the `Schema.Array` target it replaced put the index in the
+  path for free, and losing it makes a bad element in a large config unlocatable from logs.
 - **Additive** `packages/contracts/src/turbo/baseSchemas.test.ts` — pins both-directions trimming
-  (including the encode-without-decode path), per-element drop-on-failure, and the single-decode
-  count. On conflict, keep the fork file.
+  (including the encode-without-decode path), per-element drop-on-failure, the failing element's
+  index in the encode error path, and the single-decode count. On conflict, keep the fork file.
 - **Tuned** `packages/client-runtime/src/state/terminalSession.ts` — `TerminalBufferState` carries
   a running `bufferBytes` count, and `applyTerminalAttachStreamEvent` only re-encodes the buffer
   once the total passes `cap + TERMINAL_BUFFER_TRIM_SLACK_RATIO * cap`, then trims back down **to**

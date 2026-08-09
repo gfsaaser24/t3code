@@ -15,7 +15,9 @@ old orderings and the old wire bytes are part of the wave.
 - **Server writes stop waiting on the disk (S4).** SQLite was running at `synchronous=FULL`, which
   fsyncs after every commit — thousands of them per turn. The single persistence setup layer now
   also applies `synchronous=NORMAL`, the standard companion to the WAL mode already in use, so one
-  statement covers every connection the server opens. Durability trade: an app crash still loses
+  statement covers every connection the persistence layer opens. (The guarded official-import
+  staging path deliberately opens its own raw handles and keeps the default.) Durability trade: an
+  app crash still loses
   nothing; only a power loss or hard reset can drop the most recent commits. New seam
   `sqlite-fast-mode-pragma`.
 - **Timestamp comparisons stop building a collator (W4).** Every timestamp on the wire is minted
@@ -24,7 +26,8 @@ old orderings and the old wire bytes are part of the wave.
   half of the shared pinned-thread sort now compare strings directly — the shared file means mobile
   gets it too. The id tiebreaks stay on `localeCompare`: ids are not fixed width, so collation
   genuinely decides their order there.
-- **Sidebar buckets resolve each row's sort key once (W10).** Both sidebar sorts parsed timestamps
+- **Sidebar buckets resolve each row's sort key once (W10).** All three sidebar bucket sorts —
+  active, settled, and the snoozed shelf — parsed timestamps
   inside the comparator, so a bucket of n rows paid O(n log n) parses — and the settled bucket
   re-walked four candidate timestamps on every comparison. They now decorate each row once and sort
   on the precomputed key. Same comparator, same id tiebreak, same tie order; the manual pinned

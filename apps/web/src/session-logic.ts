@@ -649,29 +649,43 @@ export function deriveTurnPlans(
   return [...byTurn.values()];
 }
 
+/** The order both proposed-plan picks used to sort by: updatedAt, then id.
+    The id tiebreak stays on `localeCompare` — ids are not fixed width. */
+function compareProposedPlanOrder(left: ProposedPlan, right: ProposedPlan): number {
+  return compareIsoTimestamps(left.updatedAt, right.updatedAt) || left.id.localeCompare(right.id);
+}
+
+/** Single-pass max under that order, optionally restricted to one turn.
+    Replaces `[...plans].filter(...).toSorted(...).at(-1)`: same element, no
+    intermediate arrays. `<= 0` (not `< 0`) is what keeps the LAST of any
+    equal-comparing run, which is exactly what `.at(-1)` picked out of a
+    stable sort. */
+function latestProposedPlanBy(
+  proposedPlans: ReadonlyArray<ProposedPlan>,
+  turnId: TurnId | string | null,
+): ProposedPlan | null {
+  let latest: ProposedPlan | null = null;
+  for (const candidate of proposedPlans) {
+    if (turnId !== null && candidate.turnId !== turnId) continue;
+    if (latest === null || compareProposedPlanOrder(latest, candidate) <= 0) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
+
 export function findLatestProposedPlan(
   proposedPlans: ReadonlyArray<ProposedPlan>,
   latestTurnId: TurnId | string | null | undefined,
 ): LatestProposedPlanState | null {
   if (latestTurnId) {
-    const matchingTurnPlan = [...proposedPlans]
-      .filter((proposedPlan) => proposedPlan.turnId === latestTurnId)
-      .toSorted(
-        (left, right) =>
-          compareIsoTimestamps(left.updatedAt, right.updatedAt) || left.id.localeCompare(right.id),
-      )
-      .at(-1);
+    const matchingTurnPlan = latestProposedPlanBy(proposedPlans, latestTurnId);
     if (matchingTurnPlan) {
       return toLatestProposedPlanState(matchingTurnPlan);
     }
   }
 
-  const latestPlan = [...proposedPlans]
-    .toSorted(
-      (left, right) =>
-        compareIsoTimestamps(left.updatedAt, right.updatedAt) || left.id.localeCompare(right.id),
-    )
-    .at(-1);
+  const latestPlan = latestProposedPlanBy(proposedPlans, null);
   if (!latestPlan) {
     return null;
   }

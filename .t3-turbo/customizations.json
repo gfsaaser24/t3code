@@ -613,26 +613,39 @@
           "markers": [
             "createdAtMs: parseTimestampMs(thread.createdAt)",
             "right.createdAtMs - left.createdAtMs",
-            "settledAtMs: timestamp === null ? 0 : Date.parse(timestamp)",
-            "right.settledAtMs - left.settledAtMs"
+            "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
+            "right.settledAtMs - left.settledAtMs",
+            "export function sortSnoozedThreadsForSidebar",
+            "wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null)"
           ]
         },
         {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["snoozedThreads: sortSnoozedThreadsForSidebar(snoozed)"]
+        },
+        {
           "path": "packages/client-runtime/src/state/threadSort.ts",
-          "markers": ["const leftCreatedAt = left.createdAt;", "leftCreatedAt > rightCreatedAt"]
+          "markers": [
+            "const leftCreatedAt = left.createdAt;",
+            "leftCreatedAt > rightCreatedAt",
+            "function isCanonicalIsoTimestamp(value: string): boolean",
+            "isCanonicalIsoTimestamp(leftCreatedAt) && isCanonicalIsoTimestamp(rightCreatedAt)"
+          ]
         },
         {
           "path": "packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts",
           "markers": [
             "legacySortPinnedThreadsByOrderKey",
-            "emits the pre-swap order for product-minted timestamps, ties included"
+            "emits the pre-swap order for product-minted timestamps, ties included",
+            "emits the pre-swap order for non-canonical and malformed stamps too"
           ]
         },
         {
           "path": "apps/web/src/turbo/sortOrderEquivalence.test.ts",
           "markers": [
             "orders every pair of product-minted timestamps exactly as localeCompare did",
-            "emits the pre-decorate order, ties included"
+            "emits the pre-decorate order, ties included",
+            "sortSnoozedThreadsForSidebar (snoozed shelf)"
           ]
         },
         {
@@ -657,7 +670,8 @@
             "decode: (value) => value.trim(),",
             "encode: (value) => value.trim(),",
             "Schema.toType(Schema.Array(element))",
-            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\""
+            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
+            "new SchemaIssue.Pointer([index], error.issue)"
           ]
         },
         {
@@ -665,6 +679,7 @@
           "markers": [
             "trims on the encode-without-decode path too",
             "drops elements this build cannot decode and keeps the rest",
+            "names the failing element's index when encoding fails",
             "decodes each element exactly once"
           ]
         },
@@ -801,10 +816,20 @@
           "markers": ["export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;"]
         },
         {
+          "path": "infra/relay/src/turbo/relayRequestBudget.test.ts",
+          "markers": ["expires the environment mint inside the relay request deadline"]
+        },
+        {
+          "path": "infra/relay/src/http/Api.test.ts",
+          "markers": ["module-level WeakMap keyed on this very object"]
+        },
+        {
           "path": "SEAM.md",
           "markers": [
             "**Tuned** `infra/relay/src/http/Api.ts`",
-            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`"
+            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`",
+            "**Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts`",
+            "**Tuned** `infra/relay/src/http/Api.test.ts`"
           ]
         }
       ]
