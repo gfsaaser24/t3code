@@ -144,6 +144,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "agent-docs-operating-model",
     "canonical-icon-pipeline",
     "changelog-and-runbook",
+    "cheap-message-unpacking",
     "cheap-timestamp-and-sort-keys",
     "file-explorer",
     "markdown-preview-preference",

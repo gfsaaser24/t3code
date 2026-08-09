@@ -603,6 +603,35 @@
       ]
     },
     {
+      "id": "cheap-message-unpacking",
+      "status": "implemented",
+      "summary": "TrimmedString trims through the pure both-directions transform instead of allocating an Effect per value, and ForwardCompatibleArray decodes each element once instead of twice while keeping per-element drop-on-failure and a debug log.",
+      "checks": [
+        {
+          "path": "packages/contracts/src/baseSchemas.ts",
+          "markers": [
+            "SchemaTransformation.transform<string, string>({",
+            "decode: (value) => value.trim(),",
+            "encode: (value) => value.trim(),",
+            "Schema.toType(Schema.Array(element))",
+            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\""
+          ]
+        },
+        {
+          "path": "packages/contracts/src/turbo/baseSchemas.test.ts",
+          "markers": [
+            "trims on the encode-without-decode path too",
+            "drops elements this build cannot decode and keeps the rest",
+            "decodes each element exactly once"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/contracts/src/baseSchemas.ts`"]
+        }
+      ]
+    },
+    {
       "id": "relay-request-budget-and-clerk-client",
       "status": "implemented",
       "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",

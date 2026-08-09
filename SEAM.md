@@ -69,6 +69,16 @@ fork's change.
 - **Additive** `packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts` — pins the
   keyless pinned order against the pre-swap implementation, ties included. On conflict, keep the
   fork file.
+- **Tuned** `packages/contracts/src/baseSchemas.ts` — `TrimmedString` uses the pure
+  `SchemaTransformation.transform` instead of `transformOrFail`, and `ForwardCompatibleArray`
+  decodes each element once (keeping the decoded value and targeting `Schema.toType(...)`) instead
+  of decoding once to test and again in the target. On conflict, take the upstream bodies and
+  re-apply both swaps. Two invariants are non-negotiable: the trim must run on **both** `decode`
+  and `encode` — never substitute `SchemaTransformation.trim()`, which trims on decode only — and
+  `ForwardCompatibleArray` must keep per-element drop-on-failure plus its `Effect.logDebug` line.
+- **Additive** `packages/contracts/src/turbo/baseSchemas.test.ts` — pins both-directions trimming
+  (including the encode-without-decode path), per-element drop-on-failure, and the single-decode
+  count. On conflict, keep the fork file.
 
 ## Nightly sync conflicts
 
