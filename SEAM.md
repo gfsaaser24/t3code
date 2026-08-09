@@ -78,9 +78,12 @@ fork's change.
   re-apply both swaps. Two invariants are non-negotiable: the trim must run on **both** `decode`
   and `encode` — never substitute `SchemaTransformation.trim()`, which trims on decode only — and
   `ForwardCompatibleArray` must keep per-element drop-on-failure plus its `Effect.logDebug` line.
+  The encode path must also keep wrapping a failing element's issue in a
+  `SchemaIssue.Pointer([index], …)` — the `Schema.Array` target it replaced put the index in the
+  path for free, and losing it makes a bad element in a large config unlocatable from logs.
 - **Additive** `packages/contracts/src/turbo/baseSchemas.test.ts` — pins both-directions trimming
-  (including the encode-without-decode path), per-element drop-on-failure, and the single-decode
-  count. On conflict, keep the fork file.
+  (including the encode-without-decode path), per-element drop-on-failure, the failing element's
+  index in the encode error path, and the single-decode count. On conflict, keep the fork file.
 
 ## Nightly sync conflicts
 

@@ -620,7 +620,8 @@
             "decode: (value) => value.trim(),",
             "encode: (value) => value.trim(),",
             "Schema.toType(Schema.Array(element))",
-            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\""
+            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
+            "new SchemaIssue.Pointer([index], error.issue)"
           ]
         },
         {
@@ -628,6 +629,7 @@
           "markers": [
             "trims on the encode-without-decode path too",
             "drops elements this build cannot decode and keeps the rest",
+            "names the failing element's index when encoding fails",
             "decodes each element exactly once"
           ]
         },

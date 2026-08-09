@@ -73,6 +73,23 @@ describe("ForwardCompatibleArray", () => {
     );
   });
 
+  it("names the failing element's index when encoding fails", () => {
+    // The `Schema.Array(element)` target this replaced attached the index to
+    // the issue path. Fail-fast encoding has to re-attach it by hand, or a bad
+    // rule in a 40-entry config is unlocatable from the log line alone.
+    const Row = Schema.Struct({ id: TrimmedNonEmptyString, kind: Schema.Literal("known") });
+    const Rows = ForwardCompatibleArray(Row);
+
+    assert.throws(
+      () =>
+        Schema.encodeUnknownSync(Rows)([
+          { id: "a", kind: "known" },
+          { id: "b", kind: "not-known" },
+        ]),
+      /at \[1\]\["kind"\]/,
+    );
+  });
+
   it("decodes each element exactly once", () => {
     let decodeCalls = 0;
     const Counted = Schema.String.pipe(
