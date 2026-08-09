@@ -13,6 +13,13 @@ import { and, eq, isNull, or } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayEnvironmentLinks } from "../persistence/schema.ts";
+import {
+  forgetTtlMemo,
+  makeTtlMemo,
+  readTtlMemo,
+  writeTtlMemo,
+  type TtlMemo,
+} from "../turbo/ttlMemo.ts";
 
 export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
   readonly environmentPublicKey: string;
@@ -132,6 +139,12 @@ export class EnvironmentLinks extends Context.Service<
     readonly getForUser: (input: {
       readonly userId: string;
       readonly environmentId: string;
+      // Read past the memo, and do not populate it from this read. Mandatory for any caller that
+      // DECIDES A WRITE from what it reads: the record carries `environmentPublicKey`, and a
+      // remembered pre-rotation key would make the deciding caller revoke the previous credential
+      // while the current one stays authenticated. Status/list/connect reads stay memoized --
+      // staleness only delays their answer.
+      readonly bypassMemo?: boolean;
     }) => Effect.Effect<RelayLinkedEnvironmentRecord | null, EnvironmentLinkLookupPersistenceError>;
     readonly revokeForUser: (input: {
       readonly userId: string;
@@ -172,8 +185,6 @@ function agentAwarenessDeliveryUserKeyCondition(input: {
 const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;
 const ENVIRONMENT_LINK_LOOKUP_LIMIT = 1_024;
 
-type LinkLookupMemo<A> = Map<string, { readonly value: A; readonly expiresAtMs: number }>;
-
 function linkRecordMemoKey(input: {
   readonly userId: string;
   readonly environmentId: string;
@@ -181,51 +192,62 @@ function linkRecordMemoKey(input: {
   return `${input.userId}\u0000${input.environmentId}`;
 }
 
-function readLinkLookupMemo<A>(memo: LinkLookupMemo<A>, key: string, nowMs: number): A | null {
-  const remembered = memo.get(key);
-  if (remembered === undefined) {
-    return null;
-  }
-  if (remembered.expiresAtMs <= nowMs) {
-    memo.delete(key);
-    return null;
-  }
-  return remembered.value;
+// Dropping a key is not enough on its own. Both writers below run inside an open transaction
+// (`revokeForUser` is wrapped by `transactions.withTransaction` in the API layer), so a read that
+// lands between the drop and the commit still sees the PRE-write row and would re-cache it for a
+// full TTL that outlives the commit. Every drop therefore also raises a barrier on the key for the
+// length of one TTL: reads still answer from the database, they just may not remember the answer
+// while the barrier stands. This closes the interleave without needing a post-commit hook, and it
+// fails in the safe direction -- a blocked key costs one query, never a stale answer.
+type LinkLookupBarriers = TtlMemo<true>;
+
+function blockLinkLookup(barriers: LinkLookupBarriers, key: string, nowMs: number): void {
+  writeTtlMemo(barriers, key, true, nowMs + ENVIRONMENT_LINK_LOOKUP_TTL_MS, nowMs);
 }
 
-// Only positive answers are remembered. A missing link is the answer that a fresh link has to
-// overturn, and re-reading it costs one query on a path that is not hot.
+function isLinkLookupBlocked(barriers: LinkLookupBarriers, key: string, nowMs: number): boolean {
+  return readTtlMemo(barriers, key, nowMs) !== null;
+}
+
+// Only positive answers are remembered, and only while no barrier stands on the key. A missing
+// link is the answer that a fresh link has to overturn, and re-reading it costs one query on a
+// path that is not hot.
 function rememberLinkLookup<A>(
-  memo: LinkLookupMemo<A>,
+  memo: TtlMemo<A>,
+  barriers: LinkLookupBarriers,
   key: string,
   value: A,
   nowMs: number,
 ): void {
-  if (memo.size >= ENVIRONMENT_LINK_LOOKUP_LIMIT) {
-    for (const [rememberedKey, remembered] of memo) {
-      if (remembered.expiresAtMs <= nowMs) {
-        memo.delete(rememberedKey);
-      }
-    }
-    if (memo.size >= ENVIRONMENT_LINK_LOOKUP_LIMIT) {
-      memo.clear();
-    }
+  if (isLinkLookupBlocked(barriers, key, nowMs)) {
+    return;
   }
-  memo.set(key, { value, expiresAtMs: nowMs + ENVIRONMENT_LINK_LOOKUP_TTL_MS });
+  writeTtlMemo(memo, key, value, nowMs + ENVIRONMENT_LINK_LOOKUP_TTL_MS, nowMs);
 }
 
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
-  const linkListMemo: LinkLookupMemo<ReadonlyArray<RelayClientEnvironmentRecord>> = new Map();
-  const linkRecordMemo: LinkLookupMemo<RelayLinkedEnvironmentRecord> = new Map();
+  const linkListMemo = makeTtlMemo<ReadonlyArray<RelayClientEnvironmentRecord>>(
+    ENVIRONMENT_LINK_LOOKUP_LIMIT,
+  );
+  const linkRecordMemo = makeTtlMemo<RelayLinkedEnvironmentRecord>(ENVIRONMENT_LINK_LOOKUP_LIMIT);
+  // The two key spaces share one barrier map: a record key always contains the NUL separator that
+  // `linkRecordMemoKey` inserts, so it can never collide with a bare user id.
+  const linkLookupBarriers = makeTtlMemo<true>(ENVIRONMENT_LINK_LOOKUP_LIMIT);
   // Best effort only, for the isolate that performed the write: the TTL above, not this call,
-  // is what bounds staleness everywhere else.
-  const forgetLinkLookups = (input: {
-    readonly userId: string;
-    readonly environmentId: string;
-  }): void => {
-    linkListMemo.delete(input.userId);
-    linkRecordMemo.delete(linkRecordMemoKey(input));
+  // is what bounds staleness everywhere else. The barrier is the part that survives an open
+  // transaction -- see the comment on `blockLinkLookup`.
+  const forgetLinkLookups = (
+    input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    },
+    nowMs: number,
+  ): void => {
+    forgetTtlMemo(linkListMemo, input.userId);
+    forgetTtlMemo(linkRecordMemo, linkRecordMemoKey(input));
+    blockLinkLookup(linkLookupBarriers, input.userId, nowMs);
+    blockLinkLookup(linkLookupBarriers, linkRecordMemoKey(input), nowMs);
   };
 
   return EnvironmentLinks.of({
@@ -282,7 +304,10 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      forgetLinkLookups({ userId: input.userId, environmentId });
+      forgetLinkLookups(
+        { userId: input.userId, environmentId },
+        DateTime.toEpochMillis(yield* DateTime.now),
+      );
     }),
 
     listUsersForEnvironment: Effect.fn("relay.environment_links.list_users_for_environment")(
@@ -366,7 +391,8 @@ const make = Effect.gen(function* () {
 
     listForUser: Effect.fn("relay.environment_links.list_for_user")(function* (input) {
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-      const remembered = readLinkLookupMemo(linkListMemo, input.userId, nowMs);
+      const remembered = readTtlMemo(linkListMemo, input.userId, nowMs);
+      yield* Effect.annotateCurrentSpan({ "relay.link_lookup.memo_hit": remembered !== null });
       if (remembered !== null) {
         return remembered;
       }
@@ -410,7 +436,7 @@ const make = Effect.gen(function* () {
           ),
         );
       if (environments.length > 0) {
-        rememberLinkLookup(linkListMemo, input.userId, environments, nowMs);
+        rememberLinkLookup(linkListMemo, linkLookupBarriers, input.userId, environments, nowMs);
       }
       return environments;
     }),
@@ -421,7 +447,16 @@ const make = Effect.gen(function* () {
       });
       const memoKey = linkRecordMemoKey(input);
       const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-      const remembered = readLinkLookupMemo(linkRecordMemo, memoKey, nowMs);
+      // A caller that decides a write from this record must never be answered from the memo, and
+      // must not warm it either: `unlinkEnvironmentRecord` picks the credential to revoke out of
+      // `environmentPublicKey`, so one stale record revokes the wrong key and leaves the current
+      // one live.
+      const remembered =
+        input.bypassMemo === true ? null : readTtlMemo(linkRecordMemo, memoKey, nowMs);
+      yield* Effect.annotateCurrentSpan({
+        "relay.link_lookup.memo_hit": remembered !== null,
+        "relay.link_lookup.bypass_memo": input.bypassMemo === true,
+      });
       if (remembered !== null) {
         return remembered;
       }
@@ -474,8 +509,8 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      if (link !== null) {
-        rememberLinkLookup(linkRecordMemo, memoKey, link, nowMs);
+      if (link !== null && input.bypassMemo !== true) {
+        rememberLinkLookup(linkRecordMemo, linkLookupBarriers, memoKey, link, nowMs);
       }
       return link;
     }),
@@ -509,7 +544,7 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-      forgetLinkLookups(input);
+      forgetLinkLookups(input, DateTime.toEpochMillis(yield* DateTime.now));
       return rows.length > 0;
     }),
   });

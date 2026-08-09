@@ -1,5 +1,4 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
-import { sha256 } from "@noble/hashes/sha2";
 import { sql as drizzleSql } from "drizzle-orm";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
@@ -53,6 +52,7 @@ import {
   RelayInternalError,
 } from "@t3tools/contracts/relay";
 import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
+import { sha256Base64Url } from "@t3tools/shared/turbo/sha256";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
@@ -72,6 +72,7 @@ import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublis
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import * as RelayDb from "../db.ts";
+import { makeTtlMemo, readTtlMemo, writeTtlMemo, type TtlMemo } from "../turbo/ttlMemo.ts";
 
 const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
@@ -441,9 +442,13 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
       userId: input.userId,
       environmentId: input.environmentId,
     });
+    // This read DECIDES a write: `link.environmentPublicKey` selects the credential to revoke. It
+    // must never come from the link memo -- after a key rotation a remembered record revokes the
+    // PREVIOUS credential and leaves the environment's current session authenticated.
     const link = yield* links.getForUser({
       userId: input.userId,
       environmentId: input.environmentId,
+      bypassMemo: true,
     });
     const unlinked =
       link === null
@@ -1263,10 +1268,7 @@ type VerifiedRelayClientToken = {
   readonly mode: "clerk_session_bearer" | "clerk_oauth_bearer";
 };
 
-type VerifiedRelayClientTokenMemo = Map<
-  string,
-  { readonly verified: VerifiedRelayClientToken; readonly expiresAtMs: number }
->;
+type VerifiedRelayClientTokenMemo = TtlMemo<VerifiedRelayClientToken>;
 
 const verifiedRelayClientTokens = new WeakMap<
   RelayConfiguration.RelayConfiguration["Service"],
@@ -1280,13 +1282,15 @@ function verifiedRelayClientTokenMemo(
   if (cached !== undefined) {
     return cached;
   }
-  const memo: VerifiedRelayClientTokenMemo = new Map();
+  const memo = makeTtlMemo<VerifiedRelayClientToken>(VERIFIED_CLIENT_TOKEN_MEMO_LIMIT);
   verifiedRelayClientTokens.set(config, memo);
   return memo;
 }
 
-function verifiedRelayClientTokenKey(token: string): string {
-  return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(token)));
+// Exported so the fork-owned memo test can assert the key is a digest by CALLING this, instead of
+// pattern-matching the source text of this file.
+export function verifiedRelayClientTokenKey(token: string): string {
+  return sha256Base64Url(token);
 }
 
 const BearerTokenExpiryClaims = Schema.fromJsonString(Schema.Struct({ exp: Schema.Number }));
@@ -1321,20 +1325,9 @@ function rememberVerifiedRelayClientToken(
     nowMs + VERIFIED_CLIENT_TOKEN_TTL_MS,
     bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,
   );
-  if (expiresAtMs <= nowMs) {
-    return;
-  }
-  if (memo.size >= VERIFIED_CLIENT_TOKEN_MEMO_LIMIT) {
-    for (const [rememberedKey, remembered] of memo) {
-      if (remembered.expiresAtMs <= nowMs) {
-        memo.delete(rememberedKey);
-      }
-    }
-    if (memo.size >= VERIFIED_CLIENT_TOKEN_MEMO_LIMIT) {
-      memo.clear();
-    }
-  }
-  memo.set(key, { verified, expiresAtMs });
+  // `writeTtlMemo` drops an already-expired entry on the floor, which is how a token that expires
+  // before the cap would is simply never remembered.
+  writeTtlMemo(memo, key, verified, expiresAtMs, nowMs);
 }
 
 export function verifyRelayClientBearerToken(
@@ -1345,17 +1338,18 @@ export function verifyRelayClientBearerToken(
     const memo = verifiedRelayClientTokenMemo(config);
     const key = verifiedRelayClientTokenKey(token);
     const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    const remembered = memo.get(key);
-    if (remembered !== undefined) {
-      if (remembered.expiresAtMs > nowMs) {
-        return remembered.verified;
-      }
-      memo.delete(key);
+    const remembered = readTtlMemo(memo, key, nowMs);
+    // A memo hit skips the inner `verify_clerk_bearer_token` span entirely, so without this one a
+    // dashboard loses its denominator and a steady failure rate reads as a spike. This span is the
+    // per-request count; the attribute splits it into hits and misses.
+    yield* Effect.annotateCurrentSpan({ "relay.auth.memo_hit": remembered !== null });
+    if (remembered !== null) {
+      return remembered;
     }
     const verified = yield* verifyRelayClientBearerTokenUncached(config, token);
     rememberVerifiedRelayClientToken(memo, key, verified, token, nowMs);
     return verified;
-  });
+  }).pipe(Effect.withSpan("relay.auth.verify_client_bearer_token"));
 }
 
 const requireDpopPrincipalScope = Effect.fn("relay.api.require_dpop_principal_scope")(function* (

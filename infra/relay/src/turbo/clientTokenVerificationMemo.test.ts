@@ -1,6 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off - the key-shape assertion reads the relay source.
-import * as NodeFS from "node:fs";
-
 import { createClerkClient, verifyToken } from "@clerk/backend";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -10,8 +7,11 @@ import * as Encoding from "effect/Encoding";
 import * as Redacted from "effect/Redacted";
 import * as TestClock from "effect/testing/TestClock";
 
+import { sha256Base64Url } from "@t3tools/shared/turbo/sha256";
+
 import * as RelayConfiguration from "../Config.ts";
-import { verifyRelayClientBearerToken } from "../http/Api.ts";
+import { verifiedRelayClientTokenKey, verifyRelayClientBearerToken } from "../http/Api.ts";
+import { makeTtlMemo, readTtlMemo, writeTtlMemo } from "./ttlMemo.ts";
 
 vi.mock("@clerk/backend", () => ({
   createClerkClient: vi.fn(),
@@ -157,11 +157,31 @@ describe("relay client token verification memo", () => {
   );
 
   it("keys the memo by the token's SHA-256 digest, never by the token itself", () => {
-    const source = NodeFS.readFileSync(new URL("../http/Api.ts", import.meta.url), "utf8");
+    const token = jwtShapedToken({ sub: "user_session", exp: 3_600 });
+    const key = verifiedRelayClientTokenKey(token);
 
-    expect(source).toContain(
-      "return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(token)));",
-    );
-    expect(source).not.toMatch(/memo\.(set|get|delete)\(\s*token\b/u);
+    expect(key).not.toBe(token);
+    expect(key).not.toContain(token);
+    expect(key).toBe(sha256Base64Url(token));
+    // Distinct tokens are distinct keys, and the same token is stable across calls.
+    expect(verifiedRelayClientTokenKey(token)).toBe(key);
+    expect(verifiedRelayClientTokenKey(`${token}x`)).not.toBe(key);
+  });
+
+  it("drops the oldest entry when the memo is full of live ones, never the whole memo", () => {
+    const memo = makeTtlMemo<string>(3);
+    for (const key of ["a", "b", "c"]) {
+      writeTtlMemo(memo, key, key, 30_000, 0);
+    }
+    writeTtlMemo(memo, "d", "d", 30_000, 0);
+
+    // The old implementation cleared here, throwing away the entire hot working set on every
+    // write past the limit -- strictly negative work above `limit` concurrent live keys.
+    expect(readTtlMemo(memo, "a", 0)).toBeNull();
+    expect([
+      readTtlMemo(memo, "b", 0),
+      readTtlMemo(memo, "c", 0),
+      readTtlMemo(memo, "d", 0),
+    ]).toEqual(["b", "c", "d"]);
   });
 });

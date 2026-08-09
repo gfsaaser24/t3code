@@ -59,20 +59,47 @@ fork's change.
   chain in the memo; the session-JWT path, the fallback order, the client options, and the
   `ClerkTokenVerificationFailed` mapping stay as upstream ships them. Four memo invariants are
   non-negotiable: 30s cap, never past the token's own expiry, keys are the SHA-256 digest of the
-  token (never the token), and failures are never remembered.
+  token (never the token), and failures are never remembered. The memo's storage is the shared
+  `infra/relay/src/turbo/ttlMemo.ts`, the key helper is exported as `verifiedRelayClientTokenKey`
+  so the fork test can assert the digest by calling it, and the whole lookup carries a
+  `relay.auth.verify_client_bearer_token` span with a `relay.auth.memo_hit` attribute — a hit skips
+  upstream's inner `verify_clerk_bearer_token` span entirely, so without the outer one a dashboard
+  loses its denominator.
 - **Tuned** `infra/relay/src/environments/EnvironmentLinks.ts` — `getForUser` and `listForUser`
   answer from a 5s per-isolate memo of positive results; writes in this service drop their own
   entries as a best effort. On conflict, keep the upstream query pipelines verbatim and re-add
   only the memo read before them and the memo write after them. Never extend this memo to
   `ManagedEndpointAllocations.get` (its record carries the compare-and-swap token that detects a
   racing provision during unlink) or to `EnvironmentCredentials.authenticate` (the
-  instant-revocation enforcement point), and never remember a missing link.
+  instant-revocation enforcement point), and never remember a missing link. Two further rules are
+  security-load-bearing, not tuning: `getForUser` takes a `bypassMemo` flag that every caller which
+  DECIDES A WRITE from the record must pass (`unlinkEnvironmentRecord` picks the credential to
+  revoke out of `environmentPublicKey`, so one stale record revokes the previous key and leaves the
+  current session authenticated), and a drop also raises a one-TTL barrier on the key so a read
+  landing between the in-transaction drop and the commit cannot re-cache the pre-write row. Storage
+  is the shared `infra/relay/src/turbo/ttlMemo.ts`.
+- **Additive** `infra/relay/src/turbo/ttlMemo.ts` — the one TTL memo both relay caches use. The
+  eviction rule is the reason it exists: a map full of LIVE entries used to be `clear()`ed, which
+  throws away exactly the working set the next requests need, so above the limit the memo did
+  strictly negative work; it now drops in insertion order. On conflict, keep the fork file.
 - **Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts` — pins the memo's
-  expiry cap, hash keying, failure handling, and the preserved OAuth fallback. On conflict, keep
-  the fork file.
+  expiry cap, hash keying (by calling `verifiedRelayClientTokenKey`, not by reading `Api.ts`'s
+  source text), failure handling, the preserved OAuth fallback, and the insertion-order eviction.
+  On conflict, keep the fork file.
 - **Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts` — pins the 5s link
   window and proves the allocation and credential lookups still reach the database every time.
   On conflict, keep the fork file.
+- **Additive** `infra/relay/src/turbo/environmentLinkWritePath.test.ts` — the security half of the
+  link memo: an unlink through a warm memo revokes the CURRENT credential after a key rotation, and
+  a read inside the still-open revoke transaction cannot re-cache the pre-revoke row past the
+  commit. On conflict, keep the fork file.
+- **Tuned** `packages/shared/src/dpop.ts` and **Optional** `packages/shared/package.json` — the two
+  base64url SHA-256 expressions call the shared `sha256Base64Url` helper (a third copy lived in the
+  relay), and the package exports `./turbo/sha256`. On conflict, take upstream's bodies and re-swap
+  only those two expressions; re-add the exports-map entry, which is routine rebase surface.
+- **Additive** `packages/shared/src/turbo/sha256.ts` — `sha256Base64Url`, with the `TextEncoder`
+  hoisted to module scope (it is stateless, and the callers are per-request). On conflict, keep the
+  fork file.
 - **Tuned** `infra/relay/src/http/Api.test.ts` — comment only: records that the shared
   `relaySettings` object is the WeakMap key, so a second OAuth-path test needs its own settings
   object or it silently reuses the first test's mocked client. On conflict, re-add the comment.

@@ -837,25 +837,31 @@
     {
       "id": "relay-auth-and-link-memos",
       "status": "implemented",
-      "summary": "Successful Clerk verifications are remembered per isolate for at most 30 seconds, keyed by token digest and never past the token's own expiry, and the user-link lookups answer from a 5 second memo while the allocation compare-and-swap record and the credential revocation check are never cached.",
+      "summary": "Successful Clerk verifications are remembered per isolate for at most 30 seconds, keyed by token digest and never past the token's own expiry, the user-link lookups answer from a 5 second memo while the allocation compare-and-swap record and the credential revocation check are never cached, every write-deciding link read bypasses that memo, an invalidated key stays unrememberable for one TTL so an in-transaction read cannot outlive the commit, and both memos share one TTL store whose eviction is insertion-order rather than a full clear.",
       "checks": [
         {
           "path": "infra/relay/src/http/Api.ts",
           "markers": [
             "const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;",
-            "return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(token)));",
+            "export function verifiedRelayClientTokenKey(token: string): string {",
+            "return sha256Base64Url(token);",
             "function bearerTokenExpiryEpochMs(token: string): number | null {",
             "bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,",
-            "const verified = yield* verifyRelayClientBearerTokenUncached(config, token);"
+            "const verified = yield* verifyRelayClientBearerTokenUncached(config, token);",
+            "\"relay.auth.memo_hit\": remembered !== null",
+            "Effect.withSpan(\"relay.auth.verify_client_bearer_token\")",
+            "bypassMemo: true,"
           ]
         },
         {
           "path": "infra/relay/src/environments/EnvironmentLinks.ts",
           "markers": [
             "const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;",
-            "const remembered = readLinkLookupMemo(linkRecordMemo, memoKey, nowMs);",
-            "rememberLinkLookup(linkRecordMemo, memoKey, link, nowMs);",
-            "forgetLinkLookups(input);"
+            "readonly bypassMemo?: boolean;",
+            "input.bypassMemo === true ? null : readTtlMemo(linkRecordMemo, memoKey, nowMs);",
+            "if (link !== null && input.bypassMemo !== true) {",
+            "blockLinkLookup(linkLookupBarriers, linkRecordMemoKey(input), nowMs);",
+            "if (isLinkLookupBlocked(barriers, key, nowMs)) {"
           ]
         },
         {
@@ -864,7 +870,8 @@
             "never trusts the memo past the token's own expiry",
             "caps an unreadable expiry at thirty seconds and keeps the OAuth fallback chain",
             "never remembers a failed verification",
-            "keys the memo by the token's SHA-256 digest, never by the token itself"
+            "keys the memo by the token's SHA-256 digest, never by the token itself",
+            "drops the oldest entry when the memo is full of live ones, never the whole memo"
           ]
         },
         {
@@ -876,11 +883,62 @@
           ]
         },
         {
+          "path": "infra/relay/src/turbo/ttlMemo.ts",
+          "markers": [
+            "export function makeTtlMemo<A>(limit: number): TtlMemo<A> {",
+            "export function readTtlMemo<A>(memo: TtlMemo<A>, key: string, nowMs: number): A | null {",
+            "while (memo.entries.size >= memo.limit) {",
+            "memo.entries.delete(oldest.value);"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/environmentLinkWritePath.test.ts",
+          "markers": [
+            "revokes the CURRENT credential when an unlink runs through a warm memo",
+            "does not let a read inside the open transaction re-cache the pre-revoke row"
+          ]
+        },
+        {
           "path": "SEAM.md",
           "markers": [
             "**Tuned** `infra/relay/src/environments/EnvironmentLinks.ts`",
+            "**Additive** `infra/relay/src/turbo/ttlMemo.ts`",
             "**Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts`",
-            "**Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts`"
+            "**Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts`",
+            "**Additive** `infra/relay/src/turbo/environmentLinkWritePath.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shared-sha256-base64url",
+      "status": "implemented",
+      "summary": "The base64url SHA-256 expression lives once in packages/shared with a module-scope TextEncoder, and the DPoP thumbprint, the DPoP access-token hash, and the relay token-memo key all call it.",
+      "checks": [
+        {
+          "path": "packages/shared/src/turbo/sha256.ts",
+          "markers": [
+            "export function sha256Base64Url(text: string): string {",
+            "const encoder = new TextEncoder();"
+          ]
+        },
+        {
+          "path": "packages/shared/package.json",
+          "markers": ["\"./turbo/sha256\"", "\"./src/turbo/sha256.ts\""]
+        },
+        {
+          "path": "packages/shared/src/dpop.ts",
+          "markers": [
+            "import { sha256Base64Url } from \"./turbo/sha256.ts\";",
+            "return sha256Base64Url(dpopThumbprintInput(jwk));",
+            "return sha256Base64Url(accessToken);"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `packages/shared/src/turbo/sha256.ts`",
+            "**Tuned** `packages/shared/src/dpop.ts`"
           ]
         }
       ]
