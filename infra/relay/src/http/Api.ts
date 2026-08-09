@@ -1,14 +1,17 @@
 import { createClerkClient, verifyToken } from "@clerk/backend";
+import { sha256 } from "@noble/hashes/sha2";
 import { sql as drizzleSql } from "drizzle-orm";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Record from "effect/Record";
 import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -1227,7 +1230,7 @@ function verifyClerkOAuthBearerToken(
   });
 }
 
-export function verifyRelayClientBearerToken(
+function verifyRelayClientBearerTokenUncached(
   config: RelayConfiguration.RelayConfiguration["Service"],
   token: string,
 ) {
@@ -1243,6 +1246,116 @@ export function verifyRelayClientBearerToken(
       ),
     ),
   );
+}
+
+// Every authenticated relay request pays for a Clerk verification, and the OAuth fallback pays
+// with a full network round trip. Remember SUCCESSFUL verifications only, keyed by the SHA-256
+// hash of the presented token so the raw token is never a map key, and only until the sooner of
+// this cap and the token's own expiry. Failures are never remembered, so a rejected token is
+// re-verified on every request. The trade is deliberate and bounded: a banned user keeps access
+// for at most this window. The memo is a per-isolate Map on purpose -- a miss simply verifies
+// again, while shared or durable storage would widen that revocation window across locations.
+const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;
+const VERIFIED_CLIENT_TOKEN_MEMO_LIMIT = 1_024;
+
+type VerifiedRelayClientToken = {
+  readonly sub: string;
+  readonly mode: "clerk_session_bearer" | "clerk_oauth_bearer";
+};
+
+type VerifiedRelayClientTokenMemo = Map<
+  string,
+  { readonly verified: VerifiedRelayClientToken; readonly expiresAtMs: number }
+>;
+
+const verifiedRelayClientTokens = new WeakMap<
+  RelayConfiguration.RelayConfiguration["Service"],
+  VerifiedRelayClientTokenMemo
+>();
+
+function verifiedRelayClientTokenMemo(
+  config: RelayConfiguration.RelayConfiguration["Service"],
+): VerifiedRelayClientTokenMemo {
+  const cached = verifiedRelayClientTokens.get(config);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const memo: VerifiedRelayClientTokenMemo = new Map();
+  verifiedRelayClientTokens.set(config, memo);
+  return memo;
+}
+
+function verifiedRelayClientTokenKey(token: string): string {
+  return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(token)));
+}
+
+const BearerTokenExpiryClaims = Schema.fromJsonString(Schema.Struct({ exp: Schema.Number }));
+const decodeBearerTokenExpiryClaims = Schema.decodeUnknownOption(BearerTokenExpiryClaims);
+
+// Soft detection only. Clerk issues opaque OAuth tokens, and some configurations issue
+// JWT-shaped CLI tokens; this never selects a verification path, so the fallback chain above
+// stays intact. It only shortens how long a success may be remembered. A token whose expiry
+// cannot be read falls back to the cap above.
+function bearerTokenExpiryEpochMs(token: string): number | null {
+  const segments = token.split(".");
+  const encodedClaims = segments.length === 3 ? segments[1] : undefined;
+  if (encodedClaims === undefined || encodedClaims.length === 0) {
+    return null;
+  }
+  const claimsJson = Result.getOrNull(Encoding.decodeBase64UrlString(encodedClaims));
+  if (claimsJson === null) {
+    return null;
+  }
+  const claims = Option.getOrNull(decodeBearerTokenExpiryClaims(claimsJson));
+  return claims === null || !Number.isFinite(claims.exp) ? null : claims.exp * 1_000;
+}
+
+function rememberVerifiedRelayClientToken(
+  memo: VerifiedRelayClientTokenMemo,
+  key: string,
+  verified: VerifiedRelayClientToken,
+  token: string,
+  nowMs: number,
+): void {
+  const expiresAtMs = Math.min(
+    nowMs + VERIFIED_CLIENT_TOKEN_TTL_MS,
+    bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,
+  );
+  if (expiresAtMs <= nowMs) {
+    return;
+  }
+  if (memo.size >= VERIFIED_CLIENT_TOKEN_MEMO_LIMIT) {
+    for (const [rememberedKey, remembered] of memo) {
+      if (remembered.expiresAtMs <= nowMs) {
+        memo.delete(rememberedKey);
+      }
+    }
+    if (memo.size >= VERIFIED_CLIENT_TOKEN_MEMO_LIMIT) {
+      memo.clear();
+    }
+  }
+  memo.set(key, { verified, expiresAtMs });
+}
+
+export function verifyRelayClientBearerToken(
+  config: RelayConfiguration.RelayConfiguration["Service"],
+  token: string,
+): Effect.Effect<VerifiedRelayClientToken, ClerkTokenVerificationFailed> {
+  return Effect.gen(function* () {
+    const memo = verifiedRelayClientTokenMemo(config);
+    const key = verifiedRelayClientTokenKey(token);
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    const remembered = memo.get(key);
+    if (remembered !== undefined) {
+      if (remembered.expiresAtMs > nowMs) {
+        return remembered.verified;
+      }
+      memo.delete(key);
+    }
+    const verified = yield* verifyRelayClientBearerTokenUncached(config, token);
+    rememberVerifiedRelayClientToken(memo, key, verified, token, nowMs);
+    return verified;
+  });
 }
 
 const requireDpopPrincipalScope = Effect.fn("relay.api.require_dpop_principal_scope")(function* (

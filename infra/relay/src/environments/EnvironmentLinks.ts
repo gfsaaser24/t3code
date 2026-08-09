@@ -161,8 +161,72 @@ function agentAwarenessDeliveryUserKeyCondition(input: {
   );
 }
 
+// The user-link lookups are nearly static and front the status, connect, and list paths, so a
+// very short in-isolate memo removes one of the two database trips those requests make. The
+// window is the whole safety argument: an unlink is reflected within
+// ENVIRONMENT_LINK_LOOKUP_TTL_MS at worst. Two neighbouring lookups are deliberately NOT
+// cached, because staleness changes their answer rather than delaying it:
+// ManagedEndpointAllocations.get carries the compare-and-swap token that detects a racing
+// provision during unlink, and EnvironmentCredentials.authenticate is the instant-revocation
+// enforcement point.
+const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;
+const ENVIRONMENT_LINK_LOOKUP_LIMIT = 1_024;
+
+type LinkLookupMemo<A> = Map<string, { readonly value: A; readonly expiresAtMs: number }>;
+
+function linkRecordMemoKey(input: {
+  readonly userId: string;
+  readonly environmentId: string;
+}): string {
+  return `${input.userId}\u0000${input.environmentId}`;
+}
+
+function readLinkLookupMemo<A>(memo: LinkLookupMemo<A>, key: string, nowMs: number): A | null {
+  const remembered = memo.get(key);
+  if (remembered === undefined) {
+    return null;
+  }
+  if (remembered.expiresAtMs <= nowMs) {
+    memo.delete(key);
+    return null;
+  }
+  return remembered.value;
+}
+
+// Only positive answers are remembered. A missing link is the answer that a fresh link has to
+// overturn, and re-reading it costs one query on a path that is not hot.
+function rememberLinkLookup<A>(
+  memo: LinkLookupMemo<A>,
+  key: string,
+  value: A,
+  nowMs: number,
+): void {
+  if (memo.size >= ENVIRONMENT_LINK_LOOKUP_LIMIT) {
+    for (const [rememberedKey, remembered] of memo) {
+      if (remembered.expiresAtMs <= nowMs) {
+        memo.delete(rememberedKey);
+      }
+    }
+    if (memo.size >= ENVIRONMENT_LINK_LOOKUP_LIMIT) {
+      memo.clear();
+    }
+  }
+  memo.set(key, { value, expiresAtMs: nowMs + ENVIRONMENT_LINK_LOOKUP_TTL_MS });
+}
+
 const make = Effect.gen(function* () {
   const db = yield* RelayDb.RelayDb;
+  const linkListMemo: LinkLookupMemo<ReadonlyArray<RelayClientEnvironmentRecord>> = new Map();
+  const linkRecordMemo: LinkLookupMemo<RelayLinkedEnvironmentRecord> = new Map();
+  // Best effort only, for the isolate that performed the write: the TTL above, not this call,
+  // is what bounds staleness everywhere else.
+  const forgetLinkLookups = (input: {
+    readonly userId: string;
+    readonly environmentId: string;
+  }): void => {
+    linkListMemo.delete(input.userId);
+    linkRecordMemo.delete(linkRecordMemoKey(input));
+  };
 
   return EnvironmentLinks.of({
     upsert: Effect.fn("relay.environment_links.upsert")(function* (input) {
@@ -218,6 +282,7 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+      forgetLinkLookups({ userId: input.userId, environmentId });
     }),
 
     listUsersForEnvironment: Effect.fn("relay.environment_links.list_users_for_environment")(
@@ -300,7 +365,12 @@ const make = Effect.gen(function* () {
     }),
 
     listForUser: Effect.fn("relay.environment_links.list_for_user")(function* (input) {
-      return yield* db
+      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const remembered = readLinkLookupMemo(linkListMemo, input.userId, nowMs);
+      if (remembered !== null) {
+        return remembered;
+      }
+      const environments = yield* db
         .select({
           environmentId: relayEnvironmentLinks.environmentId,
           environmentLabel: relayEnvironmentLinks.environmentLabel,
@@ -339,13 +409,23 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+      if (environments.length > 0) {
+        rememberLinkLookup(linkListMemo, input.userId, environments, nowMs);
+      }
+      return environments;
     }),
 
     getForUser: Effect.fn("relay.environment_links.get_for_user")(function* (input) {
       yield* Effect.annotateCurrentSpan({
         "relay.environment_id": input.environmentId,
       });
-      return yield* db
+      const memoKey = linkRecordMemoKey(input);
+      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const remembered = readLinkLookupMemo(linkRecordMemo, memoKey, nowMs);
+      if (remembered !== null) {
+        return remembered;
+      }
+      const link = yield* db
         .select({
           environmentId: relayEnvironmentLinks.environmentId,
           environmentLabel: relayEnvironmentLinks.environmentLabel,
@@ -394,6 +474,10 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+      if (link !== null) {
+        rememberLinkLookup(linkRecordMemo, memoKey, link, nowMs);
+      }
+      return link;
     }),
 
     revokeForUser: Effect.fn("relay.environment_links.revoke_for_user")(function* (input) {
@@ -425,6 +509,7 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
+      forgetLinkLookups(input);
       return rows.length > 0;
     }),
   });

@@ -525,6 +525,43 @@
       ]
     },
     {
+      "id": "terminal-scrollback-batching",
+      "status": "implemented",
+      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the batch is a keyed coalescing worker that flushPersist drains before the persist worker, and every scrollback read flushes it so the string handed to clients stays byte-identical.",
+      "checks": [
+        {
+          "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
+          "markers": [
+            "export function queueTerminalHistoryChunk",
+            "export function flushTerminalHistoryBuffer",
+            "export function endTerminalHistoryStream",
+            "export function readTerminalHistoryBuffer"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
+          "markers": [
+            "matches upstream across the cap-trim boundary",
+            "is byte-identical however the recorded stream is chunked and batched"
+          ]
+        },
+        {
+          "path": "apps/server/src/terminal/Manager.ts",
+          "markers": [
+            "const DEFAULT_HISTORY_BATCH_MS = 16;",
+            "historyBuffer: TerminalHistoryBuffer;",
+            "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
+            "historyBatchWorker.drainKey(sessionKey);",
+            "readTerminalHistoryBuffer(session.historyBuffer)"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/server/src/terminal/Manager.ts`"]
+        }
+      ]
+    },
+    {
       "id": "sqlite-fast-mode-pragma",
       "status": "implemented",
       "summary": "The single sqlite setup layer applies the standard WAL companion PRAGMA synchronous = NORMAL to every connection, leaving foreign_keys and journal_mode untouched.",
@@ -764,6 +801,57 @@
       ]
     },
     {
+      "id": "relay-auth-and-link-memos",
+      "status": "implemented",
+      "summary": "Successful Clerk verifications are remembered per isolate for at most 30 seconds, keyed by token digest and never past the token's own expiry, and the user-link lookups answer from a 5 second memo while the allocation compare-and-swap record and the credential revocation check are never cached.",
+      "checks": [
+        {
+          "path": "infra/relay/src/http/Api.ts",
+          "markers": [
+            "const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;",
+            "return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(token)));",
+            "function bearerTokenExpiryEpochMs(token: string): number | null {",
+            "bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,",
+            "const verified = yield* verifyRelayClientBearerTokenUncached(config, token);"
+          ]
+        },
+        {
+          "path": "infra/relay/src/environments/EnvironmentLinks.ts",
+          "markers": [
+            "const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;",
+            "const remembered = readLinkLookupMemo(linkRecordMemo, memoKey, nowMs);",
+            "rememberLinkLookup(linkRecordMemo, memoKey, link, nowMs);",
+            "forgetLinkLookups(input);"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/clientTokenVerificationMemo.test.ts",
+          "markers": [
+            "never trusts the memo past the token's own expiry",
+            "caps an unreadable expiry at thirty seconds and keeps the OAuth fallback chain",
+            "never remembers a failed verification",
+            "keys the memo by the token's SHA-256 digest, never by the token itself"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/environmentLinkLookupMemo.test.ts",
+          "markers": [
+            "serves a repeat link lookup from the memo until the five second window closes",
+            "never caches the allocation record that carries the compare-and-swap token",
+            "never caches the credential check that enforces instant revocation"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `infra/relay/src/environments/EnvironmentLinks.ts`",
+            "**Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts`",
+            "**Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-policy",
       "status": "policy",
       "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",
@@ -919,6 +1007,57 @@
             "**Tuned** `packages/client-runtime/src/state/threadReducer.ts`",
             "**Tuned** `apps/mobile/src/lib/threadActivity.ts`"
           ]
+        }
+      ]
+    },
+    {
+      "id": "pooled-subscription-frame",
+      "status": "implemented",
+      "summary": "Durable RPC subscriptions pool one frame (16 ms) of already-arrived stream items inside the per-session stream and release them as a single chunk, so a burst costs the screen one blip per frame instead of one per item; the pool is created and shut down with the session, and the \"synchronized\" connection marker is never held back by the window.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/rpc/client.ts",
+          "markers": [
+            "const POOL_WINDOW: Duration.Input = \"16 millis\";",
+            "const flushesImmediately = (item: unknown): boolean =>",
+            "(item as { readonly kind: unknown }).kind === \"synchronized\";",
+            "function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {",
+            "return poolWithinFrame(method(input)).pipe("
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
+          "markers": [
+            "export const STREAM_POOL_WINDOW = \"16 millis\";",
+            "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/streamPool.test.ts",
+          "markers": [
+            "drops pooled leftovers when the session dies",
+            "releases the synchronized marker without waiting out the window"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads-sync.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads-pagination.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/shell-sync.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/server.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/client-runtime/src/rpc/client.ts`"]
         }
       ]
     }

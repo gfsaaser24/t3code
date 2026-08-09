@@ -4,6 +4,7 @@ import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -167,6 +168,70 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
   );
 }
 
+// T3 Turbo: pool-and-blip. One animation frame's worth of subscription items is
+// pooled and released together as a single chunk, so a burst of stream items
+// costs the screen one blip per frame instead of one per item. The window is
+// deliberately a frame and no coarser: approval prompts ride these same
+// subscriptions, and anything longer is felt on a modal that gates the agent.
+const POOL_WINDOW: Duration.Input = "16 millis";
+
+// Bounded so the pool keeps the wire's existing backpressure: a slow screen
+// still throttles the socket instead of growing an unbounded backlog.
+const POOL_CAPACITY = 1024;
+
+// The connection "synchronized" marker is what flips a subscription to "live",
+// so it is released the moment it arrives rather than waiting out the window.
+const flushesImmediately = (item: unknown): boolean =>
+  typeof item === "object" &&
+  item !== null &&
+  "kind" in item &&
+  (item as { readonly kind: unknown }).kind === "synchronized";
+
+/**
+ * Pools items that arrive within one frame and emits them as one chunk.
+ *
+ * Every pooled item is still applied individually and in order downstream; only
+ * the chunk boundary moves, which is what the per-item lock invariants rely on.
+ *
+ * This must stay scoped to a single session's subscription. The queue is
+ * created and shut down with the stream, so when the supervisor swaps sessions
+ * the dead session's pooled leftovers are discarded instead of flushing on top
+ * of the new session's fresh snapshot (snapshot items are not sequence-guarded).
+ */
+function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {
+  return Stream.unwrap(
+    Effect.gen(function* () {
+      const arrivals = yield* Stream.toQueue(stream, {
+        capacity: POOL_CAPACITY,
+        strategy: "suspend",
+      });
+      const pool = Effect.gen(function* () {
+        const batch: [A, ...Array<A>] = [yield* Queue.take(arrivals)];
+        if (flushesImmediately(batch[0])) {
+          return batch;
+        }
+        // Collect for the rest of the frame. A stream end or failure stops the
+        // collection without losing the batch; the next pull re-reads the
+        // queue and surfaces the same terminal cause.
+        yield* Effect.race(
+          Effect.gen(function* () {
+            while (true) {
+              const item = yield* Queue.take(arrivals);
+              batch.push(item);
+              if (flushesImmediately(item)) {
+                return;
+              }
+            }
+          }).pipe(Effect.catchCause(() => Effect.void)),
+          Effect.sleep(POOL_WINDOW),
+        );
+        return batch;
+      });
+      return Stream.fromPull(Effect.succeed(pool));
+    }),
+  );
+}
+
 interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
@@ -222,7 +287,9 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
                         method: tag,
                         input,
                       });
-                      return method(input).pipe(
+                      // The pool is created here, inside the per-session
+                      // subscription, so it dies with the session.
+                      return poolWithinFrame(method(input)).pipe(
                         Stream.ensuring(completeObservation),
                         Stream.catchCause((cause) => {
                           const hasOnlyExpectedFailures =

@@ -30,6 +30,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
+import { awaitPooled } from "../turbo/streamPoolTestClock.ts";
 import {
   EMPTY_ENVIRONMENT_THREAD_STATE,
   makeEnvironmentThreadState,
@@ -122,10 +123,14 @@ function awaitThreadState(
   observed: Queue.Queue<EnvironmentThreadState>,
   predicate: (state: EnvironmentThreadState) => boolean,
 ) {
-  return Queue.take(observed).pipe(
-    Effect.repeat({
-      until: predicate,
-    }),
+  // Subscription items are pooled for one frame before they reach the state,
+  // so the virtual clock has to cross the pool window while this waits.
+  return awaitPooled(
+    Queue.take(observed).pipe(
+      Effect.repeat({
+        until: predicate,
+      }),
+    ),
   );
 }
 

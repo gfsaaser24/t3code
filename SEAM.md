@@ -51,16 +51,55 @@ fork's change.
   request deadline.
 - **Tuned** `infra/relay/src/http/Api.ts` — the Clerk OAuth fallback reuses one
   `createClerkClient` instance per relay configuration (`clerkOAuthClient`, a `WeakMap` keyed on
-  the config service) instead of building one per request. On conflict, take the upstream
-  `verifyClerkOAuthBearerToken` body and re-swap only the inline `createClerkClient({...})` call
-  for `clerkOAuthClient(config)`; the session-JWT path, the fallback order, the client options,
-  and the `ClerkTokenVerificationFailed` mapping stay as upstream ships them.
+  the config service) instead of building one per request, and `verifyRelayClientBearerToken`
+  wraps upstream's fallback chain (kept verbatim as
+  `verifyRelayClientBearerTokenUncached`) in a per-isolate memo of **successful** verifications.
+  On conflict, take the upstream `verifyClerkOAuthBearerToken` body and re-swap only the inline
+  `createClerkClient({...})` call for `clerkOAuthClient(config)`, then re-wrap the upstream
+  chain in the memo; the session-JWT path, the fallback order, the client options, and the
+  `ClerkTokenVerificationFailed` mapping stay as upstream ships them. Four memo invariants are
+  non-negotiable: 30s cap, never past the token's own expiry, keys are the SHA-256 digest of the
+  token (never the token), and failures are never remembered.
+- **Tuned** `infra/relay/src/environments/EnvironmentLinks.ts` — `getForUser` and `listForUser`
+  answer from a 5s per-isolate memo of positive results; writes in this service drop their own
+  entries as a best effort. On conflict, keep the upstream query pipelines verbatim and re-add
+  only the memo read before them and the memo write after them. Never extend this memo to
+  `ManagedEndpointAllocations.get` (its record carries the compare-and-swap token that detects a
+  racing provision during unlink) or to `EnvironmentCredentials.authenticate` (the
+  instant-revocation enforcement point), and never remember a missing link.
+- **Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts` — pins the memo's
+  expiry cap, hash keying, failure handling, and the preserved OAuth fallback. On conflict, keep
+  the fork file.
+- **Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts` — pins the 5s link
+  window and proves the allocation and credential lookups still reach the database every time.
+  On conflict, keep the fork file.
 - **Tuned** `apps/server/src/persistence/Layers/Sqlite.ts` — the shared `setup` layer adds
   `PRAGMA synchronous = NORMAL;` (the standard WAL companion) after the existing `foreign_keys`
   and `journal_mode` pragmas. On conflict, take the upstream `setup` body and re-add only the
   `synchronous` line, still after `journal_mode`; never change the other two pragmas.
 - **Additive** `apps/server/src/persistence/Layers/SqlitePragmas.test.ts` — asserts the pragma is
   live on fresh in-memory and file-backed connections. On conflict, keep the fork file.
+- **Tuned** `apps/server/src/terminal/Manager.ts` — a terminal session's scrollback is a
+  `TerminalHistoryBuffer` (line list, incremental cap, ~16 ms output batch) instead of
+  `history: string` + `pendingHistoryControlSequence`, so a burst no longer chops and re-glues the
+  whole ~5,000-line buffer per chunk. On conflict, take the upstream Manager and re-apply five
+  things: `historyBuffer` replaces both fields; every scrollback read goes through
+  `readTerminalHistoryBuffer` (it flushes the batch first, which is what keeps snapshots and
+  `persistHistory` byte-identical); the drain loop's output branch only calls
+  `queueTerminalHistoryChunk` + `queueHistoryBatch`; exit and `stopProcess` call
+  `endTerminalHistoryStream` and `queuePersist` when it returns `true`; and `flushPersist` drains
+  `historyBatchWorker` **before** `persistWorker`. Two invariants are non-negotiable: output events
+  must stay one-per-PTY-chunk with their own `data` and sequence (batching is history-side only —
+  clients and the ordering tests depend on the per-chunk wire shape), and the batch must be a
+  `makeKeyedCoalescingWorker` so `drainKey` keeps the repo's "wait on drains, never sleep" test
+  discipline working.
+- **Additive** `apps/server/src/turbo/terminalHistoryBuffer.ts` — the incremental scrollback buffer
+  itself: raw `split("\n")` lines, a memoized join, and the queued-chunk batch. On conflict, keep
+  the fork file.
+- **Additive** `apps/server/src/turbo/terminalHistoryBuffer.test.ts` — replays recorded PTY bursts
+  through upstream's `capHistory` shape and the buffer and asserts byte equality, cap-trim
+  boundaries and split control sequences included. On conflict, keep the fork file; if upstream
+  changes `capHistory`, update the verbatim copy in this test to match.
 - **Tuned** `apps/web/src/session-logic.ts` — `compareIsoTimestamps` replaces
   `String.prototype.localeCompare` at the timestamp comparison sites (pending approvals, pending
   user inputs, both proposed-plan picks, timeline order, checkpoint turn counts); it now lives in
@@ -143,6 +182,29 @@ fork's change.
   and the stall fallback. On conflict, keep the fork file.
 - **Additive** `apps/web/src/turbo/streamingCodeBlock.test.tsx` — pins the three guards. On
   conflict, keep the fork file.
+- **Tuned** `packages/client-runtime/src/rpc/client.ts` — `subscribeToSession` wraps the session's
+  RPC stream in `poolWithinFrame`, a 16 ms pool that releases a window's arrivals as one chunk, so
+  a burst costs the screen one blip per frame instead of one per item. On conflict, take the
+  upstream `subscribeToSession` body and re-wrap only its `method(input)` call. Three things are
+  non-negotiable: the pool must stay **inside** `subscribeToSession` so it is created and shut down
+  with the session — a pool downstream of the `Stream.switchMap` lets a dead session's leftovers
+  flush over the reconnect snapshot, which is not sequence-guarded; the `flushesImmediately`
+  bypass must keep releasing the `synchronized` marker without waiting out the window; and the
+  window stays 16 ms — approval prompts ride these same subscriptions.
+- **Additive** `packages/client-runtime/src/turbo/streamPoolTestClock.ts` — `awaitPooled` steps the
+  virtual clock one pool window at a time while a test waits, and stops as soon as the wait
+  resolves. On conflict, keep the fork file.
+- **Additive** `packages/client-runtime/src/turbo/streamPool.test.ts` — pins the placement (a dead
+  session's pooled items never apply after the replacement session's snapshot) and the immediate
+  `synchronized` release. On conflict, keep the fork file.
+- **Tuned** `packages/client-runtime/src/state/threads-sync.test.ts`,
+  `packages/client-runtime/src/state/threads-pagination.test.ts`,
+  `packages/client-runtime/src/state/shell-sync.test.ts`, and
+  `packages/client-runtime/src/state/server.test.ts` — the virtual-clock waits that expect a
+  subscription item to reach state go through `awaitPooled`. On conflict, take the upstream wait
+  verbatim and re-wrap it; never swap the wrap for a fixed `TestClock.adjust`, because
+  `awaitPooled` stops stepping the moment the wait resolves and that is what keeps the 250 ms
+  retry and 500 ms persistence assertions in these files honest.
 
 ## Nightly sync conflicts
 
