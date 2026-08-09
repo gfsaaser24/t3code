@@ -9,6 +9,7 @@
 - [Import official T3 Code data](./user/official-t3-import.md)
 - [Markdown files](./user/markdown-files.md)
 - [Organizing threads](./user/thread-sidebar.md)
+- [Customize a project icon](./user/project-settings.md)
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
