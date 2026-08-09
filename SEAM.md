@@ -44,6 +44,12 @@ fork's change.
   `verifyClerkOAuthBearerToken` body and re-swap only the inline `createClerkClient({...})` call
   for `clerkOAuthClient(config)`; the session-JWT path, the fallback order, the client options,
   and the `ClerkTokenVerificationFailed` mapping stay as upstream ships them.
+- **Tuned** `infra/relay/src/http/Api.test.ts` — comment only: records that the shared
+  `relaySettings` object is the WeakMap key, so a second OAuth-path test needs its own settings
+  object or it silently reuses the first test's mocked client. On conflict, re-add the comment.
+- **Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts` — asserts the relation the tuning
+  exists for: `ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS < RELAY_REQUEST_DEADLINE_MS`. On conflict, keep
+  the fork file.
 - **Tuned** `apps/server/src/persistence/Layers/Sqlite.ts` — the shared `setup` layer adds
   `PRAGMA synchronous = NORMAL;` (the standard WAL companion) after the existing `foreign_keys`
   and `journal_mode` pragmas. On conflict, take the upstream `setup` body and re-add only the

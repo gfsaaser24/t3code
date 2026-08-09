@@ -33,8 +33,21 @@ interface SocketWithTransport extends NodeSocket.NodeWS.WebSocket {
   readonly _socket?: { readonly bytesRead: number };
 }
 
+/** `_socket` is ws's internal transport handle. Reading it through `?? 0` would
+    turn a rename in a future ws release into a silent 0, and every
+    "compressed direction is smaller than the payload" assertion would pass
+    vacuously. Fail loudly instead. */
+function wireBytesRead(socket: SocketWithTransport): number {
+  const bytesRead = socket._socket?.bytesRead;
+  if (typeof bytesRead !== "number") {
+    throw new Error(
+      "ws no longer exposes `_socket.bytesRead`: this probe cannot measure wire bytes",
+    );
+  }
+  return bytesRead;
+}
+
 interface InboundMeasurement {
-  readonly decodedBytes: number;
   readonly wireBytes: number;
 }
 
@@ -54,8 +67,8 @@ describe("websocket permessage-deflate negotiation", () => {
 
     let reportInbound: ((measurement: InboundMeasurement) => void) | null = null;
     server.on("connection", (socket, request) => {
-      socket.on("message", (data: Buffer) => {
-        reportInbound?.({ decodedBytes: data.byteLength, wireBytes: request.socket.bytesRead });
+      socket.on("message", () => {
+        reportInbound?.({ wireBytes: request.socket.bytesRead });
       });
       socket.send(PAYLOAD);
     });
@@ -70,15 +83,24 @@ describe("websocket permessage-deflate negotiation", () => {
         perMessageDeflate: offersDeflate,
       }) as SocketWithTransport;
 
+      // Both directions reject on socket error or an early close: without
+      // that, a failure here parks the promise forever and the run hangs for
+      // the full test timeout with the socket still open.
+      const failOnSocketTrouble = (reject: (error: Error) => void) => {
+        client.on("error", reject);
+        client.on("close", () => reject(new Error("socket closed before the measurement landed")));
+      };
+
       // Direction 1: server -> client (the phone receiving a thread burst).
       const decodedBytes = await new Promise<number>((resolve, reject) => {
-        client.on("error", reject);
+        failOnSocketTrouble(reject);
         client.on("message", (data: Buffer) => resolve(data.byteLength));
       });
-      const serverToClientWireBytes = client._socket?.bytesRead ?? 0;
+      const serverToClientWireBytes = wireBytesRead(client);
 
       // Direction 2: client -> server (the phone sending a command).
-      const inbound = await new Promise<InboundMeasurement>((resolve) => {
+      const inbound = await new Promise<InboundMeasurement>((resolve, reject) => {
+        failOnSocketTrouble(reject);
         reportInbound = resolve;
         client.send(PAYLOAD);
       });

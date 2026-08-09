@@ -665,10 +665,20 @@
           "markers": ["export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;"]
         },
         {
+          "path": "infra/relay/src/turbo/relayRequestBudget.test.ts",
+          "markers": ["expires the environment mint inside the relay request deadline"]
+        },
+        {
+          "path": "infra/relay/src/http/Api.test.ts",
+          "markers": ["module-level WeakMap keyed on this very object"]
+        },
+        {
           "path": "SEAM.md",
           "markers": [
             "**Tuned** `infra/relay/src/http/Api.ts`",
-            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`"
+            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`",
+            "**Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts`",
+            "**Tuned** `infra/relay/src/http/Api.test.ts`"
           ]
         }
       ]
