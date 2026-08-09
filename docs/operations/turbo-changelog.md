@@ -50,12 +50,13 @@ region roles (#37), thinking orbs (#38).
 
 ## Seam registry snapshot (2026-08-09)
 
-Ten seams protected by `.t3-turbo/customizations.json` (91 checks; verify with
+Eleven seams protected by `.t3-turbo/customizations.json` (93 checks; verify with
 `pnpm --dir scripts turbo:customizations:verify`):
 
 | Seam                           | Status      | What it protects                                                   |
 | ------------------------------ | ----------- | ------------------------------------------------------------------ |
 | `agent-docs-operating-model`   | implemented | Operating model atop `AGENTS.md`/`CLAUDE.md`, seam registration    |
+| `changelog-and-runbook`        | implemented | This changelog and the operator runbook                            |
 | `product-identity-and-updater` | implemented | `com.gabef.t3turbo` identity, `~/.t3-turbo` home, fork update feed |
 | `canonical-icon-pipeline`      | implemented | Turbo icon and all platform derivatives                            |
 | `file-explorer`                | implemented | File actions, reveal, Alt-click bulk expansion                     |
