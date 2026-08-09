@@ -116,17 +116,27 @@ the repetition and the same hardware suddenly feels twice as fast — that's the
 
 # Part 2 — The web app (what you see)
 
-### ⭐ W1. Stop re-coloring the whole code block on every new word
-- **The problem:** while the agent streams a code block at you, the syntax highlighter
-  re-colors the block **from the very top** every time a few characters arrive — and it does
-  this on the main thread, right in the middle of drawing. A 400-line block gets the
-  equivalent of 60,000 lines of re-coloring before it finishes. This is the single most
-  expensive thing happening while you watch text stream.
-- **What we'd change:** show streaming code as plain text (or color just the tail), then do
-  one beautiful full coloring the moment the block completes.
-- **The perf gain:** the choppiness you feel during heavy code streaming — the moment you're
-  watching most intently — is gone.
-- <sub>`apps/web/src/components/ChatMarkdown.tsx:670, 705-730`</sub>
+### ⭐ W1. Don't render code blocks at all while they stream — blip them in complete
+- **The problem:** while the agent streams a code block at you, the app re-renders the
+  growing block on **every few characters**: re-parse the markdown, re-color the syntax
+  **from the very top**, and re-layout the page — on the main thread, right in the middle of
+  drawing. A 400-line block gets the equivalent of 60,000 lines of re-coloring before it
+  finishes. It's the single most expensive thing happening while text streams.
+- **What we'd change (scope decided 2026-08-09):** take the streaming code block out of the
+  live render path entirely. While code is streaming, show only a small, fixed-size
+  placeholder card — language name and a cheap ticking line count ("`typescript` · writing…
+  142 lines") — and buffer the incoming text off-screen where it costs nothing. The moment
+  the block completes, render and color it **once**, fully finished, and blip it into place.
+  Deliberate trade-off: you don't watch code scroll by character-by-character — you get a
+  calm progress card and then the finished block. (Prose keeps streaming normally; this is
+  code fences only.)
+- **The perf gain:** the per-word cost of code streaming drops to almost literally zero — no
+  re-parsing, no re-coloring, no page reflow, just a counter ticking. Long code-heavy turns
+  stop being the app's heaviest moment and become its lightest, and the finished block
+  appears fully formatted in one clean pop. Kills the recolor bug *and* banks the biggest
+  resource saving available in the web app.
+- <sub>`apps/web/src/components/ChatMarkdown.tsx:670, 705-730` — placeholder replaces the
+  streaming branch; buffered text renders once on `streaming → false`</sub>
 
 ### ⭐ W2 + W3. Sort the activity list once, not six times per update
 - **The problem:** every tool-progress update re-sorts the thread's *entire* activity list —
@@ -357,9 +367,9 @@ Each is a few lines; several are pure deletions. Together they already make stre
 GPU, and relay errors noticeably better.
 
 **Wave 2 — the two "quadratic monsters" and the relay hot path:**
-W1 (no re-coloring while streaming) · S2 + C1 (terminal, both sides) · C2 (batch per frame)
-· R1 (skip dead push work) · R3 (stop phoning Clerk). This wave is where "Turbo feels twice
-as fast" actually happens.
+W1 (code blocks blip in complete instead of rendering while streaming) · S2 + C1 (terminal,
+both sides) · C2 (batch per frame) · R1 (skip dead push work) · R3 (stop phoning Clerk).
+This wave is where "Turbo feels twice as fast" actually happens.
 
 **Wave 3 — the bigger rebuilds, measuring as we go:**
 S1 + S5 (small lookups) · S3 (projector map) · W11 (bundle splitting) · W9/C3 (keyed stores)
