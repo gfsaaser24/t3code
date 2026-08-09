@@ -1021,8 +1021,9 @@
         {
           "path": "packages/client-runtime/src/rpc/client.ts",
           "markers": [
-            "const POOL_WINDOW: Duration.Input = \"16 millis\";",
+            "export const POOL_WINDOW: Duration.Input = \"16 millis\";",
             "const flushesImmediately = (item: unknown): boolean =>",
+            "Effect.uninterruptibleMask((restore) =>",
             "(item as { readonly kind: unknown }).kind === \"synchronized\";",
             "function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {",
             "return poolWithinFrame(method(input)).pipe("
@@ -1031,7 +1032,8 @@
         {
           "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
           "markers": [
-            "export const STREAM_POOL_WINDOW = \"16 millis\";",
+            "import { POOL_WINDOW } from \"../rpc/client.ts\";",
+            "const MAX_POOL_WINDOWS = 12;",
             "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
           ]
         },
@@ -1039,7 +1041,9 @@
           "path": "packages/client-runtime/src/turbo/streamPool.test.ts",
           "markers": [
             "drops pooled leftovers when the session dies",
-            "releases the synchronized marker without waiting out the window"
+            "releases the synchronized marker without waiting out the window",
+            "releases one window's items as a single ordered chunk",
+            "never drops an item at a window boundary"
           ]
         },
         {

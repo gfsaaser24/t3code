@@ -173,10 +173,13 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
 // costs the screen one blip per frame instead of one per item. The window is
 // deliberately a frame and no coarser: approval prompts ride these same
 // subscriptions, and anything longer is felt on a modal that gates the agent.
-const POOL_WINDOW: Duration.Input = "16 millis";
+export const POOL_WINDOW: Duration.Input = "16 millis";
 
-// Bounded so the pool keeps the wire's existing backpressure: a slow screen
-// still throttles the socket instead of growing an unbounded backlog.
+// The pool puts a queue between the socket and the screen, so it *adds* slack
+// in front of the backpressure that already exists rather than preserving it
+// unchanged. Bounding that slack at 1024 items means a screen that stays behind
+// still ends up throttling the socket; "unbounded" would remove the
+// backpressure altogether and let a long replay grow the backlog without limit.
 const POOL_CAPACITY = 1024;
 
 // The connection "synchronized" marker is what flips a subscription to "live",
@@ -213,16 +216,50 @@ function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E>
         // Collect for the rest of the frame. A stream end or failure stops the
         // collection without losing the batch; the next pull re-reads the
         // queue and surfaces the same terminal cause.
+        //
+        // The window sleep ends the collection by interrupting this loop, so
+        // taking an item and appending it must be one indivisible step or a
+        // window boundary could drop an item (terminal output is not
+        // sequence-guarded, so a drop would be silent corruption). Two things
+        // make that safe, and neither is left to chance:
+        //
+        //   - `restore(Queue.take(...))` keeps only the *parked* take
+        //     interruptible. A parked take holds nothing: `Queue.take` waits on
+        //     `awaitTake`, which resumes with a payload-free `exitVoid` wake
+        //     signal and re-reads the queue (effect/src/Queue.ts:1474 `take`,
+        //     :2073 `awaitTake`, :1957 `releaseTakers`). An item only leaves the
+        //     queue inside the synchronous `takeUnsafe` (:1606), so an
+        //     interrupted park consumes nothing.
+        //   - Everything after the take runs inside the uninterruptible mask,
+        //     so once an item *has* left the queue the append cannot be
+        //     preempted. This is what makes the property structural rather than
+        //     a bet on where the fiber loop happens to observe interrupts.
+        //
+        // `turbo/streamPool.test.ts` hammers the window boundary and asserts
+        // zero drops.
         yield* Effect.race(
           Effect.gen(function* () {
             while (true) {
-              const item = yield* Queue.take(arrivals);
-              batch.push(item);
+              const item = yield* Effect.uninterruptibleMask((restore) =>
+                Effect.flatMap(restore(Queue.take(arrivals)), (taken) =>
+                  Effect.sync(() => {
+                    batch.push(taken);
+                    return taken;
+                  }),
+                ),
+              );
               if (flushesImmediately(item)) {
                 return;
               }
             }
-          }).pipe(Effect.catchCause(() => Effect.void)),
+          }).pipe(
+            // Only the stream's own end/failure is absorbed here. An interrupt
+            // is the window closing this loop on purpose and must stay an
+            // interrupt.
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause) ? Effect.failCause(cause) : Effect.void,
+            ),
+          ),
           Effect.sleep(POOL_WINDOW),
         );
         return batch;

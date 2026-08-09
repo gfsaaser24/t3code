@@ -201,13 +201,20 @@ fork's change.
   with the session — a pool downstream of the `Stream.switchMap` lets a dead session's leftovers
   flush over the reconnect snapshot, which is not sequence-guarded; the `flushesImmediately`
   bypass must keep releasing the `synchronized` marker without waiting out the window; and the
-  window stays 16 ms — approval prompts ride these same subscriptions.
+  window stays 16 ms — approval prompts ride these same subscriptions. A fourth rule is about the
+  collector loop rather than the placement: the window sleep ends that loop by interrupting it, so
+  the take-and-append pair stays inside `Effect.uninterruptibleMask` with only the parked
+  `Queue.take` restored. Never drop the mask — a take that has already removed an item must not be
+  preemptible before the append, or a window boundary silently drops one item per boundary.
 - **Additive** `packages/client-runtime/src/turbo/streamPoolTestClock.ts` — `awaitPooled` steps the
-  virtual clock one pool window at a time while a test waits, and stops as soon as the wait
-  resolves. On conflict, keep the fork file.
+  virtual clock one pool window at a time while a test waits, stops as soon as the wait resolves,
+  and dies with a diagnostic after 12 windows rather than hanging. It imports the window from
+  `rpc/client.ts` instead of restating it. On conflict, keep the fork file; if the retry backoff in
+  the suites it serves ever drops below 250 ms, lower `MAX_POOL_WINDOWS` to stay under it.
 - **Additive** `packages/client-runtime/src/turbo/streamPool.test.ts` — pins the placement (a dead
-  session's pooled items never apply after the replacement session's snapshot) and the immediate
-  `synchronized` release. On conflict, keep the fork file.
+  session's pooled items never apply after the replacement session's snapshot), the immediate
+  `synchronized` release, the one-chunk-per-window shape, and zero drops at a hammered window
+  boundary. On conflict, keep the fork file.
 - **Tuned** `packages/client-runtime/src/state/threads-sync.test.ts`,
   `packages/client-runtime/src/state/threads-pagination.test.ts`,
   `packages/client-runtime/src/state/shell-sync.test.ts`, and

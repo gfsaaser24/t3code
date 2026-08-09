@@ -18,8 +18,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { subscribe } from "../rpc/client.ts";
-import { STREAM_POOL_WINDOW } from "./streamPoolTestClock.ts";
+import { POOL_WINDOW, subscribe } from "../rpc/client.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -92,13 +91,37 @@ const makeHarness = Effect.fn("TestStreamPool.makeHarness")(function* () {
     return yield* Effect.die(new Error(`Expected ${count} subscriptions.`));
   });
 
+  // Same subscription, but recording the chunk boundaries the pool produces
+  // rather than flattening them, so a window's shape can be asserted.
+  const chunked = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+  const startChunked = subscribe(WS_METHODS.subscribeTerminalEvents, {}).pipe(
+    Stream.chunks,
+    Stream.runForEach((chunk) =>
+      Ref.update(chunked, (seen) => [
+        ...seen,
+        chunk.map((item) => (item as unknown as PoolItem).id),
+      ]),
+    ),
+    Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+    Effect.forkChild,
+  );
+
   const settle = Effect.gen(function* () {
     for (let attempt = 0; attempt < 20; attempt += 1) {
       yield* Effect.yieldNow;
     }
   });
 
-  return { activeSession, applied, awaitSubscriptions, clientFor, settle, start };
+  return {
+    activeSession,
+    applied,
+    awaitSubscriptions,
+    chunked,
+    clientFor,
+    settle,
+    start,
+    startChunked,
+  };
 });
 
 describe("per-session stream pool", () => {
@@ -130,7 +153,7 @@ describe("per-session stream pool", () => {
       );
       yield* harness.awaitSubscriptions(2);
       yield* Queue.offer(secondEvents, { kind: "snapshot", id: "fresh-snapshot" });
-      yield* TestClock.adjust(STREAM_POOL_WINDOW);
+      yield* TestClock.adjust(POOL_WINDOW);
       yield* harness.settle;
 
       expect(yield* Ref.get(harness.applied)).toEqual(["fresh-snapshot"]);
@@ -169,6 +192,79 @@ describe("per-session stream pool", () => {
         "synchronized",
         "synchronized-again",
       ]);
+
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
+  it.effect("releases one window's items as a single ordered chunk", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const events = yield* Queue.unbounded<PoolItem>();
+
+      const fiber = yield* harness.startChunked;
+      yield* SubscriptionRef.set(
+        harness.activeSession,
+        Option.some(session(harness.clientFor(events))),
+      );
+      yield* harness.awaitSubscriptions(1);
+
+      // This is the feature, not just its safety: five items that arrive inside
+      // one window reach the screen as one blip, in arrival order, instead of
+      // five separate ones.
+      for (const id of ["a", "b", "c", "d", "e"]) {
+        yield* Queue.offer(events, { kind: "event", id });
+      }
+      yield* harness.settle;
+      expect(yield* Ref.get(harness.chunked)).toEqual([]);
+
+      yield* TestClock.adjust(POOL_WINDOW);
+      yield* harness.settle;
+      expect(yield* Ref.get(harness.chunked)).toEqual([["a", "b", "c", "d", "e"]]);
+
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
+  it.effect("never drops an item at a window boundary", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      const events = yield* Queue.unbounded<PoolItem>();
+
+      const fiber = yield* harness.start;
+      yield* SubscriptionRef.set(
+        harness.activeSession,
+        Option.some(session(harness.clientFor(events))),
+      );
+      yield* harness.awaitSubscriptions(1);
+
+      // The window sleep ends the collection by interrupting a loop that is
+      // taking from the pool queue. Hammer that boundary: offer bursts with a
+      // varying number of scheduler hops between them, then close the window
+      // immediately, so the interrupt lands at many different points relative
+      // to an in-flight take. Every item must still arrive, exactly once, in
+      // order.
+      const expected: Array<string> = [];
+      for (let round = 0; round < 40; round += 1) {
+        const burst = (round % 5) + 1;
+        for (let index = 0; index < burst; index += 1) {
+          const id = `item-${expected.length}`;
+          expected.push(id);
+          yield* Queue.offer(events, { kind: "event", id });
+          for (let hop = 0; hop < (round + index) % 3; hop += 1) {
+            yield* Effect.yieldNow;
+          }
+        }
+        yield* TestClock.adjust(POOL_WINDOW);
+      }
+
+      // Release whatever is still pooled after the last boundary.
+      for (let drain = 0; drain < 5; drain += 1) {
+        yield* TestClock.adjust(POOL_WINDOW);
+        yield* harness.settle;
+      }
+
+      expect(yield* Ref.get(harness.applied)).toEqual(expected);
 
       yield* Fiber.interrupt(fiber);
     }),
