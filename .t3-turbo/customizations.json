@@ -525,6 +525,32 @@
       ]
     },
     {
+      "id": "sqlite-fast-mode-pragma",
+      "status": "implemented",
+      "summary": "The single sqlite setup layer applies the standard WAL companion PRAGMA synchronous = NORMAL to every connection, leaving foreign_keys and journal_mode untouched.",
+      "checks": [
+        {
+          "path": "apps/server/src/persistence/Layers/Sqlite.ts",
+          "markers": [
+            "PRAGMA foreign_keys = ON;",
+            "PRAGMA journal_mode = WAL;",
+            "PRAGMA synchronous = NORMAL;"
+          ]
+        },
+        {
+          "path": "apps/server/src/persistence/Layers/SqlitePragmas.test.ts",
+          "markers": [
+            "in-memory persistence enables synchronous=NORMAL and keeps foreign_keys on",
+            "file-backed persistence keeps WAL and applies synchronous=NORMAL"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/server/src/persistence/Layers/Sqlite.ts`"]
+        }
+      ]
+    },
+    {
       "id": "relay-policy",
       "status": "policy",
       "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",

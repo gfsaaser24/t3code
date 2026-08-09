@@ -33,6 +33,12 @@ fork's change.
   provider groups.
 - **Optional** `infra/relay/src/observability.ts` — Axiom resources require the complete pair.
 - **Optional** `infra/relay/src/worker.ts` — APNs queues and tracing layers are conditional.
+- **Tuned** `apps/server/src/persistence/Layers/Sqlite.ts` — the shared `setup` layer adds
+  `PRAGMA synchronous = NORMAL;` (the standard WAL companion) after the existing `foreign_keys`
+  and `journal_mode` pragmas. On conflict, take the upstream `setup` body and re-add only the
+  `synchronous` line, still after `journal_mode`; never change the other two pragmas.
+- **Additive** `apps/server/src/persistence/Layers/SqlitePragmas.test.ts` — asserts the pragma is
+  live on fresh in-memory and file-backed connections. On conflict, keep the fork file.
 
 ## Nightly sync conflicts
 
