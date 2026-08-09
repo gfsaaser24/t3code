@@ -49,7 +49,8 @@ const MISSING_SEQUENCE = -1;
 
 /**
  * The one canonical order for `OrchestrationThreadActivity` rows: sequence,
- * then creation timestamp, then lifecycle phase, then id.
+ * then creation timestamp, then lifecycle phase, then id (code-unit order, to
+ * match the server's `activity_id ASC` under SQLite's BINARY collation).
  *
  * Shared by the store reducer, the older-page merge, the web view layer, the
  * mobile view layer, and (as SQL) the server's projection queries, so that the
@@ -80,8 +81,16 @@ export function compareThreadActivities(
     return leftRank < rightRank ? -1 : 1;
   }
 
-  const idComparison = left.id.localeCompare(right.id);
-  return idComparison < 0 ? -1 : idComparison > 0 ? 1 : 0;
+  // Code-unit comparison, NOT `localeCompare`. The server breaks the same tie
+  // with `activity_id ASC`, and SQLite's default BINARY collation compares
+  // UTF-8 bytes — which for these ids is code-unit order. Using the ICU
+  // collator here would give the client a different total order from the SQL
+  // for ids that differ only in case or in digit-versus-letter position, and
+  // would drag the collator into the store's per-append sort and mobile's
+  // Hermes path, where this module is required to stay cheap.
+  const leftId = left.id;
+  const rightId = right.id;
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
 }
 
 /** `compareThreadActivities` as an Effect `Order`, for `Arr.sort` call sites. */

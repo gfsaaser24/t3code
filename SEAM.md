@@ -111,10 +111,11 @@ fork's change.
   re-delete the activity re-sorts; never touch the `id.localeCompare` tiebreaks — ids are not
   fixed-width and the collation decides real ordering there.
 - **Additive** `packages/client-runtime/src/state/threadActivityOrder.ts` — the ONE canonical
-  activity comparator (`sequence`, with un-numbered legacy rows first, then `createdAt`, then
-  lifecycle phase, then id) plus `compareIsoTimestamps`. Shared by the store, the older-page
-  merge, web, and mobile; it is loaded by mobile, so it must stay Hermes-safe. On conflict, keep
-  the fork file.
+  activity comparator for the four **client-visible** orderings (`sequence`, with un-numbered
+  legacy rows first, then `createdAt`, then lifecycle phase, then id compared by code unit) plus
+  `compareIsoTimestamps`. Shared by the store, the older-page merge, web, and mobile; it is loaded
+  by mobile, so it must stay Hermes-safe — never reintroduce `localeCompare` here, on the ids or
+  anywhere else. On conflict, keep the fork file.
 - **Additive** `packages/client-runtime/src/state/threadActivityOrder.test.ts` — pins the
   missing-sequence convention and the phantom-pending-approval tie (resolved stays after
   requested). On conflict, keep the fork file.
@@ -136,9 +137,19 @@ fork's change.
 - **Tuned** `apps/server/src/persistence/Layers/ProjectionThreadActivities.ts` and
   `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` — both activity `ORDER BY`
   clauses carry the lifecycle-rank `CASE` (started → 0, completed/resolved → 2, else 1) between
-  `created_at` and the id, so the SQL emits the same total order as the shared comparator. On
-  conflict, take the upstream `ORDER BY` and re-insert only that `CASE`; leave the NULL-sequence
-  handling alone (SQLite's NULLs-first under ASC is the convention).
+  `created_at` and the id, so the SQL emits the same total order as the shared comparator: NULL
+  sequences first (SQLite's NULLs-first under ASC), then `created_at`, then that `CASE`, then
+  `activity_id ASC` under the BINARY collation — which is why the shared comparator's id tiebreak
+  is code-unit and not `localeCompare`. On conflict, take the upstream `ORDER BY` and re-insert
+  only that `CASE`; leave the NULL-sequence handling alone.
+  Scope note for a future rebaser: the unification covers the **four client-visible** orderings
+  (store, web view layer, mobile, and these two projection queries). A **fifth** activity
+  comparator lives in upstream `apps/server/src/orchestration/projector.ts:171-186` — deliberately
+  left alone. It only decides which rows survive the `.slice(-500)` truncation window at
+  `projector.ts:790`, never reaches a client, and already agrees on the missing-sequence
+  convention (un-numbered first); it has no lifecycle rank. Do not "fix" it during a rebase, and
+  do not read this seam as a claim that every activity sort in the repo runs the shared
+  comparator.
 - **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar` and
   `sortSettledThreadsForSidebar` are decorate-sorts: the sort key is resolved once per row instead
   of inside the comparator. On conflict, take the upstream comparator verbatim and re-wrap it in

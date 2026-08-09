@@ -117,6 +117,29 @@ describe("compareThreadActivities — the phantom pending-approval hazard", () =
   });
 });
 
+describe("compareThreadActivities — the id tiebreak", () => {
+  it("compares ids by code unit, the way the server's activity_id ASC does", () => {
+    // SQLite's default BINARY collation compares UTF-8 bytes, so uppercase
+    // sorts before lowercase. `localeCompare` does the opposite for this pair,
+    // which would have left the client and the SQL on different total orders.
+    const upper = activity("Z-upper", "tool.completed", { sequence: 3 });
+    const lower = activity("a-lower", "tool.completed", { sequence: 3 });
+
+    expect("Z-upper" < "a-lower").toBe(true);
+    expect(compareThreadActivities(upper, lower)).toBe(-1);
+    expect(sortThreadActivities([lower, upper]).map((row) => row.id)).toEqual([
+      "Z-upper",
+      "a-lower",
+    ]);
+  });
+
+  it("returns 0 only for rows that agree on every key", () => {
+    const row = activity("same-id", "tool.completed", { sequence: 3 });
+
+    expect(compareThreadActivities(row, { ...row })).toBe(0);
+  });
+});
+
 describe("activityLifecycleRank", () => {
   it("ranks started before progress/updated before completed/resolved", () => {
     expect(activityLifecycleRank("tool.started")).toBe(0);
