@@ -30,6 +30,13 @@ per-commit — the ingestion PR entry records the upstream range instead.
   with no change to the streaming protocol (C2); W6/W7/W8 (glow, orbs) and R2 (replay
   protection) are skipped. Corrected: the relay database is the `openclaw` Hetzner box in
   Ashburn, Virginia — not Germany.
+- Adversarially verified the speed plan with four Opus 5 reviewers (one per surface). Five
+  original items collided with real functionality and were rescoped: W2+W3 (four divergent
+  sort orders; naive deletion could show phantom pending approvals), R4 (caching would break
+  unlink race-detection and instant credential revocation), S3 (skipping cursors would freeze
+  the reconnect watermark), S7 (server-side limits would break the written pre-pagination
+  compatibility promise), S9 (revert reuses diff-cache keys). The plan now carries
+  per-item verdicts and verified scopes.
 
 ## 0.0.37 — 2026-08-08
 

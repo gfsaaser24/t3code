@@ -1,15 +1,22 @@
-# Turbo speed plan — 2026-08-09
+# Turbo speed plan — 2026-08-09 (verified edition)
 
-We audited all four parts of the stack — the server on your PC, the web app, the relay in the
-cloud, and the shared client code — looking for places where Turbo does way more work than it
-needs to. This document lists every finding in the same simple shape:
+Four read-only audits (server, web app, relay, shared client code) found the items below. On
+2026-08-09 a second, adversarial pass — four Opus 5 reviewers, one per surface — fact-checked
+every claim against the code and hunted for collisions with existing functionality. **This
+document is the post-verification version: every item's scope is what survived review.**
 
-- **The problem** — what the app does today that wastes time, in plain words.
-- **What we'd change** — the actual fix.
-- **The perf gain** — what gets faster for you.
+Verdict badges: ✅ verified safe as written · 🔧 verified, scope adjusted (the text below IS
+the adjusted scope) · 🛑 original idea collided with something real — rescoped or dropped, the
+collision is explained. A ⭐ still marks best bang-for-buck. Grey file paths are for the
+implementer.
 
-A ⭐ marks the best bang-for-buck items. The tiny grey file paths are for whoever implements
-it — you can ignore them. Nothing here is built yet.
+**What verification changed, in one paragraph:** the two "obviously safe" items were the
+biggest surprises — deleting the five "redundant" sorts (W3) would have produced phantom
+pending-approval badges because the codebase secretly has FOUR different sort orders, and the
+relay cache (R4) would have silently orphaned Cloudflare tunnels because one "read" it cached
+is actually a race-detection token. Both are salvaged below in safer forms. Several other
+items got cheaper (W11 is one config line, not 23 file edits) or more honest (the relay DB
+is in Ashburn; C6's mobile compression is "5 minutes to *measure*, unknown to fix").
 
 ---
 
@@ -18,356 +25,404 @@ it — you can ignore them. Nothing here is built yet.
 Turbo mostly doesn't have "slow code" — it has code that **repeats work**. When one new word
 streams in, the app re-processes the whole conversation. When one line of build output
 arrives, it rebuilds the whole terminal history. When the relay answers one request, it makes
-the same long-distance database calls it made last time and throws half the answers away. Fix
-the repetition and the same hardware suddenly feels twice as fast — that's the whole plan.
+database calls whose answers it throws away. Fix the repetition and the same hardware feels
+twice as fast.
 
 ---
 
 # Part 1 — The server (runs on your PC)
 
-### ⭐ S4. Turn on the database's "fast mode" — a one-line change
-- **The problem:** the server's database is set to its most paranoid mode: after *every* tiny
-  save, it waits for the disk to physically confirm the write. It does thousands of saves per
-  agent turn, so it spends a lot of its life waiting on the disk for no real safety benefit
-  (the standard "fast mode" is still crash-safe for app crashes).
-- **What we'd change:** add one line of standard database settings that every SQLite guide
-  recommends for exactly this setup.
-- **The perf gain:** *everything* the server does — every message, every event, every save —
-  gets a speed boost at once. Best single line of code in this plan.
-- <sub>`apps/server/src/persistence/Layers/Sqlite.ts:33-40`</sub>
+### ⭐ 🔧 S4. Turn on the database's "fast mode" — one line
+- **The problem:** the database physically syncs the disk after *every* tiny save (thousands
+  per turn). The standard "WAL + NORMAL" pairing every SQLite guide recommends is not set.
+- **What we'd change:** add the standard pragma set in the one setup layer so every
+  connection gets it uniformly. Honest wording per review: an *app* crash loses nothing; a
+  *power loss / hard reset* can lose the very last saves (that's the accepted trade every
+  desktop app makes). Don't touch `foreign_keys` or `journal_mode`.
+- **The perf gain:** every single thing the server does gets faster at once.
+- **Verified:** no second process shares the connection (official import and snapshots open
+  their own), so the setting can't leak or conflict.
+- <sub>`apps/server/src/persistence/Layers/Sqlite.ts:33-40`; confirm both the Bun and Node
+  client loaders apply it to the whole pool</sub>
 
-### ⭐ S1. Stop re-reading the whole chat to update four little numbers
-- **The problem:** dozens of times per turn, the server needs to refresh four small numbers
-  for the sidebar (things like "how many approvals are waiting"). To get them, it currently
-  reloads **every message and activity in the entire thread** — thousands of rows — counts
-  them by hand, and throws them away. The longer your chat, the more it reloads, every time.
-  This is *the* reason long sessions feel like they slowly turn to mud.
-- **What we'd change:** ask the database directly for the four numbers ("count the pending
-  ones") instead of fetching everything and counting ourselves. Also plug in an existing
-  batching feature that was built for this but is accidentally never switched on.
-- **The perf gain:** chats stay just as fast at hour six as they were at minute one. The
-  "Turbo got sluggish today" feeling largely disappears.
-- <sub>`apps/server/src/orchestration/Layers/ProjectionPipeline.ts:562-616, 1666-1676`</sub>
+### ⭐ 🔧 S1. Stop re-reading the whole chat to update four little numbers — now split in two
+- **The problem (confirmed exactly as claimed):** dozens of times per turn the server reloads
+  *every* message and activity in a thread to recompute four sidebar numbers. Also confirmed:
+  the batching machinery built to soften this is dead code on the live path.
+- **What we'd change (adjusted):** review found only **three of the four numbers** are simple
+  database questions. Part A (safe now): compute "latest user message," "pending approval
+  count," and "has actionable plan" with direct queries. Part B (separate, bigger): "pending
+  user-input count" is a stateful walk over activity history with string matching — it needs
+  its own tracked column plus a migration, done carefully. The "just switch on batching" idea
+  moves into S3, where it belongs.
+- **The perf gain:** Part A alone removes most of the "long chats get slow" weight.
+- <sub>`apps/server/src/orchestration/Layers/ProjectionPipeline.ts:562-616` — the
+  `pendingUserInputCount` fold at `:140-184` is the hard part</sub>
 
-### ⭐ S2. Stop rebuilding the terminal's memory on every line of output
-- **The problem:** picture keeping notes by re-photocopying your whole notebook every time you
-  add one line. That's what the server does with terminal output: for every burst a running
-  build produces (hundreds per second), it takes its ~5,000-line scrollback, chops it apart,
-  glues it back together, and queues the *entire thing* to be saved. A noisy `pnpm install`
-  can generate ~80 MB/s of this pure busywork.
-- **What we'd change:** keep the scrollback as a simple list and just add new lines to the
-  end; process output in little ~16 ms batches; save now and then instead of constantly.
-- **The perf gain:** builds and test runs scroll by smoothly and the rest of the app stays
-  responsive while they do. The "everything froze during a build" bug dies here.
-- <sub>`apps/server/src/terminal/Manager.ts:855-865, 1717-1770`</sub>
+### ⭐ 🔧 S2. Stop rebuilding the terminal's memory on every line of output
+- **The problem (half confirmed):** the quadratic rebuild is real — every output burst chops
+  and re-glues the ~5,000-line scrollback. But review found the *saving* half of the claim was
+  wrong: disk writes are already nicely debounced (40 ms coalescing worker). The waste is
+  memory churn, not disk.
+- **What we'd change (adjusted):** keep scrollback as a list of lines with incremental
+  capping; batch output ~16 ms before processing. Two guardrails from review: the final
+  string handed to clients must be byte-identical (a second device restores scrollback from
+  it), and the new batch buffer must flush inside the existing `flushPersist`/stop paths so
+  the repo's "wait on drains, never sleep" test discipline keeps working.
+- **The perf gain:** builds and test runs scroll smoothly; the rest of the app stays alive.
+- <sub>`apps/server/src/terminal/Manager.ts:855-865, 1717-1720`; drain contract at
+  `:1440-1456, 2028-2031`</sub>
 
-### S3. Stop asking nine departments to file paperwork about every event
-- **The problem:** every event that happens gets handed to all nine of the server's
-  bookkeeping components, each opening its own mini-transaction and writing its own "I saw it"
-  note — even though for any given event, about eight of the nine don't care. One agent turn
-  can produce ~2,700 of these pointless notes.
-- **What we'd change:** keep a simple list of which component cares about which kind of event,
-  skip the rest, and write the notes in batches.
-- **The perf gain:** agent turns commit noticeably faster and your disk does a fraction of
-  the work.
-- <sub>`apps/server/src/orchestration/Layers/ProjectionPipeline.ts:1626-1685`</sub>
+### 🛑 S3. Skip the no-op bookkeeping — rescoped after a real collision
+- **The collision review caught:** the client's reconnect position is computed as the
+  **minimum** progress marker across the bookkeeping components. Naively skipping markers for
+  components that don't care would freeze that minimum — and every reconnect would degrade to
+  a full re-download. The "optimization" would have made reconnects *slower*.
+- **The safe version:** skip the no-op *work* (don't run the 8 uninterested components'
+  bodies) but keep advancing **all nine** progress markers, and collapse the nine separate
+  mini-transactions into **one** transaction per event. Same speed win, no frozen markers.
+- **The perf gain:** per-event database work drops to roughly a quarter; turns commit faster.
+- <sub>`ProjectionPipeline.ts:1626-1685`; the watermark math that must not break:
+  `ProjectionSnapshotQuery.ts:191-255`, `ws.ts:1244-1260`</sub>
 
-### S5. Answer small questions with small lookups
-- **The problem:** several times per turn the server asks itself things like "did this turn
-  already produce a message?" — and answers by loading the *entire conversation* into memory
-  to check.
-- **What we'd change:** add tiny targeted lookups for those exact questions (one already
-  exists and just isn't used here).
-- **The perf gain:** turn processing stops costing more as conversations grow — same win as
-  S1, from a second angle.
-- <sub>`apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:931-935`</sub>
+### 🔧 S5. Answer small questions with small lookups — all-or-nothing
+- **What review caught:** the full-thread load is already shared across **five** users inside
+  one event via a memo — replacing just one of them *adds* a query while the big load still
+  happens. Partial fix = net loss.
+- **The safe version:** replace **all five** consumers with targeted lookups in one pass so
+  the big load can be deleted outright. Same disease exists un-memoized in the checkpoint
+  reactor — include it.
+- **The perf gain:** turn processing stops scaling with conversation length.
+- <sub>`ProviderRuntimeIngestion.ts:1480-1488` (the memo and its 5 call sites);
+  `CheckpointReactor.ts:165-169` (the second instance)</sub>
 
-### S6. Compute sidebar updates once, share with every device
-- **The problem:** with your desktop app, a browser tab, and your phone connected, the server
-  computes the exact same sidebar refresh **three separate times** — once per device — up to
-  twenty times a second during activity.
-- **What we'd change:** compute it once and hand the same result to everyone listening.
-- **The perf gain:** using Turbo from multiple devices at once costs the same as using it
-  from one. Phone + desktop stays buttery.
-- <sub>`apps/server/src/ws.ts:604-718`</sub>
+### 🔧 S6. Compute sidebar updates once, share with every device — share the answer, not the pipe
+- **What review caught:** each device's subscription carries personal state (its own resume
+  position, its own "synchronized" marker) — the *streams* can't merge. But the expensive
+  part — the database refetch — produces identical results for everyone and *can* be shared.
+- **The safe version:** memoize the refetched row per (item, version) for the duration of one
+  50 ms window, so N devices cost one read instead of N. Keep everything per-client otherwise.
+- **The perf gain:** phone + desktop + browser together cost the same as one device.
+- **Heads-up:** if C6/C7 (per-client compact formats) ever lands, this shared cache must key
+  by capability — the two items must be designed together.
+- <sub>`ws.ts:604-718` (refetch), `:1183-1287` (per-client state that stays)</sub>
 
-### S7. Send the first screen, not the whole filing cabinet
-- **The problem:** when a device connects, the server sends *every thread you've ever had* in
-  one giant message; older clients can also receive entire conversations at once with no
-  limit.
-- **What we'd change:** send a first page and fetch more on demand (the pagination machinery
-  already exists — it just needs sane defaults).
-- **The perf gain:** connecting and reconnecting gets much faster — most noticeable on your
-  phone or over the tunnel.
-- <sub>`apps/server/src/orchestration/ProjectionSnapshotQuery.ts:443-470`, `ws.ts:1391-1399`</sub>
+### 🛑 S7. "Send the first page, not the filing cabinet" — server half DROPPED
+- **The collision review caught:** the unlimited fallback is a **written compatibility
+  promise** — a code comment guarantees full threads to pre-pagination clients *because they
+  have no way to ask for more*. A server-side default limit would silently amputate history
+  for every older client on every surface. That's a one-way door; not doing it.
+- **What survives:** (a) make *our* clients always send their page-size preference (opt-in,
+  which the contract already supports); (b) bounding the thread *list* on connect needs a new
+  contract field rolled out with the compatibility-flag pattern — moved to Wave 3 beside
+  C6/C7 where contract changes live.
+- <sub>the promise: `ws.ts:1391-1399`; the opt-in machinery that already exists:
+  `contracts/orchestration.ts:548-581`</sub>
 
-### S8 + S9. Do checkpoint/diff work only when someone will look at it
-- **The problem:** at the end of every turn the server runs ~9 git commands and computes a
-  full diff — even if you never open the diff panel. And when you *do* open it, it recomputes
-  from scratch every time, despite the answer never changing (checkpoints are frozen). A
-  cache table built for exactly this sits unused.
-- **What we'd change:** compute just the cheap file-name summary at turn end, compute full
-  diffs on first view, and remember them (they can never go stale).
-- **The perf gain:** turns wrap up quicker, and the diff panel opens instantly after the
-  first view.
-- <sub>`apps/server/src/vcs/GitVcsDriver.ts:655-741`, `checkpointing/CheckpointDiffQuery.ts:167-265`</sub>
+### 🔧 S8. Cheaper end-of-turn diff summary (citation corrected)
+- **What review corrected:** the plan pointed at checkpoint *capture* — which must stay eager
+  (revert depends on it). The real cost is computing a **full text diff** at every turn end
+  just to extract per-file add/delete counts.
+- **The safe version:** add a stats-only diff variant (`--numstat`) for the summary — as a
+  *new* method, since the patch-producing one is still needed by the diff panel — with binary
+  files handled explicitly (numstat reports them differently). The summary must still be
+  ready *before* the turn's completion receipts fire, or tests break.
+- **The perf gain:** turns wrap up faster, especially in big repos.
+- <sub>real sites: `CheckpointReactor.ts:262-295`, `GitVcsDriver.ts:784-845`</sub>
+
+### 🛑 S9. Cache computed diffs — the "never changes" premise was false
+- **The collision review caught:** "checkpoints are frozen so diffs never go stale" is wrong
+  in one case: **revert**. Reverting deletes checkpoints and the next turn re-creates the
+  same turn-numbers against a different tree — the cache key gets reused and would serve the
+  *old* diff. Also: the cache table's key can't tell whitespace-sensitive from
+  whitespace-ignoring requests, and the Turbo official import shares the same table.
+- **The safe version (all three mandatory):** add whitespace mode to the cache key (new
+  migration); delete cached rows past the revert point *in the same transaction* as the
+  revert; register the shared-table ownership in the seam. Then the cache is sound.
+- **The perf gain:** diff panel opens instantly after first view.
+- <sub>`CheckpointDiffQuery.ts:167-265`; the revert path that invalidates:
+  `CheckpointReactor.ts:785-797`; table: `Migrations/003`</sub>
 
 ---
 
 # Part 2 — The web app (what you see)
 
-### ⭐ W1. Don't render code blocks at all while they stream — blip them in complete
-- **The problem:** while the agent streams a code block at you, the app re-renders the
-  growing block on **every few characters**: re-parse the markdown, re-color the syntax
-  **from the very top**, and re-layout the page — on the main thread, right in the middle of
-  drawing. A 400-line block gets the equivalent of 60,000 lines of re-coloring before it
-  finishes. It's the single most expensive thing happening while text streams.
-- **What we'd change (scope decided 2026-08-09):** take the streaming code block out of the
-  live render path entirely. While code is streaming, show only a small, fixed-size
-  placeholder card — language name and a cheap ticking line count ("`typescript` · writing…
-  142 lines") — and buffer the incoming text off-screen where it costs nothing. The moment
-  the block completes, render and color it **once**, fully finished, and blip it into place.
-  Deliberate trade-off: you don't watch code scroll by character-by-character — you get a
-  calm progress card and then the finished block. (Prose keeps streaming normally; this is
-  code fences only.)
-- **The perf gain:** the per-word cost of code streaming drops to almost literally zero — no
-  re-parsing, no re-coloring, no page reflow, just a counter ticking. Long code-heavy turns
-  stop being the app's heaviest moment and become its lightest, and the finished block
-  appears fully formatted in one clean pop. Kills the recolor bug *and* banks the biggest
-  resource saving available in the web app.
-- <sub>`apps/web/src/components/ChatMarkdown.tsx:670, 705-730` — placeholder replaces the
-  streaming branch; buffered text renders once on `streaming → false`</sub>
+### ⭐ 🔧 W1. Code blocks blip in complete — with three guards from review
+- **The problem (confirmed):** streaming re-colors the whole growing code block from the top
+  on every few characters, on the main thread. (One claim trimmed: the markdown parse itself
+  isn't skipped by this — the win is the coloring + code DOM + reflow, still the lion's
+  share.)
+- **What we'd change (your scope + three review guards):** placeholder card while code
+  streams; render once, fully colored, on completion. Guards: **(1)** the placeholder must
+  grow with a cheap line count — a fixed-size card becoming a 400-line block in one frame
+  makes the virtualized list visibly jump; **(2)** the placeholder lives *inside* the block
+  frame so the copy button and wrap toggle keep working; **(3)** if the connection drops
+  mid-block, fall back to showing the partial text — otherwise the card says "writing…"
+  forever. One honesty note: "complete" means when the *message* finishes, not each fence —
+  fine for the calm-card experience, worth knowing.
+- **The perf gain:** per-word cost of code streaming ≈ zero; code-heavy turns become the
+  app's lightest moment.
+- **Mobile:** has its own, different version of this bug (spawns a highlight job per delta,
+  each kept 5 minutes). Filed as a companion item — not silently ignored.
+- <sub>`apps/web/src/components/ChatMarkdown.tsx:670, 705-730`; list-jump risk:
+  `MessagesTimeline.tsx:577-591`; mobile twin:
+  `apps/mobile/src/features/threads/markdownCodeHighlightState.ts`</sub>
 
-### ⭐ W2 + W3. Sort the activity list once, not six times per update
-- **The problem:** every tool-progress update re-sorts the thread's *entire* activity list —
-  and then five other pieces of code each take that already-sorted list, copy it, and
-  **re-sort it again just in case**. Six full sorts of identical data, per update, dozens of
-  times per second. Half of this fix is literally deleting code.
-- **What we'd change:** delete the five "just in case" re-sorts, and have the store slot each
-  new activity into its correct position instead of re-sorting everything.
-- **The perf gain:** busy turns with lots of tool calls keep the UI light and immediate. And
-  we get it partly by *removing* code — the safest kind of change there is.
-- <sub>`packages/client-runtime/src/state/threadReducer.ts:563-592`, `apps/web/src/session-logic.ts:390-748`</sub>
+### 🛑 W2+W3. The six-sorts fix — the "safest change in the plan" was a trap
+- **The collision review caught (the best catch of the whole pass):** the six sorts are NOT
+  sorting the same way. The codebase has **four divergent orderings** (store, web view-layer,
+  mobile, server SQL) that disagree on (a) where rows *without* a sequence number go — and
+  such rows genuinely exist, a migration added the column with no backfill — and (b)
+  lifecycle order for ties. Deleting the five "redundant" re-sorts could make an approval's
+  *resolved* event sort before its *requested* event → **phantom pending-approval badges**.
+  Also: the "load older messages" merge path produces unsorted arrays that only those
+  re-sorts currently fix.
+- **The safe version (order matters):** 1) unify on ONE comparator — put lifecycle rank into
+  the store's comparator, pick one convention for missing sequence numbers, align the server
+  SQL; 2) make the older-page merge sort its output; 3) *then* delete the redundant re-sorts
+  — or better, sort once at the boundary the way **mobile already does** (mobile solved half
+  of this first; web is the laggard).
+- **The perf gain:** unchanged — busy turns stop bogging the UI — it just takes a unification
+  step first instead of being a naive deletion.
+- <sub>the four orderings: `threadReducer.ts:32-36`, `session-logic.ts:1532-1557`, mobile
+  `threadActivity.ts:1034-1039`, `ProjectionSnapshotQuery.ts:574-578`; unsorted merge:
+  `threads.ts:411-444`</sub>
 
-### W4. Compare timestamps the cheap way
-- **The problem:** the timeline sorts by timestamp using a heavyweight routine built for
-  comparing text across human languages and alphabets. Our timestamps are machine strings
-  that plain "is A less than B" compares perfectly — 10–30× cheaper. Right now a single
-  streamed word can trigger ~22,000 of the expensive comparisons.
-- **What we'd change:** swap in the plain comparison. A few characters of code.
-- **The perf gain:** another slice of per-word streaming cost gone, basically for free.
-- <sub>`apps/web/src/session-logic.ts:1573-1606`</sub>
+### ✅ W4. Compare timestamps the cheap way — verified safe, scope widened
+- **Verified:** every timestamp in the product is minted the same fixed-width way
+  (`toISOString`/`formatIso`), so plain string comparison is provably equivalent to the
+  heavyweight routine. No mixed formats found anywhere on the wire.
+- **Widened:** the same pattern exists at seven more sites in the same file plus the shared
+  `threadSort.ts` — fixing the shared one upgrades **mobile for free**.
+- **The perf gain:** a solid slice of per-word streaming cost, basically free.
+- <sub>`session-logic.ts:1603` + `:437, :536, :657, :668, :1546, :1611`;
+  `packages/client-runtime/src/state/threadSort.ts:240-254`</sub>
 
-### W6. ~~Calm the ultrathink glow~~ — SKIPPED (operator decision 2026-08-09)
-Leave the ultrathink glow exactly as it is. (Was: step its always-on animations down to a few
-frames per second to cut idle GPU use.) Not doing it.
+### W6 / W7 / W8 — SKIPPED (operator decision 2026-08-09). Glow and orbs stay as they are.
 
-### W7. ~~Pass the theme to the thinking orbs~~ — SKIPPED (operator decision 2026-08-09)
-Leave the orbs untouched. (Was: pass a `theme` prop so each orb stops watching the whole page
-for theme changes.) Not doing it.
+### 🔧 W9. Keyed thread store — real, but bigger than one line
+- **What review caught:** the threads array is part of the **wire contract and the on-disk
+  cache format** — it can't just become a Map. The fix is a client-local state shape (or a
+  parallel keyed index) with consumers migrated deliberately. Also, several downstream caches
+  already guard themselves — the blast radius was overstated, though still real.
+- **The perf gain:** streaming in one chat stops making the whole sidebar re-derive.
+- <sub>`shellReducer.ts:31-36`; the contract boundary: `contracts/orchestration.ts:486-491`;
+  cache encoders: web `connection/storage.ts:490`, mobile `environment-cache-store.ts:131`</sub>
 
-### W8. ~~Cap orb animation at 30 fps~~ — SKIPPED (operator decision 2026-08-09)
-Leave the orbs at full frame rate. Not doing it.
+### ✅ W10. Precompute sidebar sort keys — verified safe, two sites added
+- **Verified:** decorate-sort is correct here, and the pinned-thread manual ordering is a
+  fully separate code path — no interaction. Review added the *active* bucket's sort (same
+  bug, bigger list) and one site in shared code (fixes mobile too).
+- **The perf gain:** big thread lists sort in a blink instead of parsing thousands of dates.
+- <sub>`Sidebar.logic.ts:552-585` + `:509-517`; shared: `threadSort.ts:247-254`</sub>
 
-### W9 + W10. Make the sidebar mind its own business
-- **The problem:** while a thread streams, its bookkeeping fields change constantly — and
-  each change makes the sidebar rebuild its entire world: re-derive ~28 cached computations
-  and re-sort the full thread list, parsing thousands of dates from scratch *inside* the
-  sort. All for threads you're not even looking at.
-- **What we'd change:** store threads in a keyed map so one change touches one entry, and
-  precompute each thread's sort key once before sorting.
-- **The perf gain:** streaming in one chat no longer makes the rest of the app do push-ups.
-  Big thread lists feel weightless.
-- <sub>`packages/client-runtime/src/state/shellReducer.ts:31-36`, `apps/web/src/components/Sidebar.logic.ts:552-585`</sub>
-
-### ⭐ W11. Don't make people download the settings pages to read a chat
-- **The problem:** the web app ships as one 5.3 MB JavaScript file that must be downloaded
-  and parsed **before anything appears** — including all 11 settings pages, the usage
-  dashboard, the terminal engine, and the login system, even if you only came to read one
-  chat. On a mid-range laptop that's seconds of staring at nothing.
-- **What we'd change:** split it up so each part loads the first time you actually open it —
-  the routing library supports this natively; it's mechanical work. (Also: find out why
-  there's a 975 KB chunk named "textarea.")
-- **The perf gain:** app.t3turbo.pro appears on screen seconds earlier, on every device,
-  every visit after every update. The most noticeable cold-start win available.
-- <sub>`apps/web/vite.config.ts:259-263`, `apps/web/src/routes/*`</sub>
-
----
-
-# Part 3 — The relay (the cloud piece)
-
-Good news first: your actual chat traffic **already bypasses the relay** — it flows straight
-from your devices to your PC through the tunnel. The relay only handles logins, linking, and
-status pings.
-
-**Where the relay's database actually lives** (corrected — the first draft wrongly said
-"Germany"): the relay code runs on Cloudflare's network, answering from whichever Cloudflare
-location is closest to the device asking. Its database is the Supabase Postgres running on
-your `openclaw` Hetzner server in **Ashburn, Virginia** — the same box that runs OpenClaw
-(`178.156.253.60`, confirmed against your Hetzner account; ~10 ms from your desk on a clean
-path). So every question the relay asks its database is a hop from Cloudflare to that one
-Virginia box and back. Short from home; longer from a phone on the road hitting a distant
-Cloudflare location. Either way the math is the same: **asking six questions when two will do
-makes every request several times slower than it needs to be** — the game here is simply
-"make fewer trips," and every gain below stands regardless of geography.
-
-### ⭐ R1. Stop preparing push notifications we will never send
-- **The problem:** the relay's busiest endpoint fires on every agent status change. Most of
-  the database trips it makes exist to prepare **push notifications** — for the Apple push
-  system this fork has permanently *disabled*. It gathers the data, hands it to a component
-  whose job is "do nothing," and throws it all away. Every time.
-- **What we'd change:** a "store the record, skip the notification prep" version of that
-  component, plugged in from our own fork-owned wiring — same pattern we already use to
-  disable Apple push. Zero upstream code touched.
-- **The perf gain:** the relay's hottest call gets roughly **2× faster** and our database
-  sees about a third of its current load.
-- <sub>`infra/relay/src/agentActivity/AgentActivityPublisher.ts:56-172`, wired from `worker.ts`</sub>
-
-### ⭐ R5. Fix the backwards timeouts — a one-line bug fix
-- **The problem:** the relay gives your home server 10 seconds to answer, but gives *itself*
-  only 9 seconds total. So the friendly "your environment is offline" message can literally
-  never be shown — the 9-second timer always wins and you get a slow, generic error instead.
-- **What we'd change:** set the inner timer to ~6–7 seconds. One constant.
-- **The perf gain:** when your PC is off, your phone says "environment offline" quickly and
-  clearly instead of hanging 9 seconds and shrugging.
-- <sub>`infra/relay/src/http/Api.ts:167` vs `environments/EnvironmentConnector.ts:129`</sub>
-
-### R3. Stop calling Clerk's servers on every single CLI request
-- **The problem:** every CLI request makes the relay first try the *wrong* kind of token
-  check (guaranteed to fail), then call Clerk's API **over the internet** to verify your
-  token — with no memory of having just verified the same token one second ago. It even
-  rebuilds its Clerk connection object from scratch each request.
-- **What we'd change:** detect the token type up front, build the Clerk client once, and
-  remember successful verifications for ~30–60 seconds.
-- **The perf gain:** `t3 connect` and every CLI operation loses a full internet round trip —
-  the difference between "instant" and "hmm."
-- <sub>`infra/relay/src/http/Api.ts:1167-1227`</sub>
-
-### R4. Remember answers that almost never change
-- **The problem:** "which environment belongs to this user?" only changes when you link or
-  unlink a device — maybe once a month. The relay asks the Virginia database this question
-  fresh on **every request**.
-- **What we'd change:** remember those answers inside the relay for 5–15 seconds, and forget
-  them instantly on the three operations that can change them. Built in our own wiring layer.
-- **The perf gain:** connection and status checks go from two database trips to usually
-  **zero** — answered from the relay's own short-term memory.
-- <sub>fork-owned layers over `infra/relay/src/environments/*`</sub>
-
-### R2. ~~Move the replay-protection check to the edge~~ — SKIPPED (operator decision 2026-08-09)
-Not touching this. (Was: move the per-request "have I seen this request before?" security
-note from Postgres into a Cloudflare Durable Object.) It's the most invasive relay change and
-touches security-critical code — staying away by choice.
-
-> ⚠️ One booby trap for whoever implements relay changes: never hand a raw database query
-> object to `Effect.all` — it locks the Worker at 100 % CPU. Some code here is sequential
-> *on purpose* because of this. (`agentActivity/Devices.ts:84-88`)
+### ⭐ 🔧 W11. Split the 5.3 MB bundle — cheaper AND harder than planned
+- **Cheaper:** the router has a one-line option (`autoCodeSplitting: true`) that does the
+  splitting automatically and even handles the one tricky route correctly — no 23 hand-made
+  files.
+- **Harder (review found the catch):** the app's *root layout* eagerly imports the settings
+  tree, so route splitting alone won't evict it — the root's imports must be pruned too or
+  the win shrinks a lot. Two more guards: turn on hover-preloading (or first click on
+  Settings pays a visible load), and **test the desktop app explicitly** — it serves the app
+  over a custom protocol where a missing chunk fails in a special way that has bitten before.
+- **The perf gain:** the hosted app and desktop appear seconds earlier — still the biggest
+  cold-start win, once the root imports are handled.
+- <sub>`vite.config.ts:159` (`tanstackRouter()` — add the option), `router.ts:6-11` (add
+  `defaultPreload: "intent"`), `routes/__root.tsx` (the eager import graph), desktop protocol:
+  `ElectronProtocol.ts:112-148`</sub>
 
 ---
 
-# Part 4 — Shared client plumbing (web + mobile both benefit)
+# Part 3 — The relay (control plane on Cloudflare; database = your `openclaw` box in Ashburn, Virginia)
 
-### ⭐ C1. Stop weighing the whole terminal buffer on every update
-- **The problem:** the app keeps up to 512 KB of terminal scrollback, and on *every* output
-  frame it re-measures **the entire buffer, byte by byte**, just to ask "am I over the limit
-  yet?" During a build that's ~100 MB per second of measuring the same half-megabyte over
-  and over.
-- **What we'd change:** keep a running total (add the size of just the new bit), and only do
-  real trimming work when actually over the limit.
-- **The perf gain:** terminals stay smooth through the heaviest output — biggest single win
-  for the phone app.
-- <sub>`packages/client-runtime/src/state/terminalSession.ts:65-141`</sub>
+Your chat traffic already bypasses the relay. Every relay question to its database is a hop
+to the one Virginia box — the game is fewer trips. Review confirmed all four items' facts and
+added the guardrails below. (R2 stays skipped by your decision.)
 
-### ⭐ C2. Pool incoming words and blip them onto the screen in batches
-- **First, what this does NOT touch:** nothing about "streaming" as a technology changes.
-  The agent connection, the wire protocol, the server — all untouched. Words arrive from the
-  network exactly as they do today. This item is *only* about how often the **screen**
-  processes what already arrived. It is exactly "pool responses and blip them in."
-- **The problem:** today, every single arriving word is processed the instant it lands —
-  each one takes a lock, updates state six times, and triggers a screen re-render. That's
-  like a waiter making thirty separate kitchen trips for thirty fries. Your screen only
-  refreshes 60–165 times a second anyway, so most of those individual updates were never
-  even visible.
-- **What we'd change:** pool whatever arrived and blip it in as one batch. The pooling
-  window is a knob we choose: ~16 ms pools per screen-frame (text looks exactly as "live" as
-  today), or coarser — say 100–250 ms — where text visibly arrives in small chunks and the
-  app does even less work. Same words, same order, same result either way.
-- **The perf gain:** cuts the cost of everything else that happens per word by 3–5× at the
-  16 ms setting, more at coarser settings. This is the multiplier fix — it makes every other
-  fix in this list count more.
-- <sub>`packages/client-runtime/src/state/threads.ts:255-292, 402-406`</sub>
+### ⭐ 🔧 R1. Stop preparing push notifications we never send
+- **Verified:** the wasted queries are real, nothing consumes their results, and the mobile
+  app's status view reads only the row the publisher *stores* — so the fix is exactly "keep
+  the store, skip the prep." Empty delivery lists are already what every consumer sees today.
+- **Adjustments from review:** gate the swap on the same "APNs is off" condition the fork
+  already uses (never unconditional); keep the row write byte-identical; and my "zero
+  upstream code touched" claim was wrong — the wiring file is seam-listed, so its SEAM.md
+  entry gets updated and the new layer file registered. Fork-owned tests added alongside, not
+  by editing upstream's.
+- **The perf gain:** the relay's hottest call ~2× faster; DB load to about a third.
+- <sub>`AgentActivityPublisher.ts:56-172`; wire from `worker.ts:200-215`; mobile reader that
+  must keep working: `MobileRegistrations.ts:93-105`</sub>
 
-### ⭐ C6-check. Five minutes that might save mobile 8× its data
-- **The problem:** we measured that one agent turn is ~68 KB of raw data that websocket
-  compression squeezes to ~8 KB — *in browsers*. The phone app's networking layer often
-  doesn't turn that compression on, and nobody has ever checked ours.
-- **What we'd change:** check one connection header on a real phone. If compression is off,
-  turn it on.
-- **The perf gain:** if it's off (decent odds), the phone app instantly uses **~8× less
-  data** and feels dramatically snappier on cellular. Best lottery ticket in the plan.
-- <sub>`apps/server/integration/TransferBudgetReport.integration.ts:33-38` shows the 68 KB → 8 KB measurement</sub>
+### ⭐ 🔧 R5. Fix the mint timeout — one line, framing corrected
+- **What review corrected:** the 9-second outer deadline is *deliberate* (it turns hangs into
+  traceable errors before the phone gives up) — the plan's "backwards timeouts" framing was
+  wrong. Exactly one constant is broken: the 10-second inner budget that can never finish.
+- **The change:** set it to **7s** (not 6 — give the environment maximum budget under the
+  deadline). Know the trade: the same constant governs health checks, where a
+  waking-from-sleep tunnel that needs >7s now reads "offline" (today's failure retries;
+  "offline" doesn't). Acceptable; revisit with a separate health constant if it annoys.
+- **Prefer upstream:** this is a one-number correctness fix in Theo's code — textbook
+  upstream PR; forking it means rebasing one number forever.
+- <sub>`environments/EnvironmentConnector.ts:129` vs `http/Api.ts:167`</sub>
 
-### C3 + C5 + C8 + C9. Four smaller kindnesses to your battery
-- **The problem / change / gain, rapid-fire:**
-  1. Any thread update rebuilds the full thread list in memory → patch one entry in a keyed
-     map → sidebar data stops churning during turns.
-  2. The app re-saves its entire state snapshot to disk cache twice a second during activity
-     → skip saving while things are hot, save when they settle (the thread path already does
-     this — copy its homework) → fewer mid-turn stutters.
-  3. Bringing the app to the foreground tears down and rebuilds all 15–25 server
-     subscriptions even when the connection was fine → only rebuild when the connection
-     actually broke → the app snaps back instantly when you switch to it.
-  4. When your PC is off, your phone retries the connection every 16 seconds *forever*, all
-     night → let retries space out to minutes (with a dash of randomness so your devices
-     don't all retry in unison) → your phone's radio sleeps; foregrounding the app still
-     reconnects immediately.
-- <sub>`shellReducer.ts:31-36` · `shell.ts:94-178` · `wakeups.ts:19-21` · `supervisor.ts:32`</sub>
+### 🔧 R3. Stop phoning Clerk every request — split in two
+- **What review corrected:** the "wasted first check" is cheap local CPU, not a network trip
+  — the real win is the *cache*, and the item splits: **Part A (zero-risk, do first):** build
+  the Clerk client once instead of per-request — free win, ideal upstream PR. **Part B
+  (security-adjacent, separate):** remember successful verifications — capped at **30s** (not
+  60), keyed by token *hash*, successes only, never past the token's own expiry. Know the
+  trade: a banned user keeps access up to 30s. Don't hard-branch on token shape (some Clerk
+  configs issue JWT-shaped CLI tokens) — soft-detect but keep the fallback chain.
+- **The perf gain:** CLI operations lose their per-request internet round trip.
+- <sub>`http/Api.ts:1167-1227` (upstream-owned — seam entry or upstream PR)</sub>
 
-### C4. Make unpacking messages cheaper everywhere at once
-- **The problem:** two tiny inefficiencies in the *shared message-unpacking code* multiply
-  across the whole product: every text field allocates a little wrapper object just to trim
-  whitespace (thousands per screenful), and one helper unpacks every list element **twice**.
-  Server and clients share this code, so everyone pays.
-- **What we'd change:** two small rewrites in one file. The data on the wire stays
-  byte-for-byte identical — zero compatibility risk.
-- **The perf gain:** every message everyone sends or receives, on every surface, gets cheaper
-  to process. Quiet, global, compounding.
-- <sub>`packages/contracts/src/baseSchemas.ts:6-46`</sub>
-
-### C6 + C7. Shrink the envelopes (careful, coordinated — do last)
-- **The problem:** a 5-character streamed word ships inside ~600 bytes of addressing and
-  bookkeeping — like mailing single fries in padded envelopes. Separately, when one
-  provider's status flips one field, the server re-sends the *entire catalogue* of every
-  provider, model, command, and skill.
-- **What we'd change:** compact "delta" message types carrying only what changed, rolled out
-  behind a compatibility flag (the codebase already has the exact pattern for doing this
-  safely across old and new clients).
-- **The perf gain:** less bandwidth and less parsing on every surface, every second of use —
-  saved for last only because it needs server and clients updated in step.
-- <sub>`packages/contracts/src/orchestration.ts:1221-1326`, `server.ts:485-533`</sub>
+### 🛑 R4. Remember nearly-static answers — shrunk hard after two real collisions
+- **What review caught (this one would have hurt):** two of the three lookups I wanted to
+  cache are not plain reads. **(a)** The allocation record carries a compare-and-swap token
+  used to detect races during unlink — serve it stale and unlinking **silently orphans the
+  Cloudflare tunnel and DNS record** while telling you it succeeded. **(b)** The credential
+  check is the *deliberate* instant-revocation enforcement point — caching it lets an
+  unlinked device keep publishing for the cache window, and a purge in one Cloudflare
+  location doesn't reach the others. Also, my invalidation list had 3 of the actual **6**
+  writers.
+- **The safe version:** cache **only** the user-link lookups, 5 seconds max, accepting a ≤5s
+  window after an unlink before status reflects it. Never cache allocations or credentials.
+  Honest math: requests go 3 trips → 1 (the replay-protection write stays, since R2 is
+  skipped) — still worth having, no longer the headline.
+- <sub>safe to cache: `EnvironmentLinks.getForUser/listForUser`; never cache:
+  `ManagedEndpointAllocations.get` (CAS at `:319-357`), `EnvironmentCredentials.authenticate`
+  (revocation join at `:200-217`)</sub>
 
 ---
 
-# The order we'd do it in
+# Part 4 — Shared client plumbing (web + mobile)
 
-**Wave 1 — an afternoon of tiny, zero-risk changes:**
-S4 (database fast mode) · W3 (delete the five re-sorts) · W4 (cheap comparisons) · R5
-(timeout constant) · C6-check (phone compression). Each is a few lines; several are pure
-deletions.
+### ⭐ 🔧 C1. Stop re-measuring the terminal buffer — with three implementation notes
+- **Verified,** plus a bonus: past the cap, today's trimming defeats the terminal's
+  incremental-draw check **every frame** → full repaint per frame. The fix removes that too —
+  a bigger win than originally claimed.
+- **Adjustments:** the running byte-count must live *in the state object* (the update
+  function is passed by reference — a new parameter would silently unbind); trim **down to
+  the cap** when a slack threshold is exceeded (not "drop a chunk" — phones render this
+  buffer directly, don't let it balloon); keep the existing multi-byte-character safety loop;
+  two tests assert exact-at-cap behavior and get rewritten with the change.
+- <sub>`terminalSession.ts:65-141` (+ state shape at `:20-26`); the repaint bonus:
+  `ThreadTerminalDrawer.tsx:809-816`; tests: `terminalSession.test.ts:112-134, 173-186`</sub>
 
-**Wave 2 — the two "quadratic monsters" and the relay hot path:**
-W1 (code blocks blip in complete instead of rendering while streaming) · S2 + C1 (terminal,
-both sides) · C2 (batch per frame) · R1 (skip dead push work) · R3 (stop phoning Clerk).
-This wave is where "Turbo feels twice as fast" actually happens.
+### ⭐ 🔧 C2. Pool-and-blip — verified with one real trap and a decided window
+- **Still true:** wire/protocol untouched; this only batches what already arrived before the
+  screen processes it. The lock invariant review worried about is actually *stronger* under
+  batching, provided each item still runs individually inside the batch.
+- **The trap review caught:** on reconnect, the fresh snapshot bypasses the pool — then stale
+  pooled leftovers from the *old* session flush on top of it, and snapshot-type items aren't
+  sequence-guarded. **The pool must live inside the per-session stream** so it dies with the
+  session. That one placement decision is the whole safety story.
+- **Window decided by review: 16 ms** — not coarser — because **approval prompts ride this
+  same stream**. A 250 ms pool on a modal that gates your agent, stacked on server batching
+  and network, is felt. At 16 ms it's invisible and still collapses ~30 renders/sec to ~1 per
+  frame. (Also: the "synchronized" connection marker should flush immediately.)
+- **Cost review priced in:** ~20 existing tests use a virtual clock and will hang on the new
+  timer until each gets a clock-advance — budgeted, mechanical.
+- <sub>insertion point: *inside* `subscribeToSession` in `rpc/client.ts` (NOT downstream of
+  it); the bypass: `threads.ts:614`, `shell.ts:223`; tests: `threads-sync.test.ts` et al.</sub>
 
-**Wave 3 — the bigger rebuilds, measuring as we go:**
-S1 + S5 (small lookups) · S3 (projector map) · W11 (bundle splitting) · W9/C3 (keyed stores)
-· C4 (cheaper unpacking) · S6 (shared fan-out) · S8/S9 (lazy diffs) · R4 (relay short-term
-memory) · C6/C7 (small envelopes).
+### 🔧 C3. Keyed thread index — order is safe, the boundary is the cost
+- **Verified:** nothing depends on array order (every consumer re-sorts) — that fear is
+  retired. The real constraint: the array is a wire+cache format, so the keyed structure is a
+  *parallel client-side index*, not a type swap. Hermes (mobile JS engine) lacks `.toSorted`
+  — use the spread form in anything shared.
+- <sub>`shellReducer.ts:31-36`; contract: `orchestration.ts:486-491`</sub>
 
-**Skipped by operator decision (2026-08-09):** W6, W7, W8 (glow and orbs stay exactly as
-they are) · R2 (replay-protection stays in Postgres).
+### 🔧 C5. Don't re-save state while hot — predicate redesigned
+- **What review caught:** copying the thread path's guard naively would let **one running
+  thread suppress saving the whole environment's state** — a project created during a turn
+  would vanish from crash-recovery paint. And the shell path has no shutdown flush to pair
+  with a skip.
+- **The safe version:** skip only *thread-update* events for running threads (project
+  create/delete and thread-removed always persist), add the missing shutdown flush — or
+  simply raise the debounce to 2–3 s. Either is fine; don't copy the predicate blindly.
+- <sub>`shell.ts:94-178`; the finalizer the thread path has and shell lacks:
+  `threads.ts:665-691`</sub>
 
-**Who owns what:** our own code (relay wiring, orbs, Turbo seams) we change directly. For
-fixes in Theo's code, the smart move is often to send them upstream as small PRs — perf
-fixes are exactly what they accept, we're a vouched contributor now, and every accepted fix
-comes back to us automatically through the nightly sync with zero maintenance on our side.
+### 🔧 C8. Skip pointless resubscribes on app-foreground — smaller and different than planned
+- **What review corrected:** "15–25 subscriptions" was wrong — only **two** streams resubscribe
+  on foreground (the rest already rebuild only on real session change). Long suspends already
+  force a clean reconnect through a different path, so the risky case is narrow. But the
+  foreground resubscribe is currently **the only recovery** for a stream that died silently
+  while the socket stayed healthy — removing it unconditionally deletes a safety net.
+- **The safe version:** the signal lives in the connection supervisor (not the wakeup
+  predicate file); skip the resubscribe only when the probe passed AND the stream showed life
+  since the last wakeup; cap consecutive skips. Keep the relay-specific wakeup excluded as it
+  is today.
+- **The perf gain (right-sized):** snappier app-foreground, less battery — modest, real.
+- <sub>`supervisor.ts:421-437, 685` (where the work actually is); `wakeups.ts:19-21` (where
+  the plan wrongly pointed)</sub>
+
+### 🔧 C9. Let retry backoff breathe — three consumers move with it
+- **Verified:** foreground instantly resets the ladder (wired correctly), and nothing
+  displays a retry countdown — the two feared blockers are clear. Three real ones found
+  instead: the web landing page waits on "first 2 attempts" *by count* (minutes-long ladder =
+  minutes-long blank landing — re-bound it by wall clock); a comment elsewhere hard-codes the
+  ladder values (already drifted — fix it); jitter must come from a seedable source or a
+  dozen exact-timing tests go flaky.
+- <sub>`supervisor.ts:32, 104-106`; the landing gate: `apps/web/src/state/shell.ts:37-45`;
+  the drifted comment: `state/server.ts:150-160`</sub>
+
+### ✅ C4. Cheaper message unpacking — verified byte-identical, one trap named
+- **Verified:** the swap is safe and may even unlock a faster decode path. **The one trap:**
+  don't reach for the library's built-in `trim()` helper — it trims on decode only, and
+  values constructed *without* decoding would newly ship untrimmed. Use the explicit
+  both-directions form. The double-decode in the array helper is confirmed unintentional;
+  single-decode is behaviorally identical if per-element drop-on-failure is preserved (keep a
+  debug log — a silent regression here looks like "the editor list is mysteriously empty").
+- <sub>`contracts/src/baseSchemas.ts:6-46`; the exact replacement:
+  `SchemaTransformation.transform({ decode: v => v.trim(), encode: v => v.trim() })`</sub>
+
+### ⭐ 🔧 C6-check. Mobile compression — measure in 5 minutes; the fix is a project
+- **Verified, and the odds got better:** mobile injects the platform's global WebSocket,
+  which on React Native doesn't offer compression — so "off" is *likely*, and the 68 KB → 8 KB
+  gap is measured, not estimated. **Framing corrected:** confirming takes minutes (the test
+  harness exists); *fixing* means adopting a WebSocket implementation that supports it — a
+  dependency decision. Also test the phone→server direction: the server's decompression path
+  has a documented sharp edge there.
+- <sub>measure: `apps/server/src/server.test.ts:3304-3328` shows the mechanism; injection
+  point if fixing: `apps/mobile/src/lib/runtime.ts:29`</sub>
+
+### 🔧 C6/C7. Smaller envelopes — right idea, wrong half of the rollout pattern
+- **What review corrected:** the compatibility flag I cited only protects one direction
+  (new client / old server). The direction that matters here — old client / new server —
+  needs the **per-subscription opt-in** half of the pattern, which the codebase also already
+  has. Also: this item and S6's shared cache pull opposite directions (per-client shapes vs
+  one-shape-for-all) — design them together. And CI's transfer-budget caps must be lowered
+  with the change or the win is invisible and regressions go unpoliced.
+- **Strong recommendation:** this is upstream-PR material more than fork material — wire
+  formats are the worst thing to rebase nightly forever.
+- <sub>envelope: `orchestration.ts:1317-1327`; the opt-in half: `orchestration.ts:548-581`;
+  budget caps to lower: `TransferBudgetReport.integration.ts:33-38`</sub>
+
+---
+
+# The verified order of attack
+
+**Wave 1 — tiny and now actually verified safe:**
+S4 (pragmas, honest wording) · W4 (cheap comparisons, widened + shared file → mobile wins
+too) · W10 (decorate-sort, 2 sites added) · C4 (with the exact transform named) · R3-Part A
+(hoist the Clerk client) · R5 (7s, prefer upstream PR) · C6-check (measure only).
+
+**Wave 2 — the monsters, with their guards on:**
+W1 (blip-in + three guards) · S2 + C1 (terminal both sides, drain-contract + state-carried
+count) · C2 (16 ms pool inside the session stream + test budget) · R1 (dead-push skip, seam
+updated) · W2+W3 (comparator unification FIRST, then single sort) · R3-Part B (30s memo) ·
+R4 (links-only, 5s).
+
+**Wave 3 — bigger rebuilds, measured:**
+S1-Part A → S3 (safe version) → S5 (all five at once) · W11 (auto-split + root pruning +
+desktop verification) · W9/C3 (parallel keyed index) · S6 (shared refetch — designed with
+C6/C7) · C5 · C8 · C9 · S8 (numstat variant) · S9 (with all three invalidation mandates) ·
+S1-Part B (user-input counter migration) · C6/C7 + shell paging from S7 (contract work,
+upstream-first).
+
+**Skipped by operator decision:** W6 · W7 · W8 (glow and orbs untouched) · R2 (replay
+protection stays in Postgres).
+
+**Upstream-PR candidates (no seam maintenance, fix flows back via nightly sync):** S4 · W4 ·
+W10 · C4 · R3-Part A · R5 · the W2+W3 comparator unification · C6/C7.
