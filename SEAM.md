@@ -87,12 +87,17 @@ fork's change.
   `readTerminalHistoryBuffer` (it flushes the batch first, which is what keeps snapshots and
   `persistHistory` byte-identical); the drain loop's output branch only calls
   `queueTerminalHistoryChunk` + `queueHistoryBatch`; exit and `stopProcess` call
-  `endTerminalHistoryStream` and `queuePersist` when it returns `true`; and `flushPersist` drains
-  `historyBatchWorker` **before** `persistWorker`. Two invariants are non-negotiable: output events
-  must stay one-per-PTY-chunk with their own `data` and sequence (batching is history-side only —
-  clients and the ordering tests depend on the per-chunk wire shape), and the batch must be a
+  `endTerminalHistoryStream` and persist whatever `takeTerminalHistoryToPersist` returns; and
+  `flushPersist` drains `historyBatchWorker` **before** `persistWorker`. Upstream's
+  `sanitizeTerminalHistoryChunk` is also exported so the fork-owned byte-identity test can drive the
+  real sanitizer — keep the export. Three invariants are non-negotiable: output events must stay
+  one-per-PTY-chunk with their own `data` and sequence (batching is history-side only — clients and
+  the ordering tests depend on the per-chunk wire shape); the batch must be a
   `makeKeyedCoalescingWorker` so `drainKey` keeps the repo's "wait on drains, never sleep" test
-  discipline working.
+  discipline working; and the persist decision must read the buffer's `dirtySincePersist` flag via
+  `takeTerminalHistoryToPersist`, never "did this flush append" — any scrollback read flushes the
+  batch, so a racing snapshot would otherwise leave the batch tick with nothing pending and the tail
+  would never reach disk.
 - **Additive** `apps/server/src/turbo/terminalHistoryBuffer.ts` — the incremental scrollback buffer
   itself: raw `split("\n")` lines, a memoized join, and the queued-chunk batch. On conflict, keep
   the fork file.

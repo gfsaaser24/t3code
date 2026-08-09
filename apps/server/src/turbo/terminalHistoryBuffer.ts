@@ -33,6 +33,15 @@ export interface TerminalHistoryBuffer {
   pendingChunks: Array<string>;
   /** Sanitizer carry-over: the trailing bytes of a control sequence still in flight. */
   pendingControlSequence: string;
+  /**
+   * Whether the scrollback has text that has not been handed to the persist worker.
+   *
+   * This is the persist signal, not "did the last flush append": any scrollback read
+   * (a snapshot, an attach) flushes the batch, so the batch tick that follows finds
+   * nothing pending and would otherwise conclude nothing needs writing. The flag
+   * survives that race and is only cleared where a persist is actually issued.
+   */
+  dirtySincePersist: boolean;
   readonly maxLines: number;
   readonly sanitize: TerminalHistorySanitizer;
 }
@@ -47,6 +56,8 @@ export function createTerminalHistoryBuffer(options: {
     text: options.text,
     pendingChunks: [],
     pendingControlSequence: "",
+    // The seed text came off disk, so it is already persisted.
+    dirtySincePersist: false,
     maxLines: options.maxLines,
     sanitize: options.sanitize,
   };
@@ -58,6 +69,7 @@ export function resetTerminalHistoryBuffer(buffer: TerminalHistoryBuffer): void 
   buffer.text = "";
   buffer.pendingChunks = [];
   buffer.pendingControlSequence = "";
+  buffer.dirtySincePersist = false;
 }
 
 /** Queues a raw PTY chunk. Nothing is parsed or joined until the batch flushes. */
@@ -92,20 +104,38 @@ export function flushTerminalHistoryBuffer(buffer: TerminalHistoryBuffer): boole
  * carry - a stopped PTY will never send the bytes that would complete it. Mirrors
  * upstream's `session.pendingHistoryControlSequence = ""` on stop.
  *
- * @returns whether visible text reached the scrollback, so the caller can persist it
- * (the scheduled batch will find nothing left to do).
+ * Ask `takeTerminalHistoryToPersist` afterwards for the string still owed to disk.
  */
-export function endTerminalHistoryStream(buffer: TerminalHistoryBuffer): boolean {
-  const appended = flushTerminalHistoryBuffer(buffer);
+export function endTerminalHistoryStream(buffer: TerminalHistoryBuffer): void {
+  flushTerminalHistoryBuffer(buffer);
   buffer.pendingControlSequence = "";
-  return appended;
 }
 
-/** Flushes the batch, then returns the scrollback string handed to clients and disk. */
+/**
+ * Flushes the batch, then returns the scrollback string handed to clients and disk.
+ * A read is not a persist, so it deliberately leaves `dirtySincePersist` alone.
+ */
 export function readTerminalHistoryBuffer(buffer: TerminalHistoryBuffer): string {
   flushTerminalHistoryBuffer(buffer);
   buffer.text ??= buffer.lines.join("\n");
   return buffer.text;
+}
+
+/**
+ * Flushes the batch and returns the string to write when the scrollback still owes a
+ * persist, or `null` when it is already on disk. Reading and clearing the flag in one
+ * synchronous step is what keeps a concurrent read from stranding the tail.
+ */
+export function takeTerminalHistoryToPersist(buffer: TerminalHistoryBuffer): string | null {
+  flushTerminalHistoryBuffer(buffer);
+  return buffer.dirtySincePersist ? takeTerminalHistoryForPersist(buffer) : null;
+}
+
+/** The unconditional form, for callers that always write (clear, restart, close). */
+export function takeTerminalHistoryForPersist(buffer: TerminalHistoryBuffer): string {
+  const text = readTerminalHistoryBuffer(buffer);
+  buffer.dirtySincePersist = false;
+  return text;
 }
 
 function appendVisibleText(buffer: TerminalHistoryBuffer, visibleText: string): void {
@@ -123,4 +153,5 @@ function appendVisibleText(buffer: TerminalHistoryBuffer, visibleText: string): 
     lines.splice(0, lineCount - buffer.maxLines);
   }
   buffer.text = null;
+  buffer.dirtySincePersist = true;
 }

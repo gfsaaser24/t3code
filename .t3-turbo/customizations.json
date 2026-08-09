@@ -527,7 +527,7 @@
     {
       "id": "terminal-scrollback-batching",
       "status": "implemented",
-      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the batch is a keyed coalescing worker that flushPersist drains before the persist worker, and every scrollback read flushes it so the string handed to clients stays byte-identical.",
+      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the batch is a keyed coalescing worker that flushPersist drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
       "checks": [
         {
           "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
@@ -535,14 +535,18 @@
             "export function queueTerminalHistoryChunk",
             "export function flushTerminalHistoryBuffer",
             "export function endTerminalHistoryStream",
-            "export function readTerminalHistoryBuffer"
+            "export function readTerminalHistoryBuffer",
+            "export function takeTerminalHistoryToPersist",
+            "dirtySincePersist"
           ]
         },
         {
           "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
           "markers": [
             "matches upstream across the cap-trim boundary",
-            "is byte-identical however the recorded stream is chunked and batched"
+            "is byte-identical however the recorded stream is chunked and batched",
+            "is byte-identical however the real stream is chunked and batched",
+            "still owes the persist when a read flushed the batch before the batch tick"
           ]
         },
         {
@@ -552,7 +556,9 @@
             "historyBuffer: TerminalHistoryBuffer;",
             "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
             "historyBatchWorker.drainKey(sessionKey);",
-            "readTerminalHistoryBuffer(session.historyBuffer)"
+            "readTerminalHistoryBuffer(session.historyBuffer)",
+            "takeTerminalHistoryToPersist(session.historyBuffer)",
+            "export function sanitizeTerminalHistoryChunk"
           ]
         },
         {

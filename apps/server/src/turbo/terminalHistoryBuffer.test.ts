@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
+import { sanitizeTerminalHistoryChunk } from "../terminal/Manager.ts";
 import {
   createTerminalHistoryBuffer,
   endTerminalHistoryStream,
@@ -7,6 +8,8 @@ import {
   queueTerminalHistoryChunk,
   readTerminalHistoryBuffer,
   resetTerminalHistoryBuffer,
+  takeTerminalHistoryForPersist,
+  takeTerminalHistoryToPersist,
   type TerminalHistorySanitizer,
 } from "./terminalHistoryBuffer.ts";
 
@@ -89,7 +92,7 @@ const stripDeviceStatusReports: TerminalHistorySanitizer = (pendingControlSequen
   let visibleText = "";
   let index = 0;
   while (index < input.length) {
-    if (input[index] !== "") {
+    if (input[index] !== "\u001b") {
       visibleText += input[index] ?? "";
       index += 1;
       continue;
@@ -134,12 +137,18 @@ function splitDeterministically(input: string, seed: number): ReadonlyArray<stri
 
 const RECORDED_BURST = [
   "npm run build\r\n",
-  "[32m✓[0m compiled ",
+  "\u001b[32m✓\u001b[0m compiled ",
   "module ",
   "one\nmodule two\nmodule three\n",
-  "[6",
+  "\u001b[6",
   "n",
   "warning: unused import\n",
+  // A CR-only progress bar: the last line is rewritten in place many times without
+  // ever advancing, so the buffer must keep growing one line rather than adding any.
+  "\rbundling  0%",
+  "\rbundling 48%",
+  "\rbundling 100%",
+  "\r\u001b[Kbundled\n",
   "no trailing newline here",
   "\n\n\n",
   "done",
@@ -200,6 +209,130 @@ describe("terminal history buffer byte identity", () => {
   });
 });
 
+describe("terminal history buffer byte identity with the real sanitizer", () => {
+  /**
+   * Closes the coverage gap between this file's stand-in sanitizer and production:
+   * these cases drive the Manager's own `sanitizeTerminalHistoryChunk` through the
+   * batch, so an upstream change to how the carry is held (e.g. capping it) fails here
+   * rather than silently corrupting a second device's restored scrollback.
+   */
+  const REAL_BURST = [
+    "prompt ",
+    "\u001b[32mok\u001b[0m ",
+    "\u001b]11;rgb:ffff/ffff/ffff\u0007",
+    "\u001b[1;1R",
+    // Deliberately split mid-sequence, the case batching has to get right.
+    "\u001b[?2026$",
+    "pafter ",
+    "\u001bP$q ",
+    "m\u001b",
+    "\\after ",
+    "\u009b?3",
+    "1uafter ",
+    "\u0090+q544e",
+    "\u009cafter\n",
+    '\u001b[!p\u001b["p\u001b[4 q\u001b[u',
+    "done\n",
+  ] as const;
+
+  it("matches upstream for the recorded query/reply burst", () => {
+    const chunks = [...REAL_BURST];
+    for (const maxLines of [1, 2, 5, 5_000]) {
+      expect(
+        bufferedHistory("", chunks, maxLines, sanitizeTerminalHistoryChunk, 4),
+        `maxLines=${maxLines}`,
+      ).toBe(upstreamHistory("", chunks, maxLines, sanitizeTerminalHistoryChunk));
+    }
+  });
+
+  it("is byte-identical however the real stream is chunked and batched", () => {
+    const stream = REAL_BURST.join("");
+    const expected = upstreamHistory("", [stream], 4, sanitizeTerminalHistoryChunk);
+    for (const seed of [3, 29, 7_777]) {
+      const chunks = splitDeterministically(stream, seed);
+      expect(upstreamHistory("", chunks, 4, sanitizeTerminalHistoryChunk), `seed=${seed}`).toBe(
+        expected,
+      );
+      for (const batchEvery of [1, 3, chunks.length]) {
+        expect(
+          bufferedHistory("", chunks, 4, sanitizeTerminalHistoryChunk, batchEvery),
+          `seed=${seed} batchEvery=${batchEvery}`,
+        ).toBe(expected);
+      }
+    }
+  });
+});
+
+describe("terminal history buffer persist tracking", () => {
+  const newBuffer = (text = "") =>
+    createTerminalHistoryBuffer({ text, maxLines: 10, sanitize: passThrough });
+
+  it("still owes the persist when a read flushed the batch before the batch tick", () => {
+    // The exact race: chunk queued -> snapshot/attach read flushes it into the
+    // scrollback -> batch worker wakes to an empty pending list. Gating on "did this
+    // flush append" would drop the tail forever.
+    const buffer = newBuffer();
+    queueTerminalHistoryChunk(buffer, "tail\n");
+
+    expect(readTerminalHistoryBuffer(buffer)).toBe("tail\n");
+    expect(flushTerminalHistoryBuffer(buffer)).toBe(false);
+
+    expect(takeTerminalHistoryToPersist(buffer)).toBe("tail\n");
+  });
+
+  it("still owes the persist at exit when a read already drained the batch", () => {
+    const buffer = newBuffer();
+    queueTerminalHistoryChunk(buffer, "last line\n");
+    readTerminalHistoryBuffer(buffer);
+    expect(takeTerminalHistoryToPersist(buffer)).toBe("last line\n");
+
+    // And the same once more via the PTY-exit path.
+    queueTerminalHistoryChunk(buffer, "after exit\n");
+    readTerminalHistoryBuffer(buffer);
+    endTerminalHistoryStream(buffer);
+    expect(takeTerminalHistoryToPersist(buffer)).toBe("last line\nafter exit\n");
+  });
+
+  it("does not re-persist scrollback that is already on disk", () => {
+    const buffer = newBuffer();
+    queueTerminalHistoryChunk(buffer, "written\n");
+    expect(takeTerminalHistoryToPersist(buffer)).toBe("written\n");
+    expect(takeTerminalHistoryToPersist(buffer)).toBeNull();
+
+    endTerminalHistoryStream(buffer);
+    expect(takeTerminalHistoryToPersist(buffer)).toBeNull();
+  });
+
+  it("owes nothing for scrollback restored from disk until new output arrives", () => {
+    const buffer = newBuffer("restored\n");
+    expect(takeTerminalHistoryToPersist(buffer)).toBeNull();
+
+    queueTerminalHistoryChunk(buffer, "fresh\n");
+    expect(takeTerminalHistoryToPersist(buffer)).toBe("restored\nfresh\n");
+  });
+
+  it("owes nothing after a stripped-only burst", () => {
+    const buffer = createTerminalHistoryBuffer({
+      text: "",
+      maxLines: 10,
+      sanitize: stripDeviceStatusReports,
+    });
+    queueTerminalHistoryChunk(buffer, "\u001b[6n");
+    expect(takeTerminalHistoryToPersist(buffer)).toBeNull();
+  });
+
+  it("clears the debt on reset and on an unconditional take", () => {
+    const buffer = newBuffer();
+    queueTerminalHistoryChunk(buffer, "discarded\n");
+    resetTerminalHistoryBuffer(buffer);
+    expect(takeTerminalHistoryToPersist(buffer)).toBeNull();
+
+    queueTerminalHistoryChunk(buffer, "kept\n");
+    expect(takeTerminalHistoryForPersist(buffer)).toBe("kept\n");
+    expect(takeTerminalHistoryToPersist(buffer)).toBeNull();
+  });
+});
+
 describe("terminal history buffer batching", () => {
   it("reports whether a batch put visible text into the scrollback", () => {
     const buffer = createTerminalHistoryBuffer({
@@ -210,7 +343,7 @@ describe("terminal history buffer batching", () => {
 
     expect(flushTerminalHistoryBuffer(buffer)).toBe(false);
 
-    queueTerminalHistoryChunk(buffer, "[6n");
+    queueTerminalHistoryChunk(buffer, "\u001b[6n");
     expect(flushTerminalHistoryBuffer(buffer)).toBe(false);
     expect(readTerminalHistoryBuffer(buffer)).toBe("");
 
@@ -239,9 +372,9 @@ describe("terminal history buffer batching", () => {
       sanitize: stripDeviceStatusReports,
     });
 
-    queueTerminalHistoryChunk(buffer, "before [");
+    queueTerminalHistoryChunk(buffer, "before \u001b[");
     expect(flushTerminalHistoryBuffer(buffer)).toBe(true);
-    expect(buffer.pendingControlSequence).toBe("[");
+    expect(buffer.pendingControlSequence).toBe("\u001b[");
 
     queueTerminalHistoryChunk(buffer, "6nafter\n");
     expect(flushTerminalHistoryBuffer(buffer)).toBe(true);
@@ -255,7 +388,7 @@ describe("terminal history buffer batching", () => {
       sanitize: stripDeviceStatusReports,
     });
 
-    queueTerminalHistoryChunk(buffer, "output\n[");
+    queueTerminalHistoryChunk(buffer, "output\n\u001b[");
     endTerminalHistoryStream(buffer);
 
     expect(readTerminalHistoryBuffer(buffer)).toBe("output\n");
@@ -269,7 +402,7 @@ describe("terminal history buffer batching", () => {
       sanitize: stripDeviceStatusReports,
     });
 
-    queueTerminalHistoryChunk(buffer, "never persisted[");
+    queueTerminalHistoryChunk(buffer, "never persisted\u001b[");
     resetTerminalHistoryBuffer(buffer);
 
     expect(readTerminalHistoryBuffer(buffer)).toBe("");
