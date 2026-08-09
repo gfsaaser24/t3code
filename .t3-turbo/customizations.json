@@ -558,7 +558,7 @@
         {
           "path": "apps/web/src/session-logic.ts",
           "markers": [
-            "export function compareIsoTimestamps",
+            "import { compareIsoTimestamps } from \"@t3tools/client-runtime/state/thread-activity-order\"",
             "compareIsoTimestamps(left.createdAt, right.createdAt)",
             "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
             "compareIsoTimestamps(a.createdAt, b.createdAt)",
@@ -839,6 +839,85 @@
             "Every day at 11:00 PM",
             "installer only in `gfsaaser24/t3code`",
             "last known-good release"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unified-activity-order",
+      "status": "implemented",
+      "summary": "One canonical activity comparator (sequence with un-numbered legacy rows first, then createdAt, then lifecycle phase, then id) replaces four divergent orderings across the store, the web view layer, mobile, and the server SQL; the older-page merge sorts its output and the five per-derivation re-sorts in web collapse into one boundary sort.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/state/threadActivityOrder.ts",
+          "markers": [
+            "export function compareThreadActivities",
+            "export function compareIsoTimestamps",
+            "export function activityLifecycleRank",
+            "const MISSING_SEQUENCE = -1;",
+            "export function sortThreadActivities"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadActivityOrder.test.ts",
+          "markers": [
+            "sorts un-numbered legacy rows before every numbered row",
+            "keeps resolved after requested through the full pipeline order"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadReducer.ts",
+          "markers": [
+            "import { threadActivityOrder } from \"./threadActivityOrder.ts\";",
+            "Arr.sort(threadActivityOrder)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads.ts",
+          "markers": [
+            "import { sortThreadActivities } from \"./threadActivityOrder.ts\";",
+            "activities: sortThreadActivities(mergeById(older.activities, loaded.activities))"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/package.json",
+          "markers": ["\"./state/thread-activity-order\""]
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "markers": [
+            "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
+            "const orderedActivities = useMemo(",
+            "derivePendingApprovals(orderedActivities)"
+          ]
+        },
+        {
+          "path": "apps/mobile/src/lib/threadActivity.ts",
+          "markers": [
+            "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
+            "export { sortThreadActivities };"
+          ]
+        },
+        {
+          "path": "apps/server/src/persistence/Layers/ProjectionThreadActivities.ts",
+          "markers": [
+            "WHEN kind LIKE '%.started' THEN 0",
+            "WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2"
+          ]
+        },
+        {
+          "path": "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts",
+          "markers": [
+            "WHEN kind LIKE '%.started' THEN 0",
+            "WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `packages/client-runtime/src/state/threadActivityOrder.ts`",
+            "**Tuned** `packages/client-runtime/src/state/threadReducer.ts`",
+            "**Tuned** `apps/mobile/src/lib/threadActivity.ts`"
           ]
         }
       ]

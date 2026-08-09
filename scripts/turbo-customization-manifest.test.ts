@@ -158,6 +158,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "relay-request-budget-and-clerk-client",
     "sqlite-fast-mode-pragma",
     "terminal-buffer-byte-budget",
+    "unified-activity-order",
     "workspace-image-preview",
   ]);
   assert.strictEqual(multiChat?.status, "implemented");

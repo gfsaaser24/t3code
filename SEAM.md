@@ -61,12 +61,45 @@ fork's change.
   `synchronous` line, still after `journal_mode`; never change the other two pragmas.
 - **Additive** `apps/server/src/persistence/Layers/SqlitePragmas.test.ts` — asserts the pragma is
   live on fresh in-memory and file-backed connections. On conflict, keep the fork file.
-- **Tuned** `apps/web/src/session-logic.ts` — a local `compareIsoTimestamps` helper replaces
-  `String.prototype.localeCompare` at the seven timestamp comparison sites (pending approvals,
-  pending user inputs, both proposed-plan picks, activity order, timeline order, checkpoint turn
-  counts). On conflict, take the upstream comparator bodies and re-swap only the timestamp
-  operands; never touch the `id.localeCompare` tiebreaks — ids are not fixed-width and the
-  collation decides real ordering there.
+- **Tuned** `apps/web/src/session-logic.ts` — `compareIsoTimestamps` replaces
+  `String.prototype.localeCompare` at the timestamp comparison sites (pending approvals, pending
+  user inputs, both proposed-plan picks, timeline order, checkpoint turn counts); it now lives in
+  `packages/client-runtime/src/state/threadActivityOrder.ts` and is imported. The local
+  `compareActivitiesByOrder`/`compareActivityLifecycleRank` pair and the five
+  `toSorted(compareActivitiesByOrder)` re-sorts inside the activity derivations are gone — the
+  derivations take canonical order as a precondition and `ChatView` sorts once at the boundary.
+  On conflict, take the upstream comparator bodies and re-swap only the timestamp operands, then
+  re-delete the activity re-sorts; never touch the `id.localeCompare` tiebreaks — ids are not
+  fixed-width and the collation decides real ordering there.
+- **Additive** `packages/client-runtime/src/state/threadActivityOrder.ts` — the ONE canonical
+  activity comparator (`sequence`, with un-numbered legacy rows first, then `createdAt`, then
+  lifecycle phase, then id) plus `compareIsoTimestamps`. Shared by the store, the older-page
+  merge, web, and mobile; it is loaded by mobile, so it must stay Hermes-safe. On conflict, keep
+  the fork file.
+- **Additive** `packages/client-runtime/src/state/threadActivityOrder.test.ts` — pins the
+  missing-sequence convention and the phantom-pending-approval tie (resolved stays after
+  requested). On conflict, keep the fork file.
+- **Tuned** `packages/client-runtime/src/state/threadReducer.ts` — the local `activityOrder`
+  combinator is replaced by the shared `threadActivityOrder` (it now also carries the lifecycle
+  tiebreak, and un-numbered rows sort first instead of last). On conflict, keep the upstream
+  reducer body and re-point only the `Arr.sort` argument.
+- **Tuned** `packages/client-runtime/src/state/threads.ts` — `mergeOlderPage` runs its merged
+  `activities` through `sortThreadActivities`, because consumers no longer re-sort defensively.
+  On conflict, keep the upstream merge and re-wrap only that one field.
+- **Tuned** `apps/web/src/components/ChatView.tsx` — one memoized `sortThreadActivities` call
+  feeds all five activity derivations (the way mobile's `use-selected-thread-requests` already
+  does) instead of each derivation sorting the full history itself. On conflict, keep the
+  upstream `useMemo` set and re-point the arguments at the sorted array.
+- **Tuned** `apps/mobile/src/lib/threadActivity.ts` — the local `activityOrder` /
+  `compareActivityLifecycleRank` pair is replaced by a re-export of the shared
+  `sortThreadActivities`. On conflict, delete the upstream local comparator again rather than
+  keeping two.
+- **Tuned** `apps/server/src/persistence/Layers/ProjectionThreadActivities.ts` and
+  `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` — both activity `ORDER BY`
+  clauses carry the lifecycle-rank `CASE` (started → 0, completed/resolved → 2, else 1) between
+  `created_at` and the id, so the SQL emits the same total order as the shared comparator. On
+  conflict, take the upstream `ORDER BY` and re-insert only that `CASE`; leave the NULL-sequence
+  handling alone (SQLite's NULLs-first under ASC is the convention).
 - **Tuned** `apps/web/src/components/Sidebar.logic.ts` — `sortThreadsForSidebar` and
   `sortSettledThreadsForSidebar` are decorate-sorts: the sort key is resolved once per row instead
   of inside the comparator. On conflict, take the upstream comparator verbatim and re-wrap it in

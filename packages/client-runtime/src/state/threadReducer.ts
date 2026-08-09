@@ -12,6 +12,7 @@ import type {
   OrchestrationThreadActivity,
   TurnId,
 } from "@t3tools/contracts";
+import { threadActivityOrder } from "./threadActivityOrder.ts";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
@@ -29,11 +30,10 @@ const checkpointOrder = O.mapInput(
     cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
 );
 
-const activityOrder = O.combineAll<OrchestrationThreadActivity>([
-  O.mapInput(O.Number, (a) => a.sequence ?? Number.MAX_SAFE_INTEGER),
-  O.mapInput(O.String, (a) => a.createdAt),
-  O.mapInput(O.String, (a) => a.id),
-]);
+// Activity ordering is the one canonical comparator in `threadActivityOrder.ts`
+// (sequence — un-numbered legacy rows first — then createdAt, lifecycle phase,
+// id). Store, older-page merge, web, mobile, and the server SQL all use it, so
+// no consumer has to re-sort what this reducer produces.
 
 /**
  * Matches the validity rule in `deriveLatestContextWindowSnapshot` (and the
@@ -583,7 +583,7 @@ export function applyThreadDetailEvent(
             ),
         ),
         Arr.append(activity),
-        Arr.sort(activityOrder),
+        Arr.sort(threadActivityOrder),
       );
 
       return {

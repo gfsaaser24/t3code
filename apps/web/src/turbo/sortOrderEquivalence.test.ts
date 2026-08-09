@@ -18,7 +18,7 @@ import {
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
 } from "../components/Sidebar.logic";
-import { compareIsoTimestamps } from "../session-logic";
+import { compareIsoTimestamps } from "@t3tools/client-runtime/state/thread-activity-order";
 
 /** Deterministic LCG: the corpora must be identical on every machine. */
 function makeRandom(seed: number): () => number {

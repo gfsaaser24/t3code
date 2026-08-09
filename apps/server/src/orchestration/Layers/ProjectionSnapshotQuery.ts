@@ -571,10 +571,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
+        -- Same total order as the canonical client comparator
+        -- (packages/client-runtime/src/state/threadActivityOrder.ts). SQLite
+        -- sorts NULL first under ASC, which is exactly that comparator's
+        -- convention for the un-numbered rows migration 008 left behind, so
+        -- a bare "sequence ASC" needs no CASE here and keeps
+        -- idx_projection_thread_activities_thread_sequence_created_id usable
+        -- for the leading terms. The lifecycle rank breaks (sequence,
+        -- created_at) ties ahead of the id so an approval's ".resolved" row
+        -- can never surface before its ".requested" row.
         ORDER BY
           thread_id ASC,
           sequence ASC,
           created_at ASC,
+          CASE
+            WHEN kind LIKE '%.started' THEN 0
+            WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2
+            ELSE 1
+          END ASC,
           activity_id ASC
       `,
   });
