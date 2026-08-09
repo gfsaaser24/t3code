@@ -125,14 +125,23 @@ fork's change.
   `sanitizeTerminalHistoryChunk` **and `capHistory`** are also exported so the fork-owned
   byte-identity test can drive the real sanitizer and the real cap — keep both exports; a frozen
   copy of `capHistory` in the test would only prove the buffer matches a snapshot of upstream
-  rather than upstream itself. Three invariants are non-negotiable: output events must stay
+  rather than upstream itself. Five invariants are non-negotiable: output events must stay
   one-per-PTY-chunk with their own `data` and sequence (batching is history-side only — clients and
   the ordering tests depend on the per-chunk wire shape); the batch must be a
   `makeKeyedCoalescingWorker` so `drainKey` keeps the repo's "wait on drains, never sleep" test
-  discipline working; and the persist decision must read the buffer's `dirtySincePersist` flag via
+  discipline working; the persist decision must read the buffer's `dirtySincePersist` flag via
   `takeTerminalHistoryToPersist`, never "did this flush append" — any scrollback read flushes the
   batch, so a racing snapshot would otherwise leave the batch tick with nothing pending and the tail
-  would never reach disk.
+  would never reach disk; `historyBatchWorker.process` must **never sleep**, because that worker is
+  a single fiber shared by every session (a sleep there is not a per-session debounce — N busy
+  terminals serialize their sleeps, one noisy key starves the rest through `processKey`'s
+  self-recursion, and `flushPersist`'s `drainKey`, taken under the thread lock, waits behind
+  unrelated sessions) so the debounce belongs on the per-session fiber `queueHistoryBatch` forks
+  into `workerScope`, gated by `session.historyBatchScheduled` and clearing that flag BEFORE the
+  enqueue; and `flushPersist` must enqueue a batch for the session before draining, because with
+  the debounce off the worker there may be a sleep still counting down while the worker holds
+  nothing for the key — that enqueue is what keeps the drain contract identical to the version that
+  enqueued per chunk, and it is free when the scrollback owes nothing.
 - **Additive** `apps/server/src/turbo/terminalHistoryBuffer.ts` — the incremental scrollback buffer
   itself: raw `split("\n")` lines, a memoized join, and the queued-chunk batch. The cap trim
   branches on a non-positive `maxLines` before the splice: upstream's `capHistory` degrades to

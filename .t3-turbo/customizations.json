@@ -527,7 +527,7 @@
     {
       "id": "terminal-scrollback-batching",
       "status": "implemented",
-      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the batch is a keyed coalescing worker that flushPersist drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
+      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the debounce runs on a per-session fiber (never inside the shared worker, which would serialize every session's batch interval and every drain behind one another) and is enqueued once per burst rather than once per chunk, the batch is a keyed coalescing worker that flushPersist enqueues into and drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
       "checks": [
         {
           "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
@@ -561,7 +561,10 @@
             "readTerminalHistoryBuffer(session.historyBuffer)",
             "takeTerminalHistoryToPersist(session.historyBuffer)",
             "export function sanitizeTerminalHistoryChunk",
-            "export function capHistory"
+            "export function capHistory",
+            "historyBatchScheduled: boolean;",
+            "if (session.historyBatchScheduled) {",
+            "session.historyBatchScheduled = false;"
           ]
         },
         {

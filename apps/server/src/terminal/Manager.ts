@@ -255,6 +255,11 @@ export interface TerminalSessionState {
    * still sees the byte-identical string upstream handed out.
    */
   historyBuffer: TerminalHistoryBuffer;
+  /**
+   * T3 Turbo: whether this session's ~16 ms output debounce is already sleeping.
+   * Gates `queueHistoryBatch` to once per burst instead of once per PTY chunk.
+   */
+  historyBatchScheduled: boolean;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
@@ -1493,11 +1498,19 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 
   /**
    * T3 Turbo: PTY output accumulates in the session's scrollback batch and this
-   * worker applies it once per ~16 ms burst - one sanitize, one incremental cap and
-   * one join per burst instead of per chunk - then hands the result to the persist
+   * worker applies it once per burst - one sanitize, one incremental cap and one
+   * join per burst instead of per chunk - then hands the result to the persist
    * worker. It is a `makeKeyedCoalescingWorker` for the drain contract: `drainKey`
    * resolves only when the key has nothing queued, pending or active, so
    * `flushPersist` can wait on the batch instead of sleeping.
+   *
+   * `process` must NEVER sleep. This worker is a single fiber shared by every
+   * session, so a sleep here is not a per-session debounce: eight busy terminals
+   * serialize their sleeps and each one's effective batch interval degrades to
+   * ~8 x the constant, `processKey`'s self-recursion lets one noisy key starve
+   * the others' queued batches, and `flushPersist`'s `drainKey` - taken under the
+   * thread lock on Clear/Restart/Close - waits behind unrelated sessions' sleeps.
+   * The debounce lives on a per-session fiber in `queueHistoryBatch` instead.
    */
   const historyBatchWorker = yield* makeKeyedCoalescingWorker<
     string,
@@ -1507,8 +1520,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   >({
     merge: (_current, next) => next,
     process: Effect.fn("terminal.historyBatchWorker")(function* (_sessionKey, request) {
-      yield* Effect.sleep(DEFAULT_HISTORY_BATCH_MS);
-
       const { threadId, terminalId, historyBuffer: buffer } = request.session;
       // A racing snapshot/attach read may already have flushed this batch into the
       // scrollback, so the question is "does the scrollback still owe a write?" - not
@@ -1521,13 +1532,36 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }),
   });
 
-  /** T3 Turbo: schedules the ~16 ms batch that turns queued chunks into scrollback. */
+  /**
+   * T3 Turbo: schedules the ~16 ms batch that turns queued chunks into scrollback.
+   *
+   * Called once per PTY chunk, so it has to be nearly free. `historyBatchScheduled`
+   * makes it once per BURST: every `enqueue` is an STM transaction that clones the
+   * worker's `latestByKey` map, and under a build that ran ~2,000 times a second
+   * for a provable no-op after the first of a burst.
+   *
+   * The flag is cleared BEFORE the enqueue, never after. A chunk arriving in that
+   * window schedules one redundant batch, which coalesces; clearing afterwards can
+   * instead leave a chunk that arrived after the worker's flush with no batch at
+   * all, and its tail would sit in the buffer until the next chunk happened along.
+   */
   const queueHistoryBatch = Effect.fn("terminal.queueHistoryBatch")(function* (
     session: TerminalSessionState,
   ) {
-    yield* historyBatchWorker.enqueue(toSessionKey(session.threadId, session.terminalId), {
-      session,
-    });
+    if (session.historyBatchScheduled) {
+      return;
+    }
+    session.historyBatchScheduled = true;
+    const sessionKey = toSessionKey(session.threadId, session.terminalId);
+    yield* Effect.sleep(DEFAULT_HISTORY_BATCH_MS).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          session.historyBatchScheduled = false;
+          return historyBatchWorker.enqueue(sessionKey, { session });
+        }),
+      ),
+      Effect.forkIn(workerScope),
+    );
   });
 
   const flushPersist = Effect.fn("terminal.flushPersist")(function* (
@@ -1535,8 +1569,21 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     terminalId: string,
   ) {
     const sessionKey = toSessionKey(threadId, terminalId);
-    // T3 Turbo: drain the output batch first so whatever it is holding has reached
-    // the persist worker before we wait on that worker.
+    // T3 Turbo: with the debounce on a per-session fiber, the worker may hold
+    // nothing for this key while a sleep is still counting down - and then
+    // `drainKey` would return without covering the buffer. Enqueue the batch
+    // here rather than waiting out the timer; this is what keeps the drain
+    // contract identical to the version that enqueued per chunk. It is not
+    // extra work: `takeTerminalHistoryToPersist` returns null unless the
+    // scrollback actually still owes a write, and a debounce fiber that fires
+    // after this finds exactly that.
+    const session = yield* Effect.map(readManagerState, (state) => state.sessions.get(sessionKey));
+    if (session !== undefined) {
+      session.historyBatchScheduled = false;
+      yield* historyBatchWorker.enqueue(sessionKey, { session });
+    }
+    // Drain the output batch first so whatever it is holding has reached the
+    // persist worker before we wait on that worker.
     yield* historyBatchWorker.drainKey(sessionKey);
     yield* persistWorker.drainKey(sessionKey);
   });
@@ -2293,6 +2340,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         status: "starting",
         pid: null,
         historyBuffer: newHistoryBuffer(history),
+        historyBatchScheduled: false,
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
@@ -2713,6 +2761,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             status: "starting",
             pid: null,
             historyBuffer: newHistoryBuffer(""),
+            historyBatchScheduled: false,
             pendingProcessEvents: [],
             pendingProcessEventIndex: 0,
             processEventDrainRunning: false,
