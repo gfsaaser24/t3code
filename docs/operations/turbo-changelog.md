@@ -20,12 +20,14 @@ old orderings and the old wire bytes are part of the wave.
   app crash still loses
   nothing; only a power loss or hard reset can drop the most recent commits. New seam
   `sqlite-fast-mode-pragma`.
-- **Timestamp comparisons stop building a collator (W4).** Every timestamp on the wire is minted
+- **Timestamp comparisons stop building a collator (W4).** Product-minted timestamps are
   fixed-width ISO, so plain string comparison yields exactly the order `localeCompare` yielded
   without doing the collation work. Seven comparison sites in the web session logic and the keyless
-  half of the shared pinned-thread sort now compare strings directly — the shared file means mobile
-  gets it too. The id tiebreaks stay on `localeCompare`: ids are not fixed width, so collation
-  genuinely decides their order there.
+  half of the shared pinned-thread sort now compare strings directly for the canonical stamps the
+  product mints — the pinned sort verifies both operands with a strict calendar check and falls
+  back to the old parse comparator (malformed stamps keep sinking to the bottom) otherwise. The
+  shared file means mobile gets it too. The id tiebreaks stay on `localeCompare`: ids are not
+  fixed width, so collation genuinely decides their order there.
 - **Sidebar buckets resolve each row's sort key once (W10).** All three sidebar bucket sorts —
   active, settled, and the snoozed shelf — parsed timestamps
   inside the comparator, so a bucket of n rows paid O(n log n) parses — and the settled bucket
