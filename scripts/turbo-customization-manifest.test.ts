@@ -146,6 +146,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "changelog-and-runbook",
     "cheap-message-unpacking",
     "cheap-timestamp-and-sort-keys",
+    "deferred-streaming-code-blocks",
     "file-explorer",
     "markdown-preview-preference",
     "multi-chat-pane-workspace",

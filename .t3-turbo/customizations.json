@@ -632,6 +632,45 @@
       ]
     },
     {
+      "id": "deferred-streaming-code-blocks",
+      "status": "implemented",
+      "summary": "Streaming code fences render as a line-counted placeholder inside the chat code-block frame and are highlighted exactly once when the message completes, with a stall fallback that reveals the partial text if the stream dies mid-fence.",
+      "checks": [
+        {
+          "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
+          "markers": [
+            "export const STREAMING_CODE_STALL_MS = 4_000;",
+            "export function countStreamingCodeLines(code: string): number",
+            "export function resolveStreamingCodeBlockView(input: {",
+            "export function useStreamingCodeStall(code: string, isStreaming: boolean): boolean",
+            "export function StreamingCodeBlockFrame({",
+            "data-streaming-code-placeholder"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/ChatMarkdown.tsx",
+          "markers": [
+            "import { StreamingCodeBlockFrame } from \"../turbo/streamingCodeBlock\";",
+            "<StreamingCodeBlockFrame",
+            "partialText={<pre {...props}>{children}</pre>}",
+            "highlighted={"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
+          "markers": [
+            "grows one placeholder line per accumulated code line",
+            "falls back to partial text when the fence goes quiet mid-stream",
+            "shows the partial text when the stream drops mid-block"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/web/src/components/ChatMarkdown.tsx`"]
+        }
+      ]
+    },
+    {
       "id": "terminal-buffer-byte-budget",
       "status": "implemented",
       "summary": "The client terminal buffer tracks its UTF-8 byte length in the reducer state and only re-encodes to trim once the total passes the cap plus a 25% slack window, then trims back down to the cap while keeping the multi-byte safety loop.",

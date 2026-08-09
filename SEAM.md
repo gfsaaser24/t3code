@@ -98,6 +98,18 @@ fork's change.
   would silently unbind), the over-threshold branch must trim to the cap rather than dropping a
   chunk, and `trimBufferToBytes` must keep its continuation-byte safety loop. This file is shared
   with mobile, so keep it Hermes-safe — the byte count uses a `charCodeAt` loop, not `TextEncoder`.
+- **Tuned** `apps/web/src/components/ChatMarkdown.tsx` — the `pre` renderer wraps its Shiki subtree
+  in `StreamingCodeBlockFrame` (`apps/web/src/turbo/streamingCodeBlock.tsx`), so a streaming fence
+  shows a line-counted placeholder inside the block frame and is highlighted exactly once, when the
+  message completes. On conflict, take the upstream `pre` body verbatim and re-wrap it: the
+  `RenderErrorBoundary`/`Suspense`/`SuspenseShikiCodeBlock` subtree becomes the `highlighted` prop
+  and upstream's own `<pre {...props}>{children}</pre>` fallback becomes `partialText`. The wrapper
+  must stay _inside_ `MarkdownCodeBlock` — the copy button and wrap toggle live on that frame and
+  must keep working on the partial text.
+- **Additive** `apps/web/src/turbo/streamingCodeBlock.tsx` — the placeholder, the cheap line count,
+  and the stall fallback. On conflict, keep the fork file.
+- **Additive** `apps/web/src/turbo/streamingCodeBlock.test.tsx` — pins the three guards. On
+  conflict, keep the fork file.
 
 ## Nightly sync conflicts
 
