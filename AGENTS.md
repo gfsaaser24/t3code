@@ -69,8 +69,10 @@
   targets. Check where a script points before running anything that publishes, deploys, or
   syncs.
 
-Deeper reading: `docs/internals/t3-turbo-nightly-inbound.md` (full ingestion state model),
-`.t3-turbo/README.md` (sync bootstrap), `infra/README.md` (self-host stack),
+Deeper reading: `docs/operations/turbo-runbook.md` (operator runbook — start here),
+`docs/operations/turbo-changelog.md` (the fork's changelog; append an entry in every
+behavior-changing PR), `docs/internals/t3-turbo-nightly-inbound.md` (full ingestion state
+model), `.t3-turbo/README.md` (sync bootstrap), `infra/README.md` (self-host stack),
 `docs/operations/local-build.md` (local installer builds).
 
 ---

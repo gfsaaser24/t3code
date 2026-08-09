@@ -33,6 +33,25 @@
       ]
     },
     {
+      "id": "changelog-and-runbook",
+      "status": "implemented",
+      "summary": "The fork keeps its own changelog and operator runbook under docs/operations.",
+      "checks": [
+        {
+          "path": "docs/operations/turbo-changelog.md",
+          "markers": ["# T3 Turbo changelog", "entry here in the same PR"]
+        },
+        {
+          "path": "docs/operations/turbo-runbook.md",
+          "markers": [
+            "# T3 Turbo operator runbook",
+            "Registering a new customization (checklist)",
+            "turbo:customizations:verify"
+          ]
+        }
+      ]
+    },
+    {
       "id": "product-identity-and-updater",
       "status": "implemented",
       "summary": "T3 Turbo has an isolated desktop identity, state home, and fork-owned update feed.",
