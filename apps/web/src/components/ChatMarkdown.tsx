@@ -1666,7 +1666,6 @@ function ChatMarkdown({
             <StreamingCodeBlockFrame
               code={codeBlock.code}
               isStreaming={isStreaming}
-              partialText={<pre {...props}>{children}</pre>}
               highlighted={
                 <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
                   <Suspense fallback={<pre {...props}>{children}</pre>}>

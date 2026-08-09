@@ -159,6 +159,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "relay-policy",
     "relay-request-budget-and-clerk-client",
     "sqlite-fast-mode-pragma",
+    "streaming-flag-cleared-on-turn-settle",
     "terminal-buffer-byte-budget",
     "terminal-scrollback-batching",
     "unified-activity-order",

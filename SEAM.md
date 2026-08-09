@@ -122,8 +122,10 @@ fork's change.
   `queueTerminalHistoryChunk` + `queueHistoryBatch`; exit and `stopProcess` call
   `endTerminalHistoryStream` and persist whatever `takeTerminalHistoryToPersist` returns; and
   `flushPersist` drains `historyBatchWorker` **before** `persistWorker`. Upstream's
-  `sanitizeTerminalHistoryChunk` is also exported so the fork-owned byte-identity test can drive the
-  real sanitizer — keep the export. Three invariants are non-negotiable: output events must stay
+  `sanitizeTerminalHistoryChunk` **and `capHistory`** are also exported so the fork-owned
+  byte-identity test can drive the real sanitizer and the real cap — keep both exports; a frozen
+  copy of `capHistory` in the test would only prove the buffer matches a snapshot of upstream
+  rather than upstream itself. Three invariants are non-negotiable: output events must stay
   one-per-PTY-chunk with their own `data` and sequence (batching is history-side only — clients and
   the ordering tests depend on the per-chunk wire shape); the batch must be a
   `makeKeyedCoalescingWorker` so `drainKey` keeps the repo's "wait on drains, never sleep" test
@@ -132,12 +134,16 @@ fork's change.
   batch, so a racing snapshot would otherwise leave the batch tick with nothing pending and the tail
   would never reach disk.
 - **Additive** `apps/server/src/turbo/terminalHistoryBuffer.ts` — the incremental scrollback buffer
-  itself: raw `split("\n")` lines, a memoized join, and the queued-chunk batch. On conflict, keep
-  the fork file.
+  itself: raw `split("\n")` lines, a memoized join, and the queued-chunk batch. The cap trim
+  branches on a non-positive `maxLines` before the splice: upstream's `capHistory` degrades to
+  `""`/`"\n"` for such a cap, while an unguarded `lines.splice(0, lineCount - maxLines)` would
+  delete more elements than `lines` has and leave it empty, which breaks this module's "never
+  empty" invariant (the next append then writes `lines[-1]` as a string property). On conflict,
+  keep the fork file.
 - **Additive** `apps/server/src/turbo/terminalHistoryBuffer.test.ts` — replays recorded PTY bursts
-  through upstream's `capHistory` shape and the buffer and asserts byte equality, cap-trim
-  boundaries and split control sequences included. On conflict, keep the fork file; if upstream
-  changes `capHistory`, update the verbatim copy in this test to match.
+  through upstream's real `capHistory` (imported from the Manager, not copied) and the buffer and
+  asserts byte equality, cap-trim boundaries, non-positive caps and split control sequences
+  included. On conflict, keep the fork file.
 - **Tuned** `apps/web/src/session-logic.ts` — `compareIsoTimestamps` replaces
   `String.prototype.localeCompare` at the timestamp comparison sites (pending approvals, pending
   user inputs, both proposed-plan picks, timeline order, checkpoint turn counts); it now lives in
@@ -173,11 +179,21 @@ fork's change.
   in-memory SQLite. It reaches the comparator by relative path because `apps/server` does not
   depend on `@t3tools/client-runtime`. On conflict, keep the fork file; if upstream rewrites an
   `ORDER BY`, update the matching entry in `SHIPPED_CLAUSES` rather than deleting the test.
-- **Tuned** `packages/client-runtime/src/state/threadReducer.ts` — the local `activityOrder`
-  combinator is replaced by the shared `threadActivityOrder` (it now also carries the lifecycle
-  tiebreak; the `?? Number.MAX_SAFE_INTEGER` missing-sequence convention is unchanged from
-  upstream). On conflict, keep the upstream reducer body and re-point only the `Arr.sort`
-  argument.
+- **Tuned** `packages/client-runtime/src/state/threadReducer.ts` — two changes. (1) The local
+  `activityOrder` combinator is replaced by the shared `threadActivityOrder` (it now also carries
+  the lifecycle tiebreak; the `?? Number.MAX_SAFE_INTEGER` missing-sequence convention is unchanged
+  from upstream) — on conflict, keep the upstream reducer body and re-point only the `Arr.sort`
+  argument. (2) `clearStreamingForTurn` lowers `streaming` on the settled turn's messages in the
+  two branches that already settle a turn: `thread.session-set` leaving "running", and
+  `thread.turn-interrupt-requested`. Upstream only ever lowers the flag from the final
+  `thread.message-sent`, which never arrives when a turn dies (provider `runtime.error`,
+  `session.exited`, an explicit stop, an interrupt) — and the raised flag is then persisted, so
+  `isStreaming` lies for the rest of the session and on every later load. On conflict, re-add the
+  helper and the two call sites; scope it to the settled turn's `turnId` (a background subagent's
+  turn must not be cleared) and keep the same-reference return when nothing was streaming.
+- **Additive** `packages/client-runtime/src/turbo/threadReducerStreamingSettle.test.ts` — pins that
+  clear, including the turn scoping and the untouched-array fast path. On conflict, keep the fork
+  file.
 - **Tuned** `packages/client-runtime/src/state/threads.ts` — `mergeOlderPage` runs its merged
   `activities` through `sortThreadActivities`, because consumers no longer re-sort defensively.
   On conflict, keep the upstream merge and re-wrap only that one field.
@@ -259,14 +275,22 @@ fork's change.
   in `StreamingCodeBlockFrame` (`apps/web/src/turbo/streamingCodeBlock.tsx`), so a streaming fence
   shows a line-counted placeholder inside the block frame and is highlighted exactly once, when the
   message completes. On conflict, take the upstream `pre` body verbatim and re-wrap it: the
-  `RenderErrorBoundary`/`Suspense`/`SuspenseShikiCodeBlock` subtree becomes the `highlighted` prop
-  and upstream's own `<pre {...props}>{children}</pre>` fallback becomes `partialText`. The wrapper
-  must stay _inside_ `MarkdownCodeBlock` — the copy button and wrap toggle live on that frame and
-  must keep working on the partial text.
-- **Additive** `apps/web/src/turbo/streamingCodeBlock.tsx` — the placeholder, the cheap line count,
-  and the stall fallback. On conflict, keep the fork file.
-- **Additive** `apps/web/src/turbo/streamingCodeBlock.test.tsx` — pins the three guards. On
-  conflict, keep the fork file.
+  `RenderErrorBoundary`/`Suspense`/`SuspenseShikiCodeBlock` subtree becomes the `highlighted` prop.
+  The wrapper must stay _inside_ `MarkdownCodeBlock` — the copy button and wrap toggle live on that
+  frame and must keep working on the partial text.
+- **Additive** `apps/web/src/turbo/streamingCodeBlock.tsx` — the placeholder, the incremental line
+  count, and the never-started history repair. Two properties are load-bearing and easy to undo:
+  the placeholder caps its rendered rows at `STREAMING_CODE_MAX_PLACEHOLDER_ROWS` and reserves the
+  rest with one `lh`-sized spacer (a 400-line fence was 400 rows re-reconciled per newline), and it
+  animates with the repo's duty-cycled `animate-skeleton` via the shared `Skeleton`, never
+  Tailwind's per-frame `animate-pulse` — AGENTS.md "Taste" rules out continuously repainting
+  animations. There is deliberately NO "the stream went quiet" fallback: the reducer clears
+  `streaming` on every turn settle, and a fence that closes while the model keeps writing prose is
+  the normal shape, so a quiet-fence verdict fires mid-message and costs the reader three
+  appearance changes. On conflict, keep the fork file.
+- **Additive** `apps/web/src/turbo/streamingCodeBlock.test.tsx` — pins the two guards, the row cap
+  and spacer, the duty-cycled animation, and the equivalence of the incremental line scan with the
+  full one at every prefix. On conflict, keep the fork file.
 - **Tuned** `packages/client-runtime/src/rpc/client.ts` — `subscribeToSession` wraps the session's
   RPC stream in `poolWithinFrame`, a 16 ms pool that releases a window's arrivals as one chunk, so
   a burst costs the screen one blip per frame instead of one per item. On conflict, take the
@@ -280,6 +304,13 @@ fork's change.
   the take-and-append pair stays inside `Effect.uninterruptibleMask` with only the parked
   `Queue.take` restored. Never drop the mask — a take that has already removed an item must not be
   preemptible before the append, or a window boundary silently drops one item per boundary.
+  A fifth rule is about WHICH subscriptions may be pooled. Pooling only moves a chunk boundary,
+  which is invisible to a consumer that applies every item and is data loss for one that collapses
+  a chunk to its last value — which is what effect-atom's `Atom.makeStream` does. The tags in
+  `NON_CUMULATIVE_SUBSCRIPTION_TAGS` (`subscribePreviewEvents`, `previewAutomationConnect`) carry
+  distinct facts rather than a cumulative state, so they bypass the pool; never pool them, and add
+  any new non-cumulative subscription to that set. It is keyed on the tag rather than passed at the
+  call site on purpose: a second subscriber of the same tag cannot forget to opt out.
 - **Additive** `packages/client-runtime/src/turbo/streamPoolTestClock.ts` — `awaitPooled` steps the
   virtual clock one pool window at a time while a test waits, stops as soon as the wait resolves,
   and dies with a diagnostic after 12 windows rather than hanging. It imports the window from

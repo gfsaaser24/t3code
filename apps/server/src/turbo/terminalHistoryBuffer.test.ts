@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { sanitizeTerminalHistoryChunk } from "../terminal/Manager.ts";
+import { capHistory, sanitizeTerminalHistoryChunk } from "../terminal/Manager.ts";
 import {
   createTerminalHistoryBuffer,
   endTerminalHistoryStream,
@@ -22,19 +22,6 @@ import {
  * produced — cap-trim boundaries included. These tests replay recorded PTY bursts
  * through the upstream shape and the new buffer and assert byte equality.
  */
-
-/** Verbatim copy of upstream `capHistory` (`apps/server/src/terminal/Manager.ts`). */
-function capHistory(history: string, maxLines: number): string {
-  if (history.length === 0) return history;
-  const hasTrailingNewline = history.endsWith("\n");
-  const lines = history.split("\n");
-  if (hasTrailingNewline) {
-    lines.pop();
-  }
-  if (lines.length <= maxLines) return history;
-  const capped = lines.slice(lines.length - maxLines).join("\n");
-  return hasTrailingNewline ? `${capped}\n` : capped;
-}
 
 /**
  * The upstream shape: sanitize each chunk on arrival, glue it onto the scrollback
@@ -189,6 +176,38 @@ describe("terminal history buffer byte identity", () => {
         `maxLines=${maxLines}`,
       ).toBe(upstreamHistory(restored, chunks, maxLines, stripDeviceStatusReports));
     }
+  });
+
+  // A non-positive cap is a misconfiguration, not a normal input — but upstream
+  // degrades gracefully to ""/"\n" for it, and the buffer used to compute a
+  // delete count larger than `lines`, emptying the array and breaking the
+  // "never empty" invariant every other function here relies on.
+  it("matches upstream's graceful degradation for a non-positive cap", () => {
+    const cases: ReadonlyArray<ReadonlyArray<string>> = [
+      [],
+      [""],
+      ["a\nb\nc\n"],
+      ["a\nb\nc"],
+      ["a\n", "b", "\nc\n", "d"],
+    ];
+    for (const maxLines of [0, -1, -5_000]) {
+      for (const chunks of cases) {
+        expect(
+          bufferedHistory("", [...chunks], maxLines, passThrough, 2),
+          `maxLines=${maxLines} chunks=${JSON.stringify(chunks)}`,
+        ).toBe(upstreamHistory("", [...chunks], maxLines, passThrough));
+      }
+    }
+  });
+
+  it("keeps appending safely after a non-positive cap has trimmed everything", () => {
+    // The regression this guards: an emptied `lines` array makes the next
+    // append write `lines[-1]`, which becomes a string property rather than an
+    // element, and the scrollback silently stops accumulating.
+    const chunks = ["a\nb\n", "c\nd\n", "e"];
+    expect(bufferedHistory("", chunks, 0, passThrough, 1)).toBe(
+      upstreamHistory("", chunks, 0, passThrough),
+    );
   });
 
   it("is byte-identical however the recorded stream is chunked and batched", () => {

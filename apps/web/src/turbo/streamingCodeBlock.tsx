@@ -1,5 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { Skeleton } from "~/components/ui/skeleton";
+
 /**
  * Streaming code fences are not rendered live.
  *
@@ -9,41 +11,35 @@ import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "reac
  * card while the message streams; the real, fully coloured block renders once,
  * when the message completes.
  *
- * Three guards make the swap safe:
+ * Two guards make the swap safe:
  *
- * 1. The placeholder grows with a cheap line count of the accumulated text, so
- *    the virtualized timeline never sees a card jump from one size to a
- *    400-line block in a single frame.
+ * 1. The placeholder reserves the height of the accumulated text, so the
+ *    virtualized timeline never sees a card jump from one size to a 400-line
+ *    block in a single frame.
  * 2. The placeholder lives *inside* the code-block frame, so the frame's copy
  *    button and wrap toggle keep working on the partial text.
- * 3. If the stream dies mid-fence the placeholder reveals the partial text
- *    instead of pulsing forever. The message-level `streaming` flag cannot
- *    carry this: nothing in the stack ever clears it (a provider
- *    `runtime.error`, a `session.exited`, a `turn.aborted`, or a plain socket
- *    drop all leave `OrchestrationMessage.streaming` stuck at `true`, and it is
- *    persisted that way), so the signal we key on is the accumulated fence text
- *    going quiet while the message still claims to be streaming.
  *
- * That stuck flag also means "still streaming" and "stopped days ago" are
- * indistinguishable at mount, so the watchdog distinguishes them by whether it
- * ever *observed* a delta:
+ * There used to be a third: a 4s "the stream went quiet after growing" verdict
+ * that revealed unhighlighted partial text, because nothing in the stack ever
+ * cleared `OrchestrationMessage.streaming` — a provider `runtime.error`, a
+ * `session.exited`, a `turn.aborted` or a socket drop all left it stuck at
+ * `true`. The store reducer now clears the flag whenever it settles a turn
+ * (`thread.session-set` off "running", and `thread.turn-interrupt-requested`),
+ * and every provider death path settles the session status, so the flag is
+ * trustworthy for live sessions and that verdict has been deleted. It was also
+ * actively wrong on the routine fence-then-prose shape: a fence that closes
+ * while the model keeps writing prose goes quiet by design, so the watchdog
+ * fired mid-message and the reader got skeleton → unhighlighted text →
+ * highlighted block, three appearance changes for a healthy stream. While
+ * `isStreaming` is true the placeholder simply holds.
  *
- * - A fence that goes quiet **after** growing was live and died mid-block →
- *   show the partial text, because more was coming and never arrived.
- * - A fence that goes quiet **without ever growing** was never live for this
- *   mount — it is a finished message from an aborted or errored turn whose flag
- *   was never cleared → highlight it normally. Anything else would strip syntax
- *   highlighting from every stopped turn in a user's history, permanently and
- *   on every scroll-in.
+ * What survives is the **history** repair. Rows persisted with
+ * `is_streaming = 1` by builds that predate the reducer fix are still in users'
+ * databases, and at mount they are indistinguishable from a live stream. A
+ * fence that never grows within `STREAMING_CODE_FIRST_DELTA_MS` was never live
+ * for this mount, so it gets highlighted normally — without that, every
+ * stopped turn in a user's history would pulse forever, on every scroll-in.
  */
-
-/**
- * How long the accumulated fence text may sit unchanged, *after at least one
- * delta has been seen*, before we call the stream dead and reveal the partial
- * text. Well above the gap between deltas on a healthy stream, well below a
- * user's patience.
- */
-export const STREAMING_CODE_STALL_MS = 4_000;
 
 /**
  * How long a freshly mounted fence has to produce its first delta before we
@@ -53,6 +49,15 @@ export const STREAMING_CODE_STALL_MS = 4_000;
  * accumulated so far and then goes straight back to the placeholder.
  */
 export const STREAMING_CODE_FIRST_DELTA_MS = 500;
+
+/**
+ * Skeleton rows actually put in the DOM. Beyond this the placeholder reserves
+ * height with a single empty spacer instead of more rows: a 400-line fence is
+ * 400 elements to reconcile and repaint for a card that is mostly off-screen,
+ * and the rows past the first screenful carry no information the spacer does
+ * not. Kept above any plausible viewport's worth of code lines.
+ */
+export const STREAMING_CODE_MAX_PLACEHOLDER_ROWS = 24;
 
 const NEWLINE_CHAR_CODE = 10;
 
@@ -71,42 +76,90 @@ export function countStreamingCodeLines(code: string): number {
   return Math.max(1, lines);
 }
 
-export type StreamingCodeBlockView = "highlighted" | "partial-text" | "placeholder";
+/** The running line scan carried between deltas. */
+export interface StreamingCodeLineScan {
+  /** The exact text the `lines` count was computed from. */
+  readonly code: string;
+  readonly lines: number;
+}
+
+/** A scan that has not looked at anything yet. */
+export const EMPTY_STREAMING_CODE_LINE_SCAN: StreamingCodeLineScan = { code: "", lines: 1 };
+
+/**
+ * Incremental form of {@link countStreamingCodeLines} for the streaming case:
+ * a fence only ever gains characters at its end, so re-scanning the whole
+ * string per delta makes the placeholder O(n²) over a message. Counts the
+ * appended slice and folds it into the running total.
+ *
+ * Any `code` that is not a strict extension of the previous text (a re-mount,
+ * an edit, a shrink) falls back to the full scan, so the result is always what
+ * `countStreamingCodeLines` would have returned.
+ */
+export function advanceStreamingCodeLineCount(
+  code: string,
+  previous: StreamingCodeLineScan,
+): StreamingCodeLineScan {
+  if (code === previous.code) {
+    return previous;
+  }
+  const previousLength = previous.code.length;
+  if (
+    previousLength === 0 ||
+    previousLength > code.length ||
+    // `startsWith` on the previous text, not on a slice of `code` — comparing
+    // `code` against its own prefix would be vacuously true and would let an
+    // edited fence keep a stale count.
+    !code.startsWith(previous.code)
+  ) {
+    return { code, lines: countStreamingCodeLines(code) };
+  }
+
+  // The previous count subtracted a trailing newline; undo that before folding
+  // in the appended slice, then re-apply the rule to the new tail.
+  const previousEndedInNewline = code.charCodeAt(previousLength - 1) === NEWLINE_CHAR_CODE;
+  let lines = previous.lines + (previousEndedInNewline ? 1 : 0);
+  for (let index = previousLength; index < code.length; index += 1) {
+    if (code.charCodeAt(index) === NEWLINE_CHAR_CODE) lines += 1;
+  }
+  if (code.charCodeAt(code.length - 1) === NEWLINE_CHAR_CODE) lines -= 1;
+  return { code, lines: Math.max(1, lines) };
+}
+
+export type StreamingCodeBlockView = "highlighted" | "placeholder";
 
 /**
  * What the watchdog has concluded about a fence whose message still reports
  * itself as streaming.
  *
- * - `none` — the fence is growing (or still inside its window): it is live.
- * - `dropped` — it grew, then went quiet: a live stream died mid-block.
+ * - `none` — the fence is growing (or still inside its first-delta window).
  * - `never-started` — it never grew at all: the message is finished history
- *   carrying a `streaming` flag nobody cleared.
+ *   carrying a `streaming` flag written before the reducer learned to clear it.
  */
-export type StreamingCodeStall = "none" | "dropped" | "never-started";
+export type StreamingCodeStall = "none" | "never-started";
 
 /**
  * The whole policy in one pure function: colour it once the message is done,
  * colour it too when the "stream" turns out to be a stopped turn's history,
- * fall back to partial text when a live stream died mid-block, otherwise hold
- * the placeholder.
+ * otherwise hold the placeholder.
  */
 export function resolveStreamingCodeBlockView(input: {
   readonly isStreaming: boolean;
   readonly stall: StreamingCodeStall;
 }): StreamingCodeBlockView {
   if (!input.isStreaming) return "highlighted";
-  if (input.stall === "dropped") return "partial-text";
   if (input.stall === "never-started") return "highlighted";
   return "placeholder";
 }
 
 /**
- * Watches the accumulated fence text and reports whether it has gone quiet —
- * and, crucially, whether it was ever moving in the first place.
+ * Reports whether a fence claiming to stream has produced any delta at all
+ * since it mounted.
  *
- * The verdict is re-armed on every delta rather than latched: a fence that
- * resumes goes straight back to the placeholder, so a slow stream can never
- * fall back into the per-delta re-highlight this module exists to remove.
+ * Only the first-delta window is timed. Once the fence has grown once it is a
+ * live stream and stays one until `isStreaming` goes false — a fence that
+ * closes while the model keeps writing prose is the normal shape, not a fault,
+ * and must not change appearance mid-message.
  */
 export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall {
   const previousCodeRef = useRef(code);
@@ -127,15 +180,13 @@ export function useStreamingCodeStall(code: string, isStreaming: boolean): Strea
       setStall("none");
     }
 
-    // `code` is in the dependency list, so this countdown restarts on every
-    // delta and only fires once the fence has genuinely gone quiet.
-    const grew = grewRef.current;
-    const timer = setTimeout(
-      () => {
-        setStall(grew ? "dropped" : "never-started");
-      },
-      grew ? STREAMING_CODE_STALL_MS : STREAMING_CODE_FIRST_DELTA_MS,
-    );
+    if (grewRef.current) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setStall("never-started");
+    }, STREAMING_CODE_FIRST_DELTA_MS);
     return () => {
       clearTimeout(timer);
     };
@@ -150,21 +201,28 @@ const PLACEHOLDER_LINE_WIDTHS = [82, 54, 71, 38, 90, 63, 47, 76, 59, 85, 33, 68]
 /**
  * Memoized on the line count alone: while a fence streams, the parent
  * re-renders on every delta but this subtree only reconciles when a newline
- * actually arrives. That is what makes the per-word cost of code streaming
- * effectively zero.
+ * actually arrives — and then only up to
+ * {@link STREAMING_CODE_MAX_PLACEHOLDER_ROWS} rows, because everything past
+ * them is one spacer whose height is the remaining lines. That is what makes
+ * the per-word cost of code streaming effectively zero.
  */
 export const StreamingCodeBlockPlaceholder = memo(function StreamingCodeBlockPlaceholder({
   lineCount,
 }: {
   lineCount: number;
 }) {
-  const lineWidths = useMemo(() => {
-    const total = Math.max(1, lineCount);
-    return Array.from(
-      { length: total },
-      (_unused, index) => PLACEHOLDER_LINE_WIDTHS[index % PLACEHOLDER_LINE_WIDTHS.length] ?? 60,
-    );
-  }, [lineCount]);
+  const total = Math.max(1, lineCount);
+  const renderedRows = Math.min(total, STREAMING_CODE_MAX_PLACEHOLDER_ROWS);
+  const spacerLines = total - renderedRows;
+
+  const lineWidths = useMemo(
+    () =>
+      Array.from(
+        { length: renderedRows },
+        (_unused, index) => PLACEHOLDER_LINE_WIDTHS[index % PLACEHOLDER_LINE_WIDTHS.length] ?? 60,
+      ),
+    [renderedRows],
+  );
 
   return (
     <div
@@ -176,20 +234,34 @@ export const StreamingCodeBlockPlaceholder = memo(function StreamingCodeBlockPla
       aria-label="Writing code"
     >
       <pre aria-hidden="true">
-        <code className="block animate-pulse">
+        <code className="block">
           {lineWidths.map((width, index) => (
             <span
               key={`streaming-code-line-${index}`}
               className="block"
               data-streaming-code-line=""
             >
-              <span
-                className="inline-block h-[0.7em] rounded-[2px] bg-foreground/15 align-middle"
+              {/* `Skeleton` carries the duty-cycled `animate-skeleton` sweep.
+                  `animate-pulse` repaints every frame for the life of the
+                  stream, which AGENTS.md "Taste" rules out. */}
+              <Skeleton
+                className="inline-block h-[0.7em] align-middle"
                 style={{ width: `${width}%` }}
               />
-              {"\u200B"}
+              {"​"}
             </span>
           ))}
+          {spacerLines > 0 ? (
+            // One element instead of `spacerLines` rows: the card still
+            // reserves the full height, so the virtualized timeline measures
+            // the same box it would have with every row present.
+            <span
+              className="block"
+              data-streaming-code-spacer=""
+              data-streaming-code-spacer-lines={spacerLines}
+              style={{ height: `${spacerLines}lh` }}
+            />
+          ) : null}
         </code>
       </pre>
     </div>
@@ -198,50 +270,50 @@ export const StreamingCodeBlockPlaceholder = memo(function StreamingCodeBlockPla
 
 /**
  * Presentational half of the frame: given a resolved view, render it. Split out
- * from the wired component so every branch — including the dropped-stream one,
- * which is otherwise only reachable through a timer — is directly renderable.
+ * from the wired component so every branch is directly renderable.
  */
 export function StreamingCodeBlockFrameView({
   view,
   lineCount,
-  partialText,
   highlighted,
 }: {
   view: StreamingCodeBlockView;
   lineCount: number;
-  partialText: ReactNode;
   highlighted: ReactNode;
 }) {
   if (view === "highlighted") return <>{highlighted}</>;
-  if (view === "partial-text") return <>{partialText}</>;
   return <StreamingCodeBlockPlaceholder lineCount={lineCount} />;
 }
 
 /**
- * Drop-in child of the chat code-block frame. `partialText` is the plain,
- * unhighlighted `<pre>` upstream already builds as its Suspense fallback;
- * `highlighted` is the Shiki subtree.
+ * Drop-in child of the chat code-block frame. `highlighted` is the Shiki
+ * subtree, which upstream already wraps in its own Suspense/error fallbacks.
  */
 export function StreamingCodeBlockFrame({
   code,
   isStreaming,
-  partialText,
   highlighted,
 }: {
   code: string;
   isStreaming: boolean;
-  partialText: ReactNode;
   highlighted: ReactNode;
 }) {
   const stall = useStreamingCodeStall(code, isStreaming);
   const view = resolveStreamingCodeBlockView({ isStreaming, stall });
 
+  // Incremental across deltas: the full scan is O(n) per delta, i.e. O(n²) per
+  // message, and a long fence streams hundreds of deltas. `useRef` rather than
+  // `useMemo` because the previous scan is state, not a cache that may be
+  // dropped.
+  const scanRef = useRef(EMPTY_STREAMING_CODE_LINE_SCAN);
+  if (view === "placeholder") {
+    // Idempotent when `code` is unchanged, so React's double-render in
+    // development cannot double-count.
+    scanRef.current = advanceStreamingCodeLineCount(code, scanRef.current);
+  }
+  const lineCount = view === "placeholder" ? scanRef.current.lines : 0;
+
   return (
-    <StreamingCodeBlockFrameView
-      view={view}
-      lineCount={view === "placeholder" ? countStreamingCodeLines(code) : 0}
-      partialText={partialText}
-      highlighted={highlighted}
-    />
+    <StreamingCodeBlockFrameView view={view} lineCount={lineCount} highlighted={highlighted} />
   );
 }

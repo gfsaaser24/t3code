@@ -148,8 +148,23 @@ function appendVisibleText(buffer: TerminalHistoryBuffer, visibleText: string): 
   }
   // A trailing "" element is the newline terminator, not a counted line - this is
   // upstream `capHistory`'s `if (hasTrailingNewline) lines.pop()` without the copy.
-  const lineCount = lines.at(-1) === "" ? lines.length - 1 : lines.length;
-  if (lineCount > buffer.maxLines) {
+  const hasTrailingNewline = lines.at(-1) === "";
+  const lineCount = hasTrailingNewline ? lines.length - 1 : lines.length;
+  if (buffer.maxLines <= 0) {
+    // Upstream `capHistory` slices every line away for a non-positive cap and
+    // returns "" - or "\n" when the text ended in one, because it re-appends
+    // the terminator. Reaching the splice below with such a cap would delete
+    // MORE elements than `lines` has and leave it empty, breaking this
+    // module's "never empty" invariant: the next append writes `lines[-1]`,
+    // which silently becomes a string property instead of an element.
+    if (lineCount > 0) {
+      lines.length = 0;
+      lines.push("");
+      if (hasTrailingNewline) {
+        lines.push("");
+      }
+    }
+  } else if (lineCount > buffer.maxLines) {
     lines.splice(0, lineCount - buffer.maxLines);
   }
   buffer.text = null;

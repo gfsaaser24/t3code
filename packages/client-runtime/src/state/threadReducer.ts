@@ -269,6 +269,9 @@ export function applyThreadDetailEvent(
         kind: "updated",
         thread: {
           ...thread,
+          // The interrupted turn's final `thread.message-sent` never arrives,
+          // so this is the only place its messages can stop "streaming".
+          messages: clearStreamingForTurn(thread.messages, event.payload.turnId),
           latestTurn: {
             ...latestTurn,
             state: "interrupted",
@@ -415,11 +418,21 @@ export function applyThreadDetailEvent(
               }
             : thread.latestTurn;
 
+      // Same settle, same missing final `thread.message-sent`: when the session
+      // leaves "running" (socket drop, provider crash, an explicit stop) the
+      // turn's messages have to stop claiming to stream, or `isStreaming`
+      // stays true for the rest of the session.
+      const messages =
+        latestTurn !== thread.latestTurn && latestTurn !== null && latestTurn.state !== "running"
+          ? clearStreamingForTurn(thread.messages, latestTurn.turnId)
+          : thread.messages;
+
       return {
         kind: "updated",
         thread: {
           ...thread,
           session: event.payload.session,
+          messages,
           latestTurn,
           updatedAt: event.occurredAt,
         },
@@ -604,6 +617,34 @@ export function applyThreadDetailEvent(
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Clears `streaming` on every message belonging to a turn that just settled.
+ *
+ * A message's `streaming` flag is only ever lowered by the final
+ * `thread.message-sent` for that message. When a turn ends any other way — the
+ * session leaves "running" (socket drop, provider crash, `/stop`) or the user
+ * interrupts — that final event never arrives and the flag stays raised
+ * forever. `isStreaming` then lies for the rest of the session, which is what
+ * makes a dropped stream look like it is still typing.
+ *
+ * Returns the same array reference when nothing changed, so the settle path
+ * stays allocation-free for the overwhelmingly common case of a turn whose
+ * messages already finished cleanly.
+ */
+function clearStreamingForTurn(
+  messages: OrchestrationThread["messages"],
+  turnId: OrchestrationMessage["turnId"],
+): OrchestrationThread["messages"] {
+  if (turnId === undefined || turnId === null) {
+    return messages;
+  }
+  return messages.some((message) => message.streaming && message.turnId === turnId)
+    ? Arr.map(messages, (message) =>
+        message.streaming && message.turnId === turnId ? { ...message, streaming: false } : message,
+      )
+    : messages;
+}
 
 /**
  * Turn state to settle a still-running latest turn with when its session

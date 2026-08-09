@@ -875,7 +875,13 @@ function defaultSubprocessInspectorForPlatform(platform: NodeJS.Platform) {
   });
 }
 
-function capHistory(history: string, maxLines: number): string {
+/**
+ * T3 Turbo exports this (upstream keeps it module-private) so the fork-owned
+ * byte-identity test can drive the REAL cap through the incremental buffer. It stays
+ * live on the disk-load path here, so a frozen copy in the test would have proven
+ * only that the buffer matches a snapshot of upstream, not upstream itself.
+ */
+export function capHistory(history: string, maxLines: number): string {
   if (history.length === 0) return history;
   const hasTrailingNewline = history.endsWith("\n");
   const lines = history.split("\n");
