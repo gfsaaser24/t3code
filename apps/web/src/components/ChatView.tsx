@@ -4156,9 +4156,11 @@ export function ChatViewContent(props: ChatViewProps) {
       now: `${nowMinute}:00.000Z`,
       autoSettleAfterDays,
       changeRequestState: activeThreadPr?.state ?? null,
+      changeRequestUpdatedAt: activeThreadPr?.updatedAt ?? null,
     });
   }, [
     activeThreadPr?.state,
+    activeThreadPr?.updatedAt,
     activeThreadShell,
     autoSettleAfterDays,
     nowMinute,
@@ -6145,6 +6147,7 @@ export function ChatViewContent(props: ChatViewProps) {
             activeThreadTitle={activeThread.title}
             isServerThread={isServerThread}
             changeRequestState={activeThreadPr?.state ?? null}
+            changeRequestUpdatedAt={activeThreadPr?.updatedAt ?? null}
             activeProjectName={activeProject?.title}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
             activeProjectFaviconPath={activeProject?.faviconPath ?? null}

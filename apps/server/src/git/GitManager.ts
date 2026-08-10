@@ -534,7 +534,9 @@ function toStatusPr(pr: PullRequestInfo): {
   baseRef: string;
   headRef: string;
   state: "open" | "closed" | "merged";
+  updatedAt?: string;
 } {
+  const updatedAt = Option.map(pr.updatedAt, DateTime.formatIso);
   return {
     number: pr.number,
     title: pr.title,
@@ -542,6 +544,7 @@ function toStatusPr(pr: PullRequestInfo): {
     baseRef: pr.baseRefName,
     headRef: pr.headRefName,
     state: pr.state,
+    ...(Option.isSome(updatedAt) ? { updatedAt: updatedAt.value } : {}),
   };
 }
 

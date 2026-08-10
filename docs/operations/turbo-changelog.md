@@ -8,6 +8,14 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **Un-settling a thread now sticks, and a merged PR no longer buries live follow-up work.** The
+  keep-active pin survives messages, session starts, and approval/input requests — only an
+  explicit settle spends it (activity still wakes explicitly _settled_ threads). And a merged or
+  closed PR insta-settles a thread only when it went quiet at completion; newer activity defers to
+  the ordinary inactivity rule, fed by the PR's `updatedAt` now carried on the VCS status
+  contract. New seam `settled-lifecycle-sticky-pin`; upstream candidate referencing
+  pingdotgg/t3code#5575 / #5643. Ported from fork-main PR #61.
+
 Wave 1 of the speed plan ([`.plans/23-turbo-performance-audit.md`](../../.plans/23-turbo-performance-audit.md)):
 seven items across four surfaces. Every one keeps the behavior it found — the tests that pin the
 old orderings and the old wire bytes are part of the wave.

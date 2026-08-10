@@ -1274,6 +1274,46 @@
           "markers": ["**Tuned** `packages/client-runtime/src/rpc/client.ts`"]
         }
       ]
+    },
+    {
+      "id": "settled-lifecycle-sticky-pin",
+      "status": "implemented",
+      "summary": "Un-settling a thread is durable and a merged/closed PR only insta-settles a thread that went quiet at completion. The decider no longer spends the keep-active pin on activity (it still wakes explicitly settled threads), and effectiveSettled defers a completed PR to the inactivity rule when thread activity is newer than the PR updatedAt, which now rides the VCS status contract from GitManager into web and mobile classification. Upstream candidate: pingdotgg/t3code#5575 / #5643; drop this seam if upstream merges an equivalent.",
+      "checks": [
+        {
+          "path": "apps/server/src/orchestration/decider.ts",
+          "markers": [
+            "deliberately sticky",
+            "if (targetThread.settledOverride === \"settled\") {",
+            "thread.settledOverride !== \"settled\" || !isSessionActivity",
+            "thread.settledOverride !== \"settled\" || !wakesSettledThread"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSettled.ts",
+          "markers": ["changeRequestUpdatedAt", "activityAfterCompletion"]
+        },
+        {
+          "path": "packages/contracts/src/git.ts",
+          "markers": ["updatedAt: Schema.optional(Schema.String)"]
+        },
+        {
+          "path": "apps/server/src/git/GitManager.ts",
+          "markers": ["Option.map(pr.updatedAt, DateTime.formatIso)"]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["changeRequestUpdatedAt: changeRequest?.updatedAt ?? null"]
+        },
+        {
+          "path": "apps/mobile/src/features/threads/threadListV2.ts",
+          "markers": ["changeRequestUpdatedAt: changeRequest?.updatedAt ?? null"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["Settled-lifecycle fix (upstream candidate)"]
+        }
+      ]
     }
   ]
 }
