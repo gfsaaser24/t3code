@@ -48,6 +48,8 @@ interface ChatHeaderProps {
   isServerThread: boolean;
   /** PR state feeding the settled classification, resolved by ChatView. */
   changeRequestState: ChangeRequestStateLike | null;
+  /** The PR's last-updated time; holds post-merge-activity threads active. */
+  changeRequestUpdatedAt: string | null;
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
   activeProjectFaviconPath: string | null;
@@ -101,6 +103,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeThreadTitle,
   isServerThread,
   changeRequestState,
+  changeRequestUpdatedAt,
   activeProjectName,
   activeProjectCwd,
   activeProjectFaviconPath,
@@ -176,6 +179,7 @@ export const ChatHeader = memo(function ChatHeader({
     threadRef: isServerThread ? activeThreadRef : null,
     projectCwd: activeProjectCwd,
     changeRequestState,
+    changeRequestUpdatedAt,
     onStartRename: startRename,
   });
   const titleButtonRef = useRef<HTMLButtonElement | null>(null);

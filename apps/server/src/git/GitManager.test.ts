@@ -719,6 +719,44 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status forwards the PR's updatedAt for the settled classification", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/status-updated-at"]);
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "feature/status-updated-at"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          prListSequence: [
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              {
+                number: 15,
+                title: "Merged PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/15",
+                baseRefName: "main",
+                headRefName: "feature/status-updated-at",
+                state: "MERGED",
+                mergedAt: "2026-01-30T10:00:00Z",
+                updatedAt: "2026-01-30T10:05:00Z",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+
+      // Clients compare thread activity against this timestamp to keep a
+      // thread active when work continued after the merge.
+      expect(status.pr?.state).toBe("merged");
+      expect(status.pr?.updatedAt).toBe("2026-01-30T10:05:00.000Z");
+    }),
+  );
+
   it.effect("status trims PR metadata returned by gh before publishing it", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");
@@ -856,6 +894,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseRef: "main",
         headRef: "feature/status-lowercase-state",
         state: "merged",
+        updatedAt: "2026-01-02T00:00:00.000Z",
       });
     }),
   );
@@ -1119,6 +1158,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           baseRef: "main",
           headRef: "statemachine",
           state: "open",
+          updatedAt: "2026-03-10T07:00:00.000Z",
         });
         expect(ghCalls).toContain(
           "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
@@ -1227,6 +1267,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           baseRef: "main",
           headRef: "effect-atom",
           state: "open",
+          updatedAt: "2026-03-01T10:00:00.000Z",
         });
         expect(ghCalls.some((call) => call.includes("pr list --head upstream/effect-atom "))).toBe(
           false,
@@ -1278,6 +1319,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseRef: "main",
         headRef: "feature/status-merged-pr",
         state: "merged",
+        updatedAt: "2026-01-30T10:00:00.000Z",
       });
     }),
   );
@@ -1357,6 +1399,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseRef: "main",
         headRef: "feature/status-open-over-merged",
         state: "open",
+        updatedAt: "2026-01-30T10:00:00.000Z",
       });
     }),
   );

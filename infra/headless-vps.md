@@ -15,13 +15,13 @@ systemd unit, see [Background service](../docs/user/background-service.md).
 
 ## Mental model
 
-| Piece | Lives where |
-| --- | --- |
-| T3 Code server | The VPS |
-| Provider CLIs (`claude`, `codex`, …) and their logins | The VPS |
-| Project directories and git checkouts | The VPS |
-| Thread history and environment settings | The VPS (`~/.t3` by default) |
-| Desktop / web / mobile UI | Your laptop or phone |
+| Piece                                                 | Lives where                  |
+| ----------------------------------------------------- | ---------------------------- |
+| T3 Code server                                        | The VPS                      |
+| Provider CLIs (`claude`, `codex`, …) and their logins | The VPS                      |
+| Project directories and git checkouts                 | The VPS                      |
+| Thread history and environment settings               | The VPS (`~/.t3` by default) |
+| Desktop / web / mobile UI                             | Your laptop or phone         |
 
 If a provider is only authenticated on your laptop, sessions on the VPS will fail. Log in on the
 machine that runs the server.
@@ -42,11 +42,11 @@ parallel-agent loads need more.
 
 ## Choose how clients reach the VPS
 
-| Method | Best when | Inbound ports on the VPS |
-| --- | --- | --- |
-| **T3 Connect** (recommended) | You want phone + hosted web + desktop without opening the server to the internet | None on the VPS (outbound managed tunnel only; clients reach a tunnel hostname, not your public IP) |
-| **Tailscale** (+ `t3 serve` / `t3 pair`) | You already mesh devices on a tailnet and want private HTTPS | None public; tailnet only |
-| **Desktop SSH** | You only use the desktop app and already SSH to the host | SSH only |
+| Method                                   | Best when                                                                        | Inbound ports on the VPS                                                                            |
+| ---------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| **T3 Connect** (recommended)             | You want phone + hosted web + desktop without opening the server to the internet | None on the VPS (outbound managed tunnel only; clients reach a tunnel hostname, not your public IP) |
+| **Tailscale** (+ `t3 serve` / `t3 pair`) | You already mesh devices on a tailnet and want private HTTPS                     | None public; tailnet only                                                                           |
+| **Desktop SSH**                          | You only use the desktop app and already SSH to the host                         | SSH only                                                                                            |
 
 Do not bind the T3 server to `0.0.0.0` on a public VPS IP unless you understand the exposure.
 Prefer Connect, Tailscale, or SSH.
@@ -287,15 +287,15 @@ runs the headless steps in this document against that stack.
 
 ## Troubleshooting
 
-| Symptom | What to check |
-| --- | --- |
-| Environment never appears after Connect | Same Connect account on client and VPS; `connect status` shows provisioned link; a T3 server process is running with Connect intent set |
-| Provider fails at session start | Provider CLI on VPS `PATH`; login was run **on the VPS**; binary path in Settings if needed |
-| `node: command not found` over SSH | Non-interactive `PATH` / version-manager default on the VPS |
-| Hosted web cannot connect | Backend must be HTTPS/WSS (Connect or Tailscale Serve). Plain `http://` LAN URLs are blocked from HTTPS pages |
-| Works until you disconnect SSH | Background service not installed; run `service install` so the process outlives the session |
-| “Invalid pairing token” while using Connect | Connect does not use pairing tokens; sign in and pick the environment instead |
-| `connect` complains about missing config | CLI/build lacks Connect public values (common on unconfigured source builds); use a release built for your stack |
+| Symptom                                     | What to check                                                                                                                           |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Environment never appears after Connect     | Same Connect account on client and VPS; `connect status` shows provisioned link; a T3 server process is running with Connect intent set |
+| Provider fails at session start             | Provider CLI on VPS `PATH`; login was run **on the VPS**; binary path in Settings if needed                                             |
+| `node: command not found` over SSH          | Non-interactive `PATH` / version-manager default on the VPS                                                                             |
+| Hosted web cannot connect                   | Backend must be HTTPS/WSS (Connect or Tailscale Serve). Plain `http://` LAN URLs are blocked from HTTPS pages                           |
+| Works until you disconnect SSH              | Background service not installed; run `service install` so the process outlives the session                                             |
+| “Invalid pairing token” while using Connect | Connect does not use pairing tokens; sign in and pick the environment instead                                                           |
+| `connect` complains about missing config    | CLI/build lacks Connect public values (common on unconfigured source builds); use a release built for your stack                        |
 
 ---
 

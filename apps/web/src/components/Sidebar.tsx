@@ -698,7 +698,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   onUnsnooze: (threadRef: ScopedThreadRef) => void;
   onUnpin: (threadRef: ScopedThreadRef) => void;
   onAcknowledgeWoke: (threadRef: ScopedThreadRef, visitedAt: string) => void;
-  onChangeRequestState: (threadKey: string, state: "open" | "closed" | "merged" | null) => void;
+  onChangeRequestState: (
+    threadKey: string,
+    state: "open" | "closed" | "merged" | null,
+    updatedAt: string | null,
+  ) => void;
 }) {
   const {
     isRenaming,
@@ -847,10 +851,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const prStatus = prStatusIndicator(pr, gitStatus.data?.sourceControlProvider);
   const settledPrHoverClass = pr ? settledPrHoverColorClass(pr.state) : undefined;
   // Report the PR state up: the parent partitions rows with effectiveSettled,
-  // and a merged/closed PR auto-settles a thread — data only rows have.
+  // and a merged/closed PR auto-settles a thread — data only rows have. The
+  // PR's updatedAt rides along so the partition can hold a thread active
+  // when its activity is newer than the merge/close.
+  const prUpdatedAt = pr?.updatedAt ?? null;
   useEffect(() => {
-    onChangeRequestState(threadKey, prState);
-  }, [onChangeRequestState, prState, threadKey]);
+    onChangeRequestState(threadKey, prState, prUpdatedAt);
+  }, [onChangeRequestState, prState, prUpdatedAt, threadKey]);
 
   const modelInstanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
   const providerEntry = props.providerEntryByInstanceId.get(modelInstanceId) ?? null;
@@ -1765,19 +1772,27 @@ export default function Sidebar() {
   const [snoozeWakeTick, bumpSnoozeWakeTick] = useState(0);
 
   // PR states stream in per-row (rows own the VCS subscriptions); a merged or
-  // closed PR auto-settles its thread on the next partition.
+  // closed PR auto-settles its thread on the next partition. updatedAt rides
+  // along: the partition holds a thread active when its activity is newer
+  // than the merge/close.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+    ReadonlyMap<
+      string,
+      { readonly state: "open" | "closed" | "merged"; readonly updatedAt: string | null }
+    >
   >(() => new Map());
   const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
+    (threadKey: string, state: "open" | "closed" | "merged" | null, updatedAt: string | null) => {
       setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
+        const existing = current.get(threadKey) ?? null;
+        if ((existing?.state ?? null) === state && (existing?.updatedAt ?? null) === updatedAt) {
+          return current;
+        }
         const next = new Map(current);
         if (state === null) {
           next.delete(threadKey);
         } else {
-          next.set(threadKey, state);
+          next.set(threadKey, { state, updatedAt });
         }
         return next;
       });
@@ -1899,7 +1914,7 @@ export default function Sidebar() {
       const supportsSnooze =
         serverConfigs.get(thread.environmentId)?.environment.capabilities.threadSnooze === true;
       const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-      const changeRequestState = changeRequestStateByKey.get(threadKey) ?? null;
+      const changeRequest = changeRequestStateByKey.get(threadKey) ?? null;
       // Snooze outranks everything, including a pin: "hide until Tuesday"
       // temporarily suspends "keep on top". The pin survives underneath —
       // and so does its pinOrderKey, so on wake the thread reappears at
@@ -1916,7 +1931,12 @@ export default function Sidebar() {
         pinned.push(thread);
       } else if (
         supportsSettlement &&
-        effectiveSettled(thread, { now, autoSettleAfterDays, changeRequestState })
+        effectiveSettled(thread, {
+          now,
+          autoSettleAfterDays,
+          changeRequestState: changeRequest?.state ?? null,
+          changeRequestUpdatedAt: changeRequest?.updatedAt ?? null,
+        })
       ) {
         settled.push(thread);
       } else {

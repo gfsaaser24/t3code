@@ -62,9 +62,12 @@ export function useThreadActionMenu(input: {
   readonly projectCwd: string | null;
   /** PR state feeding auto-settle classification, as resolved by the caller. */
   readonly changeRequestState: ChangeRequestStateLike | null;
+  /** The PR's last-updated time; holds post-merge-activity threads active. */
+  readonly changeRequestUpdatedAt: string | null;
   readonly onStartRename: () => void;
 }) {
-  const { threadRef, projectCwd, changeRequestState, onStartRename } = input;
+  const { threadRef, projectCwd, changeRequestState, changeRequestUpdatedAt, onStartRename } =
+    input;
   const {
     settleThread,
     unsettleThread,
@@ -127,6 +130,7 @@ export function useThreadActionMenu(input: {
               now: `${now.toISOString().slice(0, 16)}:00.000Z`,
               autoSettleAfterDays,
               changeRequestState,
+              changeRequestUpdatedAt,
             }),
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
@@ -275,6 +279,7 @@ export function useThreadActionMenu(input: {
     [
       autoSettleAfterDays,
       changeRequestState,
+      changeRequestUpdatedAt,
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
