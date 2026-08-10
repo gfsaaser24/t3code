@@ -422,13 +422,15 @@ const program = Effect.gen(function* () {
         );
       }
       currentModelId = request.modelId;
-      yield* agent.client.sessionUpdate({
-        sessionId,
-        update: {
-          sessionUpdate: "config_option_update",
-          configOptions: configOptions(),
-        },
-      });
+      if (emitConfigOptionUpdates) {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "config_option_update",
+            configOptions: configOptions(),
+          },
+        });
+      }
       return {};
     }),
   );

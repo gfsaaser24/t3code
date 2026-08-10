@@ -149,6 +149,28 @@ describe("Grok ACP negotiated capabilities", () => {
     ).toBeUndefined();
   });
 
+  it("prefers id/name matches over descriptions when resolving the mode pair", () => {
+    expect(
+      resolveGrokAcpModeIds({
+        currentModeId: "build",
+        availableModes: [
+          { id: "build", name: "Build", description: "Plan the change, then implement it" },
+          { id: "architect", name: "Architect", description: "Design before building" },
+        ],
+      }),
+    ).toEqual({ planModeId: "architect", defaultModeId: "build" });
+    // Descriptions still resolve the pair when identifiers carry no tokens.
+    expect(
+      resolveGrokAcpModeIds({
+        currentModeId: "mode-a",
+        availableModes: [
+          { id: "mode-a", name: "A", description: "Plan work" },
+          { id: "mode-b", name: "B", description: "Build work" },
+        ],
+      }),
+    ).toEqual({ planModeId: "mode-a", defaultModeId: "mode-b" });
+  });
+
   it("resolves the exact native reasoning config id and value", () => {
     expect(findGrokAcpReasoningConfigOption([reasoningOption])).toBe(reasoningOption);
     expect(resolveGrokAcpReasoningValue(reasoningOption, "deep-native")).toBe("deep-native");

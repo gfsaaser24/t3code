@@ -984,13 +984,18 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               const requestedTurnModelId = turnModelSelection?.model
                 ? resolveGrokAcpBaseModelId(turnModelSelection.model)
                 : undefined;
+              const previousModelId = ctx.currentModelId;
               const currentModelId = yield* applyGrokAcpModelSelection({
                 runtime: ctx.acp,
-                currentModelId: ctx.currentModelId,
+                currentModelId: previousModelId,
                 requestedModelId: requestedTurnModelId,
                 mapError: (cause) =>
                   mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
               });
+              // The agent is already on the new model, so record it before any
+              // later preparation step can fail; otherwise a failed turn leaves
+              // ctx pointing at a model the session no longer runs.
+              ctx.currentModelId = currentModelId;
 
               // ACP configuration is negotiated per session and may change
               // after a model selection. Resolve every T3-facing choice from
@@ -1005,7 +1010,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               const modelReasoning = decodeGrokAcpModelReasoningCapabilities(
                 ctx.availableModels.find((model) => model.modelId === currentModelId),
               );
-              if (currentModelId !== ctx.currentModelId) {
+              if (currentModelId !== previousModelId) {
                 ctx.currentReasoningEffort = modelReasoning?.currentValue;
               }
               if (requestedReasoning !== undefined) {
@@ -1155,7 +1160,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 });
               }
 
-              ctx.currentModelId = currentModelId;
               const displayModel = currentModelId
                 ? resolveGrokAcpBaseModelId(currentModelId)
                 : undefined;

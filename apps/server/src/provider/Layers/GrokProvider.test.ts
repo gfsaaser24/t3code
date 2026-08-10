@@ -141,6 +141,48 @@ describe("Grok ACP capability discovery", () => {
     });
   });
 
+  it("applies session config capabilities only to the current model", () => {
+    const sessionCapabilities = buildGrokCapabilitiesFromConfigOptions([
+      {
+        id: "reasoning",
+        name: "Reasoning",
+        type: "select",
+        currentValue: "high",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ]);
+    const models = buildGrokDiscoveredModelsFromSessionModelState(
+      {
+        currentModelId: "grok-build",
+        availableModels: [
+          { modelId: "grok-build", name: "Grok Build" },
+          {
+            modelId: "grok-4.5",
+            name: "Grok 4.5",
+            _meta: {
+              supportsReasoningEffort: true,
+              reasoningEffort: "medium",
+              reasoningEfforts: [
+                { id: "medium", value: "medium", label: "Medium Effort" },
+                { id: "high", value: "high", label: "High Effort" },
+              ],
+            },
+          },
+        ],
+      },
+      sessionCapabilities,
+    );
+
+    expect(models[0]?.capabilities).toEqual(sessionCapabilities);
+    expect(models[1]?.capabilities?.optionDescriptors?.[0]).toMatchObject({
+      id: "reasoning",
+      currentValue: "medium",
+    });
+  });
+
   it("keeps custom models empty and hides Plan until the pair is negotiated", () => {
     const capabilities = buildGrokCapabilitiesFromConfigOptions([]);
     const models = buildGrokDiscoveredModelsFromSessionModelState(

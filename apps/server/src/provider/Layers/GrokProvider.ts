@@ -122,10 +122,13 @@ export function buildGrokCapabilitiesFromConfigOptions(
   if (!reasoningOption || reasoningOption.type !== "select") {
     return EMPTY_CAPABILITIES;
   }
+  // collectGrokAcpSelectOptions trims option values, so trim currentValue too
+  // or a padded value from the agent would drop the current selection.
+  const currentValue = reasoningOption.currentValue.trim();
   const choices = collectGrokAcpSelectOptions(reasoningOption).map((option) => ({
     value: option.value,
     label: option.name,
-    ...(option.value === reasoningOption.currentValue ? { isDefault: true } : {}),
+    ...(option.value === currentValue ? { isDefault: true } : {}),
   }));
   if (choices.length === 0) {
     return EMPTY_CAPABILITIES;
@@ -175,11 +178,16 @@ export function buildGrokCapabilitiesFromModelInfo(
 
 export function buildGrokDiscoveredModelsFromSessionModelState(
   modelState: EffectAcpSchema.SessionModelState | null | undefined,
-  capabilities?: ModelCapabilities,
+  currentModelCapabilities?: ModelCapabilities,
 ): ReadonlyArray<ServerProviderModel> {
   if (!modelState || modelState.availableModels.length === 0) {
     return [];
   }
+  // resolveGrokAcpBaseModelId falls back to "grok-build" for empty input, so
+  // only derive a current slug from a real session model id to avoid
+  // accidentally keying the session capabilities onto the fallback model.
+  const currentModelId = modelState.currentModelId?.trim();
+  const currentSlug = currentModelId ? resolveGrokAcpBaseModelId(currentModelId) : undefined;
   const seen = new Set<string>();
   return modelState.availableModels
     .map((model): ServerProviderModel | undefined => {
@@ -188,7 +196,13 @@ export function buildGrokDiscoveredModelsFromSessionModelState(
         return undefined;
       }
       seen.add(slug);
-      const modelCapabilities = capabilities ?? buildGrokCapabilitiesFromModelInfo(model);
+      // Session config options describe only the selected model, so the
+      // config-derived capabilities apply to that model alone; every other
+      // model reports its own advertised metadata.
+      const modelCapabilities =
+        currentModelCapabilities !== undefined && slug === currentSlug
+          ? currentModelCapabilities
+          : buildGrokCapabilitiesFromModelInfo(model);
       return {
         slug,
         name: model.name.trim() || slug,

@@ -140,7 +140,22 @@ export function resolveGrokAcpModelReasoningValue(
     return undefined;
   }
   const reasoning = decodeGrokAcpModelReasoningCapabilities(model);
-  return reasoning?.options.find((option) => option.value === requestedValue.trim())?.value;
+  if (!reasoning) {
+    return undefined;
+  }
+  // Mirror resolveGrokAcpReasoningValue: exact match first, then normalized
+  // value-or-label so persisted selections like "extra-high" still resolve
+  // against advertised "extra_high" values across CLI builds.
+  const exact = reasoning.options.find((option) => option.value === requestedValue.trim());
+  if (exact) {
+    return exact.value;
+  }
+  const normalizedRequested = normalizeGrokCapabilityToken(requestedValue);
+  return reasoning.options.find(
+    (option) =>
+      normalizeGrokCapabilityToken(option.value) === normalizedRequested ||
+      normalizeGrokCapabilityToken(option.label) === normalizedRequested,
+  )?.value;
 }
 
 export function collectGrokAcpSelectOptions(
@@ -217,13 +232,18 @@ export function resolveGrokAcpReasoningValue(
   return options.some((option) => option.value === currentValue) ? currentValue : undefined;
 }
 
-function modeText(mode: AcpSessionMode): string {
-  return [mode.id, mode.name, mode.description].filter(Boolean).join(" ");
-}
-
-function modeMatchesAnyToken(mode: AcpSessionMode, tokens: ReadonlySet<string>): boolean {
-  const normalizedText = normalizeGrokCapabilityToken(modeText(mode));
-  return Array.from(tokens).some((token) => normalizedText.split("-").includes(token));
+function modeMatchesAnyToken(
+  mode: AcpSessionMode,
+  tokens: ReadonlySet<string>,
+  options?: { readonly includeDescription?: boolean },
+): boolean {
+  const parts = [mode.id, mode.name, ...(options?.includeDescription ? [mode.description] : [])];
+  const modeTokens = new Set(
+    parts
+      .filter((part): part is string => Boolean(part))
+      .flatMap((part) => normalizeGrokCapabilityToken(part).split("-")),
+  );
+  return Array.from(tokens).some((token) => modeTokens.has(token));
 }
 
 export function resolveGrokAcpModeIds(
@@ -232,12 +252,17 @@ export function resolveGrokAcpModeIds(
   if (!modeState || modeState.availableModes.length < 2) {
     return undefined;
   }
-  const planMode = modeState.availableModes.find((mode) =>
-    modeMatchesAnyToken(mode, new Set(["plan", "architect"])),
-  );
-  const defaultMode = modeState.availableModes.find((mode) =>
-    modeMatchesAnyToken(mode, new Set(["build", "code", "default", "implement", "normal"])),
-  );
+  // Match on id and name first: a description is prose and can mention the
+  // other mode's tokens ("Plan the change, then implement it" on a Build
+  // mode), which would misroute the Plan/Build pair. Descriptions only break
+  // ties when no mode matches on its identifiers.
+  const findMode = (tokens: ReadonlySet<string>) =>
+    modeState.availableModes.find((mode) => modeMatchesAnyToken(mode, tokens)) ??
+    modeState.availableModes.find((mode) =>
+      modeMatchesAnyToken(mode, tokens, { includeDescription: true }),
+    );
+  const planMode = findMode(new Set(["plan", "architect"]));
+  const defaultMode = findMode(new Set(["build", "code", "default", "implement", "normal"]));
   if (!planMode || !defaultMode || planMode.id === defaultMode.id) {
     return undefined;
   }
