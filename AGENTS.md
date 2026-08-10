@@ -20,22 +20,30 @@
    tracked in two places: `SEAM.md` (human conflict guidance per file) and
    `.t3-turbo/customizations.json` (the machine-readable preservation contract, verified with
    `pnpm --dir scripts turbo:customizations:verify`). If you modify an upstream-owned file,
-   register it in both. Keep Turbo-only work as a small, reviewable commit stack above the
-   upstream SHA recorded in `.t3-turbo/upstream.json`.
+   register it in both. The manifest — not the shape of the history — is what preserves fork
+   behavior across ingestion, so registering a change matters more than where its commit sits.
+   Keep Turbo-only work small and reviewable, and land it on `turbo` through normal reviewed
+   merges; `.t3-turbo/upstream.json` records the upstream SHA the branch has ingested, not a
+   base the branch is expected to sit linearly on top of.
 
 3. **We ingest ALL upstream code daily.** The scheduled `turbo-nightly-sync.yml` workflow
-   (11:00 PM Eastern) reads official `main` from `pingdotgg/t3code` and rebases the Turbo commit
-   stack onto it. Upstream is strictly read-only from our side — **never push, open PRs, or
-   write anything to `pingdotgg/t3code`.** The only push target is `gfsaaser24/t3code`.
+   (11:00 PM Eastern) reads official `main` from `pingdotgg/t3code` and **merges** it into the
+   Turbo branch inside an isolated worktree. It merges rather than rebases because `turbo` is not
+   a linear stack: it carries merge commits of its own, and replaying it re-litigates conflicts
+   those merges already settled. Upstream is strictly read-only from our side — **never push,
+   open PRs, or write anything to `pingdotgg/t3code`.** The only push target is
+   `gfsaaser24/t3code`.
 
 4. **We ingest both main commits and official Nightly releases.** The newest published official
    Nightly source tag is the deterministic version anchor; ordinary commits pushed between
    Nightlies come along with `main`. We never download or republish an official installer —
    Turbo installers are always built from source in our own pipeline.
 
-5. **Turbo changes always survive ingestion.** Every rebase candidate must pass the
-   customization manifest before it can be built. On conflict, automation aborts, uploads a
-   collision report, and opens an issue — it never chooses a resolution. When you resolve one:
+5. **Turbo changes always survive ingestion.** Every merge candidate must pass the
+   customization manifest before it can be built — the manifest is the preservation contract, and
+   it is what proves the seams survived, since the merge itself makes no promise about history
+   shape. On conflict, automation aborts the merge, uploads a collision report, and opens an
+   issue — it never chooses a resolution. When you resolve one:
    start from the new upstream file, reapply only the fork behavior described in `SEAM.md`, and
    drop a fork hunk only when upstream now provides the equivalent. Never hand-edit
    `.t3-turbo/upstream.json` and never delete checks to make a run green.

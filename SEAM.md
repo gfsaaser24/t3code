@@ -368,6 +368,11 @@ fork's change.
 
 ## Nightly sync conflicts
 
+Ingestion merges upstream `main` into `turbo`; it does not replay the fork's commits. A conflict is
+therefore a single three-way merge to settle in one commit, not a collision to re-resolve at each
+replayed commit — and the customization manifest, not the history shape, is what proves the seams
+below survived.
+
 Resolve against the new upstream file first, then reapply only the behavior above; never take the
 fork's whole file over a newer upstream implementation. Drop a fork hunk when upstream now provides
 equivalent gating or optionality. Preserve the PlanetScale fallback, the Cloudflare credential

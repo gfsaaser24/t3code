@@ -23,7 +23,7 @@ env:
 
 jobs:
   sync_source:
-    name: Rebase Turbo customizations
+    name: Merge upstream into Turbo
     if: vars.TURBO_NIGHTLY_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -135,7 +135,7 @@ jobs:
           --github-output
 
       - id: rebase
-        name: Rebase in an isolated worktree
+        name: Merge in an isolated worktree
         if: steps.resolve.outputs.has_update == 'true'
         env:
           PUBLISH_TAG: ${{ steps.resolve.outputs.tag }}
@@ -210,15 +210,24 @@ jobs:
           git -C "$sync_worktree" switch -c turbo-sync-candidate
           git -C "$sync_worktree" config user.name "t3-turbo-bot"
           git -C "$sync_worktree" config user.email "t3-turbo-bot@users.noreply.github.com"
+          # The Turbo branch is not a linear stack above the recorded anchor: it carries merge
+          # commits of its own, and replaying it would re-litigate history those merges already
+          # reconciled. Upstream is merged in instead, and the manifest verifier below is what
+          # proves the registered fork behavior survived the ingestion.
+          source_date="$(git -C "$sync_worktree" show -s --format=%aI "$new_sha")"
+          # git merge names the conflicted files on stdout, so the collision report reads a
+          # combined log; splitting the streams would file an empty error section.
           set +e
-          git -C "$sync_worktree" rebase --committer-date-is-author-date \
-            --onto "$new_sha" "$OLD_MAIN_SHA" \
-            > "$RUNNER_TEMP/rebase.stdout" 2> "$RUNNER_TEMP/rebase.stderr"
-          rebase_status=$?
+          GIT_AUTHOR_DATE="$source_date" GIT_COMMITTER_DATE="$source_date" \
+            git -C "$sync_worktree" merge --no-ff --no-edit \
+            -m "chore(turbo): merge upstream $UPSTREAM_BRANCH at ${new_sha:0:12}" \
+            "$new_sha" \
+            > "$RUNNER_TEMP/merge.log" 2>&1
+          merge_status=$?
           set -e
 
           echo "upstream_sha=$new_sha" >> "$GITHUB_OUTPUT"
-          if [[ $rebase_status -ne 0 ]]; then
+          if [[ $merge_status -ne 0 ]]; then
             git -C "$sync_worktree" diff --name-only --diff-filter=U \
               > "$RUNNER_TEMP/unmerged-paths.txt"
             node scripts/turbo-nightly-sync.ts report \
@@ -229,9 +238,9 @@ jobs:
               --upstream-paths "$RUNNER_TEMP/upstream-paths.txt" \
               --customization-paths "$RUNNER_TEMP/customization-paths.txt" \
               --unmerged-paths "$RUNNER_TEMP/unmerged-paths.txt" \
-              --rebase-error "$RUNNER_TEMP/rebase.stderr" \
+              --merge-error "$RUNNER_TEMP/merge.log" \
               --output "$GITHUB_WORKSPACE/turbo-rebase-report.md"
-            git -C "$sync_worktree" rebase --abort || true
+            git -C "$sync_worktree" merge --abort || true
             echo "conflicted=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -258,7 +267,6 @@ jobs:
             '{ repository: $repository, branch: $branch, mainSha: $mainSha, nightlyTag: $nightlyTag, nightlySha: $nightlySha, version: $version, cutoffDate: $cutoffDate, cutoffInstant: $cutoffInstant }' \
             > "$sync_worktree/.t3-turbo/upstream.json"
           git -C "$sync_worktree" add .t3-turbo/upstream.json
-          source_date="$(git -C "$sync_worktree" show -s --format=%aI "$new_sha")"
           GIT_AUTHOR_DATE="$source_date" GIT_COMMITTER_DATE="$source_date" \
             git -C "$sync_worktree" commit -m "chore(turbo): track upstream main at ${new_sha:0:12}"
           candidate_sha="$(git -C "$sync_worktree" rev-parse HEAD)"
@@ -294,11 +302,11 @@ jobs:
             echo "- [Open this Actions run]($run_url)"
             echo "- [Open the manual build page]($workflow_url)"
             echo '- Create `repair/turbo-nightly-${{ github.run_id }}` from the unchanged `turbo` branch.'
-            echo '- Replay or amend the Turbo customization that collided, run the manifest verifier and its focused seam tests, then open a reviewed PR back to `turbo`.'
+            echo '- Resolve each collided file starting from the new upstream version, reapply only the fork behavior `SEAM.md` describes, run the manifest verifier and its focused seam tests, then open a reviewed PR back to `turbo`.'
             echo '- If the workflow changes, land the identical workflow blob on `main` before retrying. Do not hand-edit the upstream checkpoint or publish partial artifacts.'
             echo '- CLI retry: `gh workflow run turbo-nightly-sync.yml -R '"$GITHUB_REPOSITORY"' --ref main`'
           } >> turbo-rebase-report.md
-          title="T3-Turbo rebase needs review: $NEW_TAG"
+          title="T3-Turbo merge needs review: $NEW_TAG"
           issue_number="$(
             gh issue list --state open --limit 100 --json number,title \
               --jq ".[] | select(.title == \"$title\") | .number" | head -n 1
