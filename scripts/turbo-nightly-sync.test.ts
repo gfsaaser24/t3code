@@ -377,6 +377,40 @@ it("keeps official source tags separate from fork release tags", () => {
   assert.notInclude(workflow, '"refs/tags/$OFFICIAL_TAG:refs/tags/$OFFICIAL_TAG"');
 });
 
+it("ingests upstream by merging it into Turbo rather than replaying Turbo onto it", () => {
+  const workflow = readTurboWorkflow();
+  const syncStep = workflow.slice(
+    workflow.indexOf("      - id: rebase"),
+    workflow.indexOf("      - name: Upload conflict report"),
+  );
+
+  // The Turbo branch carries merge commits of its own, so a replay re-litigates history those
+  // merges already reconciled. The manifest verifier, not the history shape, preserves the seams.
+  assert.include(syncStep, 'git -C "$sync_worktree" merge --no-ff --no-edit');
+  assert.notMatch(syncStep, /git -C "\$sync_worktree" rebase/u);
+  assert.notInclude(syncStep, "--onto");
+
+  // The conflict contract is unchanged: never auto-resolve, report, abort, and hand off.
+  assert.include(syncStep, 'git -C "$sync_worktree" diff --name-only --diff-filter=U');
+  // git merge reports conflicted files on stdout, so the report must read the combined log.
+  assert.include(syncStep, '> "$RUNNER_TEMP/merge.log" 2>&1');
+  assert.include(syncStep, '--merge-error "$RUNNER_TEMP/merge.log"');
+  assert.include(syncStep, 'git -C "$sync_worktree" merge --abort || true');
+  assert.include(syncStep, 'echo "conflicted=true" >> "$GITHUB_OUTPUT"');
+  assert.notMatch(syncStep, /-X\s?(ours|theirs)|--strategy-option/u);
+
+  // The manifest gate still stands between a clean merge and a publishable candidate, and the
+  // guard that refuses a Nightly tag missing from upstream main is still ahead of both.
+  const nightlyGuard = syncStep.indexOf("is not contained in upstream main");
+  const mergeAt = syncStep.indexOf('git -C "$sync_worktree" merge --no-ff');
+  const verifyAt = syncStep.indexOf("turbo-customization-manifest.ts verify");
+  const candidateAt = syncStep.indexOf('echo "candidate_sha=$candidate_sha"');
+  assert.isAtLeast(nightlyGuard, 0);
+  assert.isBelow(nightlyGuard, mergeAt);
+  assert.isBelow(mergeAt, verifyAt);
+  assert.isBelow(verifyAt, candidateAt);
+});
+
 it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   const workflow = readTurboWorkflow();
   const buildWindowsStart = workflow.indexOf("  build_windows:");
@@ -391,7 +425,7 @@ it("uses only fork-owned GitHub credentials for an unsigned release", () => {
   assert.include(buildWindows, "T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}");
   assert.notMatch(buildWindows, /AZURE_|CLERK_|T3CODE_RELAY_URL|--signed|turbo-release/gu);
   assert.include(publish, "permissions:\n      contents: write");
-  assert.include(workflow, "rebase --committer-date-is-author-date");
+  assert.include(workflow, "merge --no-ff --no-edit");
   assert.include(workflow, "pnpm icons:turbo:check");
   assert.include(workflow, "jq -n \\");
   assert.include(workflow, "TURBO_OPENCLAW_ENABLED");
@@ -491,7 +525,7 @@ it("renders a review report without claiming that path overlap is a merge confli
     newSha: "new",
     overlappingPaths: ["apps/desktop/package.json"],
     unmergedPaths: ["scripts/build-desktop-artifact.ts"],
-    rebaseError: "CONFLICT (content)",
+    mergeError: "CONFLICT (content)",
   });
 
   assert.include(report, "Files changed by both upstream and Turbo");

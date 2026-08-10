@@ -39,7 +39,7 @@ which lets ordinary upstream changes coexist with the fork while still failing w
 modules, assets, behavior markers, tests, or policy text disappear. Each seam is labeled
 `implemented`, `policy`, or `planned`; a planned seam verifies its reviewed design contract and
 does not claim that the feature has shipped. The same manifest registers infrastructure refs whose
-state must be measured without bringing those branches into the product rebase. The
+state must be measured without bringing those branches into the product ingest. The
 `relay-portal` entry currently owns `refs/heads/infra/t3turbo-relay`.
 
 ## Recreating the pipeline in a fork
@@ -52,7 +52,7 @@ first scheduled run:
    `.t3-turbo/upstream.json`).
 2. A default `main` branch containing this workflow and a `turbo` branch containing the same
    workflow file plus the Turbo customization stack. The workflow blobs on both branches must be
-   identical; the schedule is read from `main`, while inbound rebases carry the file forward on
+   identical; the schedule is read from `main`, while inbound merges carry the file forward on
    `turbo`.
 3. Every branch listed in `customizations.json`, including `infra/t3turbo-relay`. Registered
    infrastructure branches use normal reviewed merges and are never rebased or force-pushed by
@@ -77,7 +77,7 @@ gh variable get TURBO_NIGHTLY_ENABLED --repo gfsaaser24/t3code
 
 The two workflow blob hashes must match. The durable checkpoint must be committed on `turbo`; the
 workflow updates it only inside the isolated candidate and publishes it with the candidate branch.
-Never hand-edit `mainSha`, `nightlySha`, or `version` to bypass a failed rebase. If the checkpoint
+Never hand-edit `mainSha`, `nightlySha`, or `version` to bypass a failed ingest. If the checkpoint
 is wrong, stop the schedule, compare it with the last successful release, and repair the branch
 as a reviewed commit.
 
@@ -100,7 +100,7 @@ Select main and the Nightly anchor at or before that instant
                                   Validate forward-only history
                                                |
                                                v
-                              Rebase Turbo commits temporarily
+                               Merge upstream in temp worktree
                                     |                    |
                                     | conflict           | clean
                                     v                    v
@@ -139,10 +139,13 @@ claiming a future boundary. The repository variable `TURBO_NIGHTLY_ENABLED` is t
 6. Git verifies that the new `main` descends from our recorded `mainSha`, that the Nightly commit
    is contained in `main`, and that the official tag has not moved. A backward, divergent, or
    rewritten update is rejected.
-7. The workflow creates a temporary Git worktree and rebases our Turbo commits onto the new main
-   commit. It never edits the live `turbo` branch during this stage.
-8. A clean rebase must pass the dependency-free customization manifest verifier inside the
+7. The workflow creates a temporary Git worktree and merges the new `main` commit into our Turbo
+   branch. It never edits the live `turbo` branch during this stage. It merges rather than
+   rebases because `turbo` is not a linear stack above the recorded anchor — it carries merge
+   commits of its own, so replaying it would re-litigate conflicts those merges already settled.
+8. A clean merge must pass the dependency-free customization manifest verifier inside the
    temporary candidate worktree. Missing seams fail the source job before a bundle is created.
+   The manifest, not the shape of the history, is the preservation contract.
 9. The verified candidate is bundled and handed to isolated Linux and Windows build jobs.
 10. Linux builds the WSL `node-pty` native module. Windows builds the T3 Turbo NSIS installer and
     update blockmap without signing or official-service credentials.
@@ -182,7 +185,7 @@ node scripts/turbo-customization-manifest.ts verify
 vp test run scripts/turbo-nightly-sync.test.ts scripts/turbo-customization-manifest.test.ts
 ```
 
-The source job runs the verifier before it bundles the rebased candidate. The Windows build job
+The source job runs the verifier before it bundles the merged candidate. The Windows build job
 runs the tooling tests plus the focused feature tests named directly in the workflow; marker
 presence alone is not proof that a behavior still works. If upstream moves or replaces a seam,
 update the manifest only in the same reviewed change that supplies and tests the replacement;
@@ -206,7 +209,7 @@ states the 11:00 PM Eastern ingestion cutoff. The updater assets retain their ve
 architecture in their filenames because `nightly.yml` addresses them by those exact names.
 
 The nightly cutoff imports the newest cumulative `main` commit at or before the recorded instant.
-If several commits land during the day, all of them arrive together in one rebased Turbo build.
+If several commits land during the day, all of them arrive together in one merged Turbo build.
 Commits and Nightly releases after that instant wait for the following cutoff even when the runner
 starts late.
 
@@ -228,14 +231,14 @@ mean it moved independently during the run; product ingestion still did not depl
 Automation never chooses "ours" or "theirs." It:
 
 1. records files changed by both upstream and Turbo;
-2. records Git's genuinely unmerged paths and rebase error;
-3. aborts the temporary rebase;
+2. records Git's genuinely unmerged paths and the merge output;
+3. aborts the temporary merge;
 4. uploads the Markdown conflict report;
 5. opens or updates a GitHub issue; and
 6. leaves the current Turbo branch and installer release untouched.
 
-The issue gives the exact recovery route: branch from the unchanged `turbo` tip, repair and test
-the collided customization, and open a reviewed PR back to `turbo`. If the workflow changes, its
+The issue gives the exact recovery route: branch from the unchanged `turbo` tip, resolve each
+collided file starting from the new upstream version and reapplying only the `SEAM.md` behavior, and open a reviewed PR back to `turbo`. If the workflow changes, its
 blob must also land identically on `main` before retry. The existing installation remains on the
 last known-good release until that corrected stack is reviewed and pushed.
 
@@ -286,7 +289,7 @@ The nightly workflow uses standard GitHub-hosted runners (`ubuntu-24.04` for sou
 dependency, publish, and notification jobs; `windows-2025` for the installer). The general CI
 workflow keeps the upstream-only Blacksmith labels for `pingdotgg/t3code` and selects available
 GitHub-hosted labels in this fork. A run that is queued indefinitely should be checked for a runner
-label regression before changing the rebase logic.
+label regression before changing the merge logic.
 
 ## Email and OpenClaw Telegram alerts
 
@@ -297,7 +300,7 @@ failed jobs, so `TURBO_NOTIFY_USER` is optional and only controls the issue assi
 receives GitHub's normal issue notifications according to their account settings.
 
 If an existing OpenClaw gateway already owns the Telegram channel, it can deliver the optional
-intervention alerts. The workflow notification job runs only when the source rebase conflicts or a
+intervention alerts. The workflow notification job runs only when the source merge conflicts or a
 sync/build/publish job fails. It does not send success or no-update messages. Enable OpenClaw's
 authenticated `/hooks/agent` endpoint and configure:
 
@@ -350,7 +353,7 @@ confirm-then-run link; never place a personal access token in an email or Telegr
 ## Current wiring and how to inspect it
 
 The workflow file must remain identical on our `main` and `turbo` branches: `main` activates the
-GitHub schedule, while `turbo` carries the workflow forward during rebases.
+GitHub schedule, while `turbo` carries the workflow forward during merges.
 
 Useful checks:
 
@@ -370,7 +373,7 @@ uses the green no-build path.
 
 Routine forward updates require nothing from us. Human review is needed only when:
 
-- Git cannot rebase a Turbo customization cleanly;
+- Git cannot merge upstream into a Turbo customization cleanly;
 - upstream history moves backward or becomes unrelated;
 - manifest, focused seam, icon, native build, packaging, or publication checks fail; or
 - we intentionally change the workflow and must copy the same YAML to both `main` and `turbo`.
@@ -383,7 +386,7 @@ Until the issue is resolved, the current branch and release remain the last know
 | ---------------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | No sync job appears                | `TURBO_NIGHTLY_ENABLED`, Actions enabled, 11 PM Eastern schedule | A disabled variable causes the job to be skipped.                                       |
 | Green run, no installer            | `sync_source` outputs and checkpoint                             | The exact workflow run/version was already published; inspect if this was not a retry.  |
-| Conflict issue/artifact            | Issue body, `turbo-rebase-report.md`, unmerged paths             | Resolve the Turbo commit stack, then rerun; the prior release is safe.                  |
+| Conflict issue/artifact            | Issue body, `turbo-rebase-report.md`, unmerged paths             | Resolve the merge conflict, then rerun; the prior release is safe.                      |
 | Build or seam failure              | Repair issue plus the first failed job log                       | The candidate was not published; follow the documented repair PR path.                  |
 | No Telegram/Slack notice           | notification job, variable/secrets names, hook reachability      | OpenClaw delivery is optional and non-blocking; inspect the gateway separately.         |
 | Run queued indefinitely            | job runner label and Actions runner availability                 | Check for an accidental private runner label; do not rewrite history to work around it. |

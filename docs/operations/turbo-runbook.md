@@ -13,7 +13,7 @@ both files in the same PR.
 | Machine-enforced customization seams            | `.t3-turbo/customizations.json`                                     | `pnpm --dir scripts turbo:customizations:verify` |
 | Upstream checkpoint (SHA, nightly tag, version) | `.t3-turbo/upstream.json`                                           | never hand-edit; the sync workflow owns it       |
 | Human-readable history                          | [`turbo-changelog.md`](./turbo-changelog.md)                        | appended in every behavior-changing PR           |
-| The Turbo commit stack                          | `git log origin/turbo --not <upstream.json mainSha> --first-parent` | —                                                |
+| Turbo's own commits since the last ingest       | `git log origin/turbo --not <upstream.json mainSha> --first-parent` | —                                                |
 
 ## Registering a new customization (checklist)
 
@@ -31,6 +31,12 @@ in the same commit (a changelog or runbook line usually belongs in it anyway).
 ## Nightly sync operations
 
 Full state model: [t3-turbo-nightly-inbound.md](../internals/t3-turbo-nightly-inbound.md).
+
+The workflow **merges** upstream `main` into `turbo` in an isolated worktree — it does not replay
+Turbo's commits onto upstream. `turbo` carries merge commits of its own, so a rebase would
+re-litigate conflicts those merges already settled and could never finish. What guarantees the
+fork survives an ingest is the customization manifest gate, which runs on the merged candidate
+before anything is built or published.
 
 ```powershell
 # Trigger a source check now (no-op when upstream refs are current)

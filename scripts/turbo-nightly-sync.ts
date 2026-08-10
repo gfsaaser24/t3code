@@ -528,15 +528,15 @@ export function renderTurboCollisionReport(input: {
   readonly newSha: string;
   readonly overlappingPaths: ReadonlyArray<string>;
   readonly unmergedPaths: ReadonlyArray<string>;
-  readonly rebaseError: string;
+  readonly mergeError: string;
 }): string {
   const section = (title: string, paths: ReadonlyArray<string>) =>
     paths.length === 0
       ? `### ${title}\n\nNone.\n`
       : `### ${title}\n\n${paths.map((path) => `- \`${path}\``).join("\n")}\n`;
-  const error = input.rebaseError.trim() || "Git did not provide stderr.";
+  const error = input.mergeError.trim() || "Git did not provide stderr.";
   return [
-    "# T3-Turbo nightly rebase needs review",
+    "# T3-Turbo nightly merge needs review",
     "",
     `- Previous official nightly: \`${input.oldTag}\` (\`${input.oldSha}\`)`,
     `- Candidate official nightly: \`${input.newTag}\` (\`${input.newSha}\`)`,
@@ -545,7 +545,7 @@ export function renderTurboCollisionReport(input: {
     "",
     section("Files changed by both upstream and Turbo", input.overlappingPaths),
     section("Unmerged paths reported by Git", input.unmergedPaths),
-    "### Rebase error",
+    "### Merge error",
     "",
     "```text",
     error,
@@ -757,8 +757,8 @@ function runReport(values: Record<string, string | boolean | undefined>): void {
   const customizationPaths = readPathList(
     typeof values["customization-paths"] === "string" ? values["customization-paths"] : undefined,
   );
-  const rebaseErrorPath =
-    typeof values["rebase-error"] === "string" ? values["rebase-error"] : undefined;
+  const mergeErrorPath =
+    typeof values["merge-error"] === "string" ? values["merge-error"] : undefined;
   const report = renderTurboCollisionReport({
     oldTag: values["old-tag"] as string,
     oldSha: values["old-sha"] as string,
@@ -768,9 +768,9 @@ function runReport(values: Record<string, string | boolean | undefined>): void {
     unmergedPaths: readPathList(
       typeof values["unmerged-paths"] === "string" ? values["unmerged-paths"] : undefined,
     ),
-    rebaseError:
-      rebaseErrorPath && NodeFS.existsSync(rebaseErrorPath)
-        ? NodeFS.readFileSync(rebaseErrorPath, "utf8")
+    mergeError:
+      mergeErrorPath && NodeFS.existsSync(mergeErrorPath)
+        ? NodeFS.readFileSync(mergeErrorPath, "utf8")
         : "",
   });
   NodeFS.mkdirSync(NodePath.dirname(NodePath.resolve(outputPath)), { recursive: true });
@@ -803,7 +803,7 @@ if (isMain) {
       "upstream-paths": { type: "string" },
       "customization-paths": { type: "string" },
       "unmerged-paths": { type: "string" },
-      "rebase-error": { type: "string" },
+      "merge-error": { type: "string" },
       "upstream-sha": { type: "string" },
       "nightly-tag": { type: "string" },
       "nightly-sha": { type: "string" },

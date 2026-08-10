@@ -8,6 +8,24 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **Nightly ingestion merges upstream instead of rebasing onto it.** The sync workflow replayed
+  the fork's commits onto each new upstream `main`. That could never finish: `turbo` is not a
+  linear stack above the recorded anchor — it carries merge commits of its own and its root is
+  several upstream generations back — so a rebase re-litigated conflicts those merges had already
+  settled. The run that prompted this would have replayed 94 commits (15 of them merges) and
+  aborted on the first handful; merging the same upstream tip conflicts on exactly one generated
+  file (`apps/web/src/routeTree.gen.ts`). Because the rebase always aborted, the publish job never
+  ran and `.t3-turbo/upstream.json` never advanced, so every following night repeated the same
+  failure — and the two ingests that did land (PRs #46 and #53) were both merges done by hand.
+  The step now merges the resolved upstream SHA into the Turbo branch inside the same isolated
+  worktree. Everything around it is unchanged: automation still never auto-resolves, still writes
+  the same collision report and opens the same review issue, still aborts and leaves `turbo` and
+  the last release untouched, and the customization manifest gate still stands between a clean
+  candidate and any build. That manifest — not the shape of the history — is what preserves the
+  seams, and `AGENTS.md`, `SEAM.md`, and the runbook now say so. One real bug surfaced while
+  dry-running the new step: `git merge` names conflicted files on stdout rather than stderr, so
+  the report reads a combined merge log and no longer files an empty error section.
+
 Wave 1 of the speed plan ([`.plans/23-turbo-performance-audit.md`](../../.plans/23-turbo-performance-audit.md)):
 seven items across four surfaces. Every one keeps the behavior it found — the tests that pin the
 old orderings and the old wire bytes are part of the wave.
