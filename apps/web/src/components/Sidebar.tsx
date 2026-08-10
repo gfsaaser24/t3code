@@ -120,7 +120,6 @@ import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
   buildBulkTitleRegenerationContextMenuItem,
   formatWorkingDurationLabel,
-  firstValidTimestampMs,
   hasUnseenCompletion,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -133,6 +132,7 @@ import {
   sortLogicalProjectsForSidebar,
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
+  sortSnoozedThreadsForSidebar,
   sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
@@ -1941,11 +1941,7 @@ export default function Sidebar() {
       ),
       activeThreads: sortThreadsForSidebar(active),
       // Soonest wake first: "what comes back next" is the shelf's question.
-      snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
-      ),
+      snoozedThreads: sortSnoozedThreadsForSidebar(snoozed),
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };

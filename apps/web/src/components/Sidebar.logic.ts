@@ -502,6 +502,22 @@ export function firstValidTimestamp(
   return null;
 }
 
+// Snoozed shelf: soonest wake first — "what comes back next" is the shelf's
+// question. Decorate-sort for the same reason as the other two buckets:
+// firstValidTimestampMs parses, so resolving it inside the comparator cost a
+// parse pair per comparison. No id tiebreak here, and `sort` is stable, so
+// rows with equal wake times keep their input order exactly as before.
+export function sortSnoozedThreadsForSidebar<
+  T extends { readonly snoozedUntil?: string | null | undefined },
+>(threads: readonly T[]): T[] {
+  const decorated = threads.map((thread) => ({
+    thread,
+    wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null),
+  }));
+  decorated.sort((left, right) => left.wakeAtMs - right.wakeAtMs);
+  return decorated.map((entry) => entry.thread);
+}
+
 // Sidebar sort: static creation order, newest thread on top. Activity NEVER
 // reorders the list — a row holds its position from open until settled, so
 // the screen only moves at lifecycle transitions. Status (including pending
@@ -509,11 +525,18 @@ export function firstValidTimestamp(
 export function sortThreadsForSidebar<
   T extends { readonly id: string; readonly createdAt: string },
 >(threads: readonly T[]): T[] {
-  return [...threads].toSorted(
+  // Decorate-sort: one parse per row instead of two per comparison. The
+  // comparator and its id tiebreak are unchanged, and both `sort` and the
+  // `toSorted` it replaces are stable, so equal rows keep their input order.
+  const decorated = threads.map((thread) => ({
+    thread,
+    createdAtMs: parseTimestampMs(thread.createdAt),
+  }));
+  decorated.sort(
     (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
+      right.createdAtMs - left.createdAtMs || left.thread.id.localeCompare(right.thread.id),
   );
+  return decorated.map((entry) => entry.thread);
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
@@ -575,13 +598,21 @@ export function resolveSettledTimestamp(thread: SettledTimestampInput): string |
 export function sortSettledThreadsForSidebar<
   T extends SettledTimestampInput & { readonly id: string },
 >(threads: readonly T[]): T[] {
-  const timestampMs = (thread: T) => {
+  // Decorate-sort: resolveSettledTimestamp walks four candidates and parses
+  // each, so calling it from inside the comparator paid that walk O(n log n)
+  // times. Same comparator, same id tiebreak, same stable ordering of ties.
+  const decorated = threads.map((thread) => {
     const timestamp = resolveSettledTimestamp(thread);
-    return timestamp === null ? 0 : Date.parse(timestamp);
-  };
-  return [...threads].toSorted(
-    (left, right) => timestampMs(right) - timestampMs(left) || left.id.localeCompare(right.id),
+    // parseTimestampMs, not a hand-rolled Date.parse: the active bucket sinks a
+    // malformed stamp to the epoch through that helper, and the two buckets
+    // have to keep agreeing about it.
+    return { thread, settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp) };
+  });
+  decorated.sort(
+    (left, right) =>
+      right.settledAtMs - left.settledAtMs || left.thread.id.localeCompare(right.thread.id),
   );
+  return decorated.map((entry) => entry.thread);
 }
 
 /** The timestamp a working thread's elapsed label counts from: the running

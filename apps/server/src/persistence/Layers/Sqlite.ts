@@ -35,6 +35,9 @@ const setup = Layer.effectDiscard(
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    // T3 Turbo: the standard WAL companion. An app crash still loses nothing; only a power loss
+    // or hard reset can drop the most recent commits.
+    yield* sql`PRAGMA synchronous = NORMAL;`;
     yield* runMigrations();
   }),
 );

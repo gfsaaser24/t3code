@@ -1,14 +1,20 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type * as SchemaError from "effect/SchemaError";
+import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
+// Turbo: pure both-directions trim. `SchemaTransformation.trim()` is NOT a drop-in
+// replacement — it trims on decode only, so values built without decoding would newly
+// ship untrimmed. The pure `transform` skips the per-value Effect allocation that
+// `transformOrFail` requires while trimming in both directions exactly as before.
 export const TrimmedString = Schema.String.pipe(
   Schema.decodeTo(
     Schema.String,
-    SchemaTransformation.transformOrFail({
-      decode: (value) => Effect.succeed(value.trim()),
-      encode: (value) => Effect.succeed(value.trim()),
+    SchemaTransformation.transform<string, string>({
+      decode: (value) => value.trim(),
+      encode: (value) => value.trim(),
     }),
   ),
 );
@@ -30,16 +36,73 @@ export type IsoDateTime = typeof IsoDateTime.Type;
  * couldn't act on anyway. Encoding is the plain array encoding.
  */
 export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Element) => {
-  const decodeElement = Schema.decodeUnknownOption(element as never);
+  // Turbo: decode each element exactly once. The previous shape decoded every element
+  // twice — once to test decodability in the filter, once again in the target
+  // `Schema.Array(element)`. Keeping the decoded value and targeting the type-side
+  // schema drops the second pass; element encoding stays explicit so the wire bytes
+  // produced on the encode path are unchanged.
+  //
+  // Three things the annotations below assert, all of them pre-existing parity with
+  // the shape this replaced rather than new narrowings:
+  //  - R = never: element schemas handed to this combinator must stay service-free.
+  //    The `as never` argument cast is what erases the requirement channel, and it is
+  //    the only cast here that is genuinely forced.
+  //  - `Schema.decodeUnknownOption` returns `None` for a *failed* decode but THROWS
+  //    for a defect or an async cause. "Drop on failure" is therefore not
+  //    unconditional — a broken element schema still surfaces, it does not vanish.
+  //  - Element decode runs with the default `ParseOptions` by construction: this
+  //    transformation does not thread a caller's options (e.g. `onExcessProperty`)
+  //    into the per-element decode. No in-repo caller passes options on these
+  //    payloads.
+  const decodeElement: (value: unknown) => Option.Option<Element["Type"]> =
+    Schema.decodeUnknownOption(element as never);
+  const encodeElement: (
+    value: Element["Type"],
+  ) => Effect.Effect<Element["Encoded"], SchemaError.SchemaError> = Schema.encodeUnknownEffect(
+    element as never,
+  );
   return Schema.Array(Schema.Unknown).pipe(
     Schema.decodeTo(
-      Schema.Array(element),
-      SchemaTransformation.transform<ReadonlyArray<Element["Encoded"]>, ReadonlyArray<unknown>>({
-        decode: (values) =>
-          values.filter((value) => Option.isSome(decodeElement(value))) as ReadonlyArray<
-            Element["Encoded"]
-          >,
-        encode: (values) => values,
+      Schema.toType(Schema.Array(element)),
+      SchemaTransformation.transformOrFail<ReadonlyArray<Element["Type"]>, ReadonlyArray<unknown>>({
+        decode: (values) => {
+          const decoded: Array<Element["Type"]> = [];
+          let dropped = 0;
+          for (const value of values) {
+            const candidate = decodeElement(value);
+            if (Option.isSome(candidate)) {
+              decoded.push(candidate.value);
+            } else {
+              dropped += 1;
+            }
+          }
+          if (dropped === 0) return Effect.succeed(decoded);
+          // Debug-level breadcrumb: a silent drop here looks like "the list is
+          // mysteriously empty" from the outside. Counts only — element payloads
+          // are not logged.
+          return Effect.as(
+            Effect.logDebug("ForwardCompatibleArray dropped undecodable elements", {
+              dropped,
+              total: values.length,
+            }),
+            decoded,
+          );
+        },
+        // Encode is fail-fast on the first bad element, like the `Schema.Array`
+        // target it replaced (this does NOT aggregate under `errors: "all"` — a
+        // deliberate narrowing, since the caller only ever sees the first issue
+        // anyway). The index has to be re-attached by hand: without the pointer
+        // a bad rule in a 40-entry keybindings config ships a bare element issue
+        // and is unlocatable from logs. `Effect.forEach` also passes the array
+        // index as the SECOND argument, which is `ParseOptions` on the real
+        // function — the explicit lambda keeps it out of that slot.
+        encode: (values) =>
+          Effect.forEach(values, (value, index) =>
+            Effect.mapError(
+              encodeElement(value),
+              (error) => new SchemaIssue.Pointer([index], error.issue),
+            ),
+          ),
       }),
     ),
   );

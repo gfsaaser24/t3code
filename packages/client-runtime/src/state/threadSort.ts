@@ -214,6 +214,60 @@ export function planPinnedReorder(input: {
   });
 }
 
+const DAYS_PER_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31] as const;
+
+/** Parses `[start, end)` as a zero-padded decimal; -1 when any code unit in
+    the span is not a digit. Allocation-free, no regex — this runs per
+    comparison and mobile is on Hermes. */
+function decimalAt(value: string, start: number, end: number): number {
+  let total = 0;
+  for (let index = start; index < end; index += 1) {
+    const digit = value.charCodeAt(index) - 48;
+    if (digit < 0 || digit > 9) return -1;
+    total = total * 10 + digit;
+  }
+  return total;
+}
+
+/**
+ * True only for `YYYY-MM-DDTHH:mm:ss.sssZ` naming a real UTC instant — the
+ * exact and only shape the product mints (`DateTime.formatIso`, i.e.
+ * `toISOString`). For two strings of that shape, every field is zero-padded at
+ * a fixed index, so code-unit order IS chronological order and the comparator
+ * can skip `Date.parse`.
+ *
+ * Accepting must imply `Date.parse` equivalence; rejecting is always safe
+ * because the caller then runs the original parse comparator. Hence the range
+ * checks — `2026-13-45T…` and `2026-02-30T…` are shaped right but parse to
+ * NaN, and those have to keep sinking to the epoch.
+ */
+function isCanonicalIsoTimestamp(value: string): boolean {
+  if (value.length !== 24) return false;
+  if (
+    value.charCodeAt(4) !== 45 /* - */ ||
+    value.charCodeAt(7) !== 45 /* - */ ||
+    value.charCodeAt(10) !== 84 /* T */ ||
+    value.charCodeAt(13) !== 58 /* : */ ||
+    value.charCodeAt(16) !== 58 /* : */ ||
+    value.charCodeAt(19) !== 46 /* . */ ||
+    value.charCodeAt(23) !== 90 /* Z */
+  ) {
+    return false;
+  }
+  const year = decimalAt(value, 0, 4);
+  const month = decimalAt(value, 5, 7);
+  const day = decimalAt(value, 8, 10);
+  const hour = decimalAt(value, 11, 13);
+  const minute = decimalAt(value, 14, 16);
+  const second = decimalAt(value, 17, 19);
+  const millisecond = decimalAt(value, 20, 23);
+  if (year < 0 || month < 1 || month > 12 || day < 1) return false;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return false;
+  if (millisecond < 0) return false;
+  const isLeapFebruary = month === 2 && ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0);
+  return day <= (isLeapFebruary ? 29 : DAYS_PER_MONTH[month - 1]!);
+}
+
 /**
  * Pinned block order: user-arranged keys first (string comparison, id
  * tiebreak), then keyless threads newest-created first — so threads on
@@ -244,9 +298,28 @@ export function sortPinnedThreadsByOrderKey<
     const rightKey = right.pinOrderKey!;
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : identityTiebreak(left, right);
   });
+  // createdAt is minted fixed width (`DateTime.formatIso`), so newest-first is
+  // a plain string comparison — the same shape as the keyed sort above, and no
+  // Date.parse pair per comparison on a list that re-sorts as threads stream.
+  // Anything that is NOT a canonical stamp (offset forms, second-precision
+  // forms, "unknown") falls back to the parse-with-epoch-sink comparator this
+  // replaced, byte for byte: `IsoDateTime` is `Schema.String`, so nothing at
+  // the boundary stops a server from sending one, and a letter-leading string
+  // must keep sinking to the bottom rather than float to the top as "newest".
+  // The two branches are one comparator: for canonical operands code-unit
+  // order IS parse order, so the mixed case stays transitive.
   keyless.sort((left, right) => {
-    const leftMs = Date.parse(left.createdAt);
-    const rightMs = Date.parse(right.createdAt);
+    const leftCreatedAt = left.createdAt;
+    const rightCreatedAt = right.createdAt;
+    if (isCanonicalIsoTimestamp(leftCreatedAt) && isCanonicalIsoTimestamp(rightCreatedAt)) {
+      return leftCreatedAt > rightCreatedAt
+        ? -1
+        : leftCreatedAt < rightCreatedAt
+          ? 1
+          : identityTiebreak(left, right);
+    }
+    const leftMs = Date.parse(leftCreatedAt);
+    const rightMs = Date.parse(rightCreatedAt);
     return (
       (Number.isNaN(rightMs) ? 0 : rightMs) - (Number.isNaN(leftMs) ? 0 : leftMs) ||
       identityTiebreak(left, right)

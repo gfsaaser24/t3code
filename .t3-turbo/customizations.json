@@ -525,6 +525,165 @@
       ]
     },
     {
+      "id": "sqlite-fast-mode-pragma",
+      "status": "implemented",
+      "summary": "The single sqlite setup layer applies the standard WAL companion PRAGMA synchronous = NORMAL to every connection, leaving foreign_keys and journal_mode untouched.",
+      "checks": [
+        {
+          "path": "apps/server/src/persistence/Layers/Sqlite.ts",
+          "markers": [
+            "PRAGMA foreign_keys = ON;",
+            "PRAGMA journal_mode = WAL;",
+            "PRAGMA synchronous = NORMAL;"
+          ]
+        },
+        {
+          "path": "apps/server/src/persistence/Layers/SqlitePragmas.test.ts",
+          "markers": [
+            "in-memory persistence enables synchronous=NORMAL and keeps foreign_keys on",
+            "file-backed persistence keeps WAL and applies synchronous=NORMAL"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/server/src/persistence/Layers/Sqlite.ts`"]
+        }
+      ]
+    },
+    {
+      "id": "cheap-timestamp-and-sort-keys",
+      "status": "implemented",
+      "summary": "Product timestamps compare as plain fixed-width ISO strings instead of through the ICU collator, and the sidebar bucket sorts plus the keyless pinned block resolve each row's sort key once instead of per comparison.",
+      "checks": [
+        {
+          "path": "apps/web/src/session-logic.ts",
+          "markers": [
+            "export function compareIsoTimestamps",
+            "compareIsoTimestamps(left.createdAt, right.createdAt)",
+            "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
+            "compareIsoTimestamps(a.createdAt, b.createdAt)",
+            "compareIsoTimestamps(a.completedAt, b.completedAt)"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.logic.ts",
+          "markers": [
+            "createdAtMs: parseTimestampMs(thread.createdAt)",
+            "right.createdAtMs - left.createdAtMs",
+            "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
+            "right.settledAtMs - left.settledAtMs",
+            "export function sortSnoozedThreadsForSidebar",
+            "wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null)"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["snoozedThreads: sortSnoozedThreadsForSidebar(snoozed)"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSort.ts",
+          "markers": [
+            "const leftCreatedAt = left.createdAt;",
+            "leftCreatedAt > rightCreatedAt",
+            "function isCanonicalIsoTimestamp(value: string): boolean",
+            "isCanonicalIsoTimestamp(leftCreatedAt) && isCanonicalIsoTimestamp(rightCreatedAt)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts",
+          "markers": [
+            "legacySortPinnedThreadsByOrderKey",
+            "emits the pre-swap order for product-minted timestamps, ties included",
+            "emits the pre-swap order for non-canonical and malformed stamps too"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/sortOrderEquivalence.test.ts",
+          "markers": [
+            "orders every pair of product-minted timestamps exactly as localeCompare did",
+            "emits the pre-decorate order, ties included",
+            "sortSnoozedThreadsForSidebar (snoozed shelf)"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `apps/web/src/session-logic.ts`",
+            "**Tuned** `apps/web/src/components/Sidebar.logic.ts`",
+            "**Tuned** `packages/client-runtime/src/state/threadSort.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cheap-message-unpacking",
+      "status": "implemented",
+      "summary": "TrimmedString trims through the pure both-directions transform instead of allocating an Effect per value, and ForwardCompatibleArray decodes each element once instead of twice while keeping per-element drop-on-failure and a debug log.",
+      "checks": [
+        {
+          "path": "packages/contracts/src/baseSchemas.ts",
+          "markers": [
+            "SchemaTransformation.transform<string, string>({",
+            "decode: (value) => value.trim(),",
+            "encode: (value) => value.trim(),",
+            "Schema.toType(Schema.Array(element))",
+            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
+            "new SchemaIssue.Pointer([index], error.issue)"
+          ]
+        },
+        {
+          "path": "packages/contracts/src/turbo/baseSchemas.test.ts",
+          "markers": [
+            "trims on the encode-without-decode path too",
+            "drops elements this build cannot decode and keeps the rest",
+            "names the failing element's index when encoding fails",
+            "decodes each element exactly once"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/contracts/src/baseSchemas.ts`"]
+        }
+      ]
+    },
+    {
+      "id": "relay-request-budget-and-clerk-client",
+      "status": "implemented",
+      "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",
+      "checks": [
+        {
+          "path": "infra/relay/src/http/Api.ts",
+          "markers": [
+            "const clerkOAuthClients = new WeakMap<",
+            "function clerkOAuthClient(config: RelayConfiguration.RelayConfiguration[\"Service\"])",
+            "const client = clerkOAuthClient(config);",
+            "export const RELAY_REQUEST_DEADLINE_MS = 9_000;"
+          ]
+        },
+        {
+          "path": "infra/relay/src/environments/EnvironmentConnector.ts",
+          "markers": ["export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;"]
+        },
+        {
+          "path": "infra/relay/src/turbo/relayRequestBudget.test.ts",
+          "markers": ["expires the environment mint inside the relay request deadline"]
+        },
+        {
+          "path": "infra/relay/src/http/Api.test.ts",
+          "markers": ["module-level WeakMap keyed on this very object"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `infra/relay/src/http/Api.ts`",
+            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`",
+            "**Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts`",
+            "**Tuned** `infra/relay/src/http/Api.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-policy",
       "status": "policy",
       "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",

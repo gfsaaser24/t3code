@@ -126,7 +126,11 @@ export type EnvironmentConnectorError =
   | EnvironmentLinks.EnvironmentLinkLookupPersistenceError
   | ManagedEndpointAllocations.ManagedEndpointAllocationPersistenceError;
 
-export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 10_000;
+// Has to fire inside the relay's 9s request deadline (RELAY_REQUEST_DEADLINE_MS
+// in http/Api.ts): a 10s budget could never be reached, so a stuck environment
+// surfaced as a generic 504 instead of a mint timeout. 7s leaves the environment
+// the most room still available under that deadline.
+export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;
 const ENVIRONMENT_HEALTH_CLOCK_SKEW_MILLIS = 60 * 1_000;
 
 export class EnvironmentConnector extends Context.Service<
