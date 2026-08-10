@@ -116,6 +116,31 @@ describe("Grok ACP capability discovery", () => {
     });
   });
 
+  it("reports the live reasoning effort when it differs from the declared default", () => {
+    const capabilities = buildGrokCapabilitiesFromModelInfo({
+      modelId: "grok-4.5",
+      name: "Grok 4.5",
+      _meta: {
+        supportsReasoningEffort: true,
+        reasoningEffort: "medium",
+        reasoningEfforts: [
+          { id: "high", value: "high", label: "High Effort", default: true },
+          { id: "medium", value: "medium", label: "Medium Effort", default: false },
+        ],
+      },
+    });
+
+    expect(capabilities.optionDescriptors?.[0]).toMatchObject({
+      id: "reasoning",
+      type: "select",
+      currentValue: "medium",
+      options: [
+        { id: "high", label: "High Effort" },
+        { id: "medium", label: "Medium Effort", isDefault: true },
+      ],
+    });
+  });
+
   it("keeps custom models empty and hides Plan until the pair is negotiated", () => {
     const capabilities = buildGrokCapabilitiesFromConfigOptions([]);
     const models = buildGrokDiscoveredModelsFromSessionModelState(

@@ -153,10 +153,17 @@ export function buildGrokCapabilitiesFromModelInfo(
       buildSelectOptionDescriptor({
         id: "reasoning",
         label: "Reasoning",
+        // The descriptor's currentValue is derived from the isDefault flag, so
+        // when the model reports a live effort it must win over the declared
+        // default; otherwise a user-lowered effort would render as the default.
         options: reasoning.options.map((option) => ({
           value: option.value,
           label: option.label,
-          ...(option.isDefault || option.value === reasoning.currentValue
+          ...((
+            reasoning.currentValue !== undefined
+              ? option.value === reasoning.currentValue
+              : option.isDefault === true
+          )
             ? { isDefault: true }
             : {}),
         })),

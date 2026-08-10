@@ -385,6 +385,49 @@ describe("AcpRuntimeModel", () => {
     });
   });
 
+  it("keeps recognized config options when an update mixes in unknown option types", () => {
+    const mixedPayload = {
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [
+          {
+            id: "reasoning",
+            name: "Reasoning",
+            type: "select",
+            currentValue: "medium",
+            options: [
+              { value: "low", name: "Low" },
+              { value: "medium", name: "Medium" },
+            ],
+          },
+          { id: "max-turns", name: "Max turns", type: "number", currentValue: 5 },
+        ],
+      },
+    } as unknown as EffectAcpSchema.SessionNotification;
+
+    expect(parseSessionUpdateEvent(mixedPayload)).toEqual({
+      events: [
+        {
+          _tag: "ConfigOptionsChanged",
+          configOptions: [
+            {
+              id: "reasoning",
+              name: "Reasoning",
+              type: "select",
+              currentValue: "medium",
+              options: [
+                { value: "low", name: "Low" },
+                { value: "medium", name: "Medium" },
+              ],
+            },
+          ],
+          rawPayload: mixedPayload,
+        },
+      ],
+    });
+  });
+
   it("ignores malformed or unknown config and usage updates", () => {
     const malformedConfig = {
       sessionId: "session-1",

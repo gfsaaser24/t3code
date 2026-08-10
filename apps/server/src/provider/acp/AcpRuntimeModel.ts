@@ -582,10 +582,18 @@ function isSessionConfigOption(value: unknown): value is EffectAcpSchema.Session
 function parseSessionConfigOptions(
   value: unknown,
 ): ReadonlyArray<EffectAcpSchema.SessionConfigOption> | undefined {
-  if (!Array.isArray(value) || !value.every(isSessionConfigOption)) {
+  if (!Array.isArray(value)) {
     return undefined;
   }
-  return value;
+  // Keep recognized entries even when the agent mixes in option types this
+  // build does not understand; rejecting the whole update would leave cached
+  // config state permanently stale after one unknown option appears. A payload
+  // with no recognized entries is still dropped so it cannot wipe the cache.
+  const recognized = value.filter(isSessionConfigOption);
+  if (recognized.length === 0 && value.length > 0) {
+    return undefined;
+  }
+  return recognized;
 }
 
 function parseNonNegativeInteger(value: unknown): number | undefined {

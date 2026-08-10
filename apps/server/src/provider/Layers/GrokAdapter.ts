@@ -1042,17 +1042,23 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                       ? appliedReasoningOption.currentValue.trim() || nativeReasoningValue
                       : nativeReasoningValue;
                   ctx.currentReasoningEffort = effort;
+                } else if (modelReasoning === undefined) {
+                  // The session advertises no reasoning surface at all: the
+                  // requested value is a stale persisted selection from a CLI
+                  // build that did advertise one. Ignore it instead of
+                  // blocking every prompt on this thread.
+                  effort = undefined;
+                  ctx.currentReasoningEffort = undefined;
                 } else {
                   const nativeReasoningValue = resolveGrokAcpModelReasoningValue(
                     ctx.availableModels.find((model) => model.modelId === currentModelId),
                     requestedReasoning,
                   );
-                  if (!nativeReasoningValue || !currentModelId || !modelReasoning) {
+                  if (!nativeReasoningValue || !currentModelId) {
                     return yield* new ProviderAdapterRequestError({
                       provider: PROVIDER,
                       method: "session/set_model",
-                      detail:
-                        "Grok advertised reasoning values but did not expose its verified live effort setter.",
+                      detail: `Grok did not advertise reasoning value '${requestedReasoning}' for the current model.`,
                     });
                   }
                   yield* ctx.acp
