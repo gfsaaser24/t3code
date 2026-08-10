@@ -385,9 +385,8 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           session: makeSession("running"),
           createdAt: NOW,
         },
-        // A keep-active pin is also an override: real activity clears it
-        // back to neutral so auto-settle can apply again later.
-        readModel: makeReadModel("active"),
+        // A settled override must never hide a session coming alive.
+        readModel: makeReadModel("settled"),
       });
       const sessionEvents = Array.isArray(sessionResult) ? sessionResult : [sessionResult];
       expect(sessionEvents.map((event) => event.type)).toEqual([
@@ -397,8 +396,13 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
     }),
   );
 
-  it.effect("clears a keep-active pin on real activity", () =>
+  it.effect("keeps a keep-active pin through real activity", () =>
     Effect.gen(function* () {
+      // The pin is the user's "this thread is NOT done" statement. Activity
+      // must not spend it: clearing it on a message/session start let the
+      // merged-PR auto-settle rule re-settle the thread the moment the same
+      // burst of work went quiet, defeating every un-settle. Only an
+      // explicit settle clears the pin.
       const turnResult = yield* decideOrchestrationCommand({
         command: {
           type: "thread.turn.start",
@@ -417,13 +421,23 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         readModel: makeReadModel("active"),
       });
       const turnEvents = Array.isArray(turnResult) ? turnResult : [turnResult];
-      // The pin exists to suppress AUTO-settle, not to survive real work:
-      // activity resets it to neutral, restoring the default lifecycle.
       expect(turnEvents.map((event) => event.type)).toEqual([
-        "thread.unsettled",
         "thread.message-sent",
         "thread.turn-start-requested",
       ]);
+
+      const sessionResult = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-active-session-set"),
+          threadId: ThreadId.make("thread-1"),
+          session: makeSession("running"),
+          createdAt: NOW,
+        },
+        readModel: makeReadModel("active"),
+      });
+      const sessionEvents = Array.isArray(sessionResult) ? sessionResult : [sessionResult];
+      expect(sessionEvents.map((event) => event.type)).toEqual(["thread.session-set"]);
 
       const activityResult = yield* decideOrchestrationCommand({
         command: {
@@ -444,10 +458,7 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         readModel: makeReadModel("active"),
       });
       const activityEvents = Array.isArray(activityResult) ? activityResult : [activityResult];
-      expect(activityEvents.map((event) => event.type)).toEqual([
-        "thread.unsettled",
-        "thread.activity-appended",
-      ]);
+      expect(activityEvents.map((event) => event.type)).toEqual(["thread.activity-appended"]);
     }),
   );
 

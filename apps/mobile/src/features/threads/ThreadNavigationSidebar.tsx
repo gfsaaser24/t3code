@@ -409,17 +409,23 @@ function ThreadNavigationSidebarPane(
   // PR states stream in per-row; merged/closed PRs auto-settle their thread
   // on the next partition.
   const [changeRequestStateByKey, setChangeRequestStateByKey] = useState<
-    ReadonlyMap<string, "open" | "closed" | "merged">
+    ReadonlyMap<
+      string,
+      { readonly state: "open" | "closed" | "merged"; readonly updatedAt: string | null }
+    >
   >(() => new Map());
   const handleChangeRequestState = useCallback(
-    (threadKey: string, state: "open" | "closed" | "merged" | null) => {
+    (threadKey: string, state: "open" | "closed" | "merged" | null, updatedAt: string | null) => {
       setChangeRequestStateByKey((current) => {
-        if ((current.get(threadKey) ?? null) === state) return current;
+        const existing = current.get(threadKey) ?? null;
+        if ((existing?.state ?? null) === state && (existing?.updatedAt ?? null) === updatedAt) {
+          return current;
+        }
         const next = new Map(current);
         if (state === null) {
           next.delete(threadKey);
         } else {
-          next.set(threadKey, state);
+          next.set(threadKey, { state, updatedAt });
         }
         return next;
       });
