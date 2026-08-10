@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { GrokSettings } from "@t3tools/contracts";
+import { isHostWindows } from "@t3tools/shared/hostProcess";
 
 import {
   buildGrokCapabilitiesFromConfigOptions,
@@ -17,10 +18,14 @@ import {
 
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
 
-const fakeGrokExecutableName = process.platform === "win32" ? "grok.cmd" : "grok";
+// These helpers write real executables the spawner runs, so tests read the
+// actual host platform through the HostProcessPlatform reference default.
+function fakeGrokExecutableName(isWindows: boolean): string {
+  return isWindows ? "grok.cmd" : "grok";
+}
 
-function makeFakeGrokScript(lines: ReadonlyArray<string>): string {
-  if (process.platform === "win32") {
+function makeFakeGrokScript(isWindows: boolean, lines: ReadonlyArray<string>): string {
+  if (isWindows) {
     return ["@echo off", ...lines.map((line) => line), ""].join("\r\n");
   }
   return ["#!/bin/sh", ...lines, ""].join("\n");
@@ -230,12 +235,14 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
+          const isWindows = yield* isHostWindows;
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-version-" });
-          const grokPath = path.join(dir, fakeGrokExecutableName);
+          const grokPath = path.join(dir, fakeGrokExecutableName(isWindows));
           yield* fs.writeFileString(
             grokPath,
             makeFakeGrokScript(
-              process.platform === "win32"
+              isWindows,
+              isWindows
                 ? [`echo ${secretStderr} 1>&2`, "exit /b 2"]
                 : [`printf "%s\\n" "${secretStderr}" >&2`, "exit 2"],
             ),
@@ -262,12 +269,14 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
+          const isWindows = yield* isHostWindows;
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-success-" });
-          const grokPath = path.join(dir, fakeGrokExecutableName);
+          const grokPath = path.join(dir, fakeGrokExecutableName(isWindows));
           yield* fs.writeFileString(
             grokPath,
             makeFakeGrokScript(
-              process.platform === "win32"
+              isWindows,
+              isWindows
                 ? ["echo grok-cli 0.0.99", "exit /b 0"]
                 : ['printf "grok-cli 0.0.99\\n"', "exit 0"],
             ),
