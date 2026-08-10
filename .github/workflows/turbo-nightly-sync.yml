@@ -5,6 +5,11 @@ on:
     - cron: "0 23 * * *"
       timezone: "America/New_York"
   workflow_dispatch:
+    inputs:
+      cutoff_instant:
+        description: "Optional ISO-8601 instant to use as the ingestion cutoff instead of the last completed 11 PM Eastern boundary."
+        required: false
+        type: string
 
 concurrency:
   group: turbo-nightly-sync
@@ -87,6 +92,8 @@ jobs:
 
       - id: cutoff
         name: Resolve the completed Eastern cutoff
+        env:
+          TURBO_CUTOFF_INSTANT: ${{ inputs.cutoff_instant }}
         shell: bash
         run: node scripts/turbo-nightly-sync.ts cutoff --github-output
 
