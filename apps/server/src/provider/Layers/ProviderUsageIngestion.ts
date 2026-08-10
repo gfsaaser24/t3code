@@ -1,0 +1,77 @@
+/**
+ * ProviderUsageIngestionLive — the free usage feed.
+ *
+ * Both the Claude and Codex adapters already emit
+ * `account.rate-limits.updated` whenever the upstream harness volunteers a
+ * fresh quota reading, which in practice is at the end of every turn. Until
+ * now nothing consumed those events. This layer routes them into
+ * `ProviderUsageLimitsStore`, which costs zero additional network calls and
+ * keeps the meters current for anyone actively working.
+ *
+ * @module ProviderUsageIngestionLive
+ */
+import { ProviderDriverKind, type ProviderRuntimeEvent } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Stream from "effect/Stream";
+
+import { ProviderService } from "../Services/ProviderService.ts";
+import { ProviderUsageLimitsStore } from "../Services/ProviderUsageLimits.ts";
+import { normalizeClaudeRateLimitEvent, normalizeCodexUsage } from "../usageLimits.ts";
+
+// Driver kind slugs, not display names: Claude's driver is `claudeAgent`.
+const CLAUDE_AGENT = ProviderDriverKind.make("claudeAgent");
+const CODEX = ProviderDriverKind.make("codex");
+
+/**
+ * Which normalizer applies is a function of the driver that produced the
+ * event, not of the payload's shape — the two vocabularies overlap enough
+ * that sniffing would be guesswork. Drivers with no usage reporting yield
+ * `null` and the event is dropped, same as before this layer existed.
+ *
+ * Both feeds are `partial`. Claude's SDK event describes exactly one bucket,
+ * and Codex documents `account/rateLimits/updated` as a sparse rolling
+ * update that clients must merge. Treating either as a full reading would
+ * blank whichever meters the event happened not to mention.
+ */
+export const normalizeRuntimeUsageEvent = (
+  event: Extract<ProviderRuntimeEvent, { type: "account.rate-limits.updated" }>,
+  updatedAt: string,
+) => {
+  if (event.provider === CLAUDE_AGENT) {
+    return normalizeClaudeRateLimitEvent(event.payload.rateLimits, updatedAt);
+  }
+  if (event.provider === CODEX) {
+    return normalizeCodexUsage(event.payload.rateLimits, updatedAt);
+  }
+  return null;
+};
+
+export const ProviderUsageIngestionLive = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const providerService = yield* ProviderService;
+    const usageStore = yield* ProviderUsageLimitsStore;
+
+    yield* Stream.runForEach(providerService.streamEvents, (event) =>
+      Effect.gen(function* () {
+        if (event.type !== "account.rate-limits.updated") {
+          return;
+        }
+        // Pre-instance-migration emitters may omit the routing key. Usage is
+        // account-level state hung off one configured instance, so without
+        // an instance id there is nowhere correct to put it.
+        const instanceId = event.providerInstanceId;
+        if (instanceId === undefined) {
+          return;
+        }
+        const updatedAt = DateTime.formatIso(yield* DateTime.now);
+        const usage = normalizeRuntimeUsageEvent(event, updatedAt);
+        if (usage === null) {
+          return;
+        }
+        yield* usageStore.set(instanceId, usage, "partial");
+      }),
+    ).pipe(Effect.forkScoped);
+  }),
+);

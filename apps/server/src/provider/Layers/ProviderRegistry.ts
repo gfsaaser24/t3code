@@ -43,6 +43,8 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
+import { ProviderUsageLimitsStore } from "../Services/ProviderUsageLimits.ts";
+
 import {
   hydrateCachedProvider,
   isCachedProviderCorrelated,
@@ -210,6 +212,7 @@ export const ProviderRegistryLive = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
     const instanceRegistry = yield* ProviderInstanceRegistry;
+    const usageStore = yield* ProviderUsageLimitsStore;
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -321,7 +324,12 @@ export const ProviderRegistryLive = Layer.effect(
           cacheDir: config.providerStatusCacheDir,
           instanceId: key,
         }).pipe(Effect.provideService(Path.Path, path));
-        yield* writeProviderStatusCache({ filePath, provider }).pipe(
+        // Usage readings are deliberately not cached. They go stale in
+        // minutes, and rehydrating a days-old reading on boot would draw
+        // confident-looking meters that are simply wrong; the first probe
+        // or turn repopulates them within seconds.
+        const { usageLimits: _usageLimits, ...providerToPersist } = provider;
+        yield* writeProviderStatusCache({ filePath, provider: providerToPersist }).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
           Effect.tapError(Effect.logError),
@@ -344,6 +352,38 @@ export const ProviderRegistryLive = Layer.effect(
       };
     });
 
+    /**
+     * Project account usage onto a snapshot.
+     *
+     * The store is the single source of truth, because only it can fold the
+     * sparse per-bucket readings that arrive on turn events into a complete
+     * picture. A driver probe that read usage on a connection it already had
+     * open (Codex does this) carries a full reading on its snapshot; seed
+     * that into the store rather than reading it directly, so a later sparse
+     * event merges onto it instead of replacing it.
+     *
+     * Seeding is idempotent: the value written back onto the snapshot is the
+     * store's own, so re-decorating an unchanged snapshot is a no-op and
+     * cannot loop.
+     */
+    const applyProviderUsageLimits = Effect.fn("applyProviderUsageLimits")(function* (
+      provider: ServerProvider,
+    ) {
+      if (provider.usageLimits !== undefined) {
+        yield* usageStore.set(provider.instanceId, provider.usageLimits, "full");
+      }
+      const usageLimits = yield* usageStore.get(provider.instanceId);
+      if (!usageLimits) {
+        const { usageLimits: _usageLimits, ...providerWithoutUsage } = provider;
+        return providerWithoutUsage;
+      }
+      return { ...provider, usageLimits };
+    });
+
+    const decorateProvider = Effect.fn("decorateProvider")(function* (provider: ServerProvider) {
+      return yield* applyProviderUsageLimits(yield* applyProviderUpdateState(provider));
+    });
+
     const upsertProviders = Effect.fn("upsertProviders")(function* (
       nextProviders: ReadonlyArray<ServerProvider>,
       options?: {
@@ -352,13 +392,9 @@ export const ProviderRegistryLive = Layer.effect(
         readonly replace?: boolean;
       },
     ) {
-      const nextProvidersWithUpdateState = yield* Effect.forEach(
-        nextProviders,
-        applyProviderUpdateState,
-        {
-          concurrency: "unbounded",
-        },
-      );
+      const nextProvidersWithUpdateState = yield* Effect.forEach(nextProviders, decorateProvider, {
+        concurrency: "unbounded",
+      });
       const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
         providersRef,
         (previousProviders) => {
@@ -642,6 +678,34 @@ export const ProviderRegistryLive = Layer.effect(
         );
       }),
     );
+
+    // Usage readings arrive out of band (turn events, on-demand pulls) and
+    // must reach clients without waiting for the next status probe. Re-run
+    // the affected instance through `upsertProviders` so it picks up the
+    // fresh reading and publishes — without persisting, since a usage
+    // change is not a status change and every turn would otherwise cost a
+    // disk write.
+    //
+    // Subscribed and forked here, ahead of `syncLiveSources`, for two
+    // reasons. `Stream.fromPubSub` defers `PubSub.subscribe` to stream
+    // start, so the subscription is acquired eagerly (same reasoning as
+    // `instanceChanges` below). And forking after `syncLiveSources` would
+    // put this fiber behind the single `Effect.yieldNow` that its
+    // per-instance subscribers rely on to attach, delaying theirs by a
+    // tick and dropping the first snapshot published to them.
+    const usageChanges = yield* usageStore.subscribeChanges;
+    yield* Stream.runForEach(Stream.fromSubscription(usageChanges), (instanceId) =>
+      Ref.get(providersRef).pipe(
+        Effect.flatMap((providers) => {
+          const provider = providers.find(
+            (candidate) => snapshotInstanceKey(candidate) === instanceId,
+          );
+          return provider === undefined
+            ? Effect.void
+            : upsertProviders([provider], { persist: false });
+        }),
+      ),
+    ).pipe(Effect.forkScoped);
 
     // Seed `providersRef` with the boot-time fallback snapshots so
     // consumers calling `getProviders` immediately after layer build see

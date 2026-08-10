@@ -59,6 +59,30 @@ const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
   event.preventDefault();
 };
 
+/**
+ * Fixed slot for whichever primary action is current — send or stop.
+ *
+ * The box is identical in every state, which is the whole point: the
+ * activity orb used to stack above the stop button in a `flex-col`, so
+ * starting a turn dropped the button by the orb's height plus the gap and
+ * ending one snapped it back. Send and stop also disagreed on size below the
+ * `sm` breakpoint (36px vs 32px), which moved the meters beside them too.
+ *
+ * Three classes are load-bearing rather than decorative:
+ *   - `relative` anchors the orb's absolute positioning to this box;
+ *   - `isolate` contains the orb's `-z-10` so it sits behind the button but
+ *     still in front of the composer surface;
+ *   - no `overflow-hidden`, so an orb wider than the button can ring it
+ *     without being clipped or contributing layout.
+ */
+function PrimaryActionSlot({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative isolate flex h-9 w-9 shrink-0 items-center justify-center sm:h-8 sm:w-8">
+      {children}
+    </div>
+  );
+}
+
 export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
@@ -86,8 +110,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     <button
       type="button"
       className={cn(
-        "flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
-        insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
+        "relative flex cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-destructive hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none",
+        // Inside the fixed slot the button fills it, so send and stop are
+        // the same box and neither moves at a turn boundary. The pending
+        // row is its own layout and keeps its own smaller size.
+        insidePendingAction ? "size-8 sm:size-7" : "size-full",
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
@@ -157,10 +184,21 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   if (isRunning) {
     // Turbo: the activity orb rides above the (upstream-refactored) stop button.
     return (
-      <div className="flex flex-col items-center gap-2">
-        {activityOrb}
+      <PrimaryActionSlot>
+        {activityOrb ? (
+          // Decoration only: it must not eat clicks meant for the stop
+          // button, and it must not push it anywhere. `-z-10` (contained by
+          // the slot's `isolate`) puts it behind, so it reads as a halo
+          // around a crisp button rather than covering the stop icon.
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 -z-10 flex items-center justify-center"
+          >
+            {activityOrb}
+          </span>
+        ) : null}
         {renderStopGenerationButton(false)}
-      </div>
+      </PrimaryActionSlot>
     );
   }
 
@@ -222,47 +260,49 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   return (
-    <button
-      type="submit"
-      className={cn(
-        "relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8",
-        "bg-message-action enabled:shadow-message-action/24 hover:bg-message-action-hover",
-      )}
-      {...pointerFocusProps}
-      disabled={
-        isSendBusy ||
-        isSendDisabled ||
-        isConnecting ||
-        isEnvironmentUnavailable ||
-        !hasSendableContent
-      }
-      aria-label={
-        isEnvironmentUnavailable
-          ? "Environment disconnected"
-          : sendDisabledReason
-            ? sendDisabledReason
-            : isConnecting
-              ? "Connecting"
-              : isPreparingWorktree
-                ? "Preparing worktree"
-                : isSendBusy
-                  ? "Sending"
-                  : "Send message"
-      }
-    >
-      {isConnecting || isSendBusy ? (
-        <Spinner className="size-3.5" aria-hidden="true" />
-      ) : (
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-          <path
-            d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      )}
-    </button>
+    <PrimaryActionSlot>
+      <button
+        type="submit"
+        className={cn(
+          "relative isolate flex size-full items-center justify-center overflow-hidden rounded-full text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100",
+          "bg-message-action enabled:shadow-message-action/24 hover:bg-message-action-hover",
+        )}
+        {...pointerFocusProps}
+        disabled={
+          isSendBusy ||
+          isSendDisabled ||
+          isConnecting ||
+          isEnvironmentUnavailable ||
+          !hasSendableContent
+        }
+        aria-label={
+          isEnvironmentUnavailable
+            ? "Environment disconnected"
+            : sendDisabledReason
+              ? sendDisabledReason
+              : isConnecting
+                ? "Connecting"
+                : isPreparingWorktree
+                  ? "Preparing worktree"
+                  : isSendBusy
+                    ? "Sending"
+                    : "Send message"
+        }
+      >
+        {isConnecting || isSendBusy ? (
+          <Spinner className="size-3.5" aria-hidden="true" />
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <path
+              d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+      </button>
+    </PrimaryActionSlot>
   );
 });
