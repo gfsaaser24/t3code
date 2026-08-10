@@ -10,8 +10,8 @@ and directs the work.
 This is different from opening a port so your **local** machine is reachable. Here the remote host
 **is** the working machine.
 
-For pairing details and LAN/desktop options, see [Remote access](./remote-access.md). For the Linux
-systemd unit, see [Background service](./background-service.md).
+For pairing details and LAN/desktop options, see [Remote access](../docs/user/remote-access.md). For the Linux
+systemd unit, see [Background service](../docs/user/background-service.md).
 
 ## Mental model
 
@@ -31,7 +31,7 @@ machine that runs the server.
 - Linux with **systemd** (needed for the background service)
 - Node.js `^22.16 || ^23.11 || >=24.10` on `PATH` for non-interactive shells (`ssh user@host 'node -v'`)
 - Outbound HTTPS (T3 Connect installs and runs a managed tunnel client)
-- At least one [provider CLI](./install.md#providers), installed and authenticated **on the VPS**
+- At least one [provider CLI](../docs/user/install.md#providers), installed and authenticated **on the VPS**
 - Enough disk and RAM for the repos and agent work you plan to run
 
 Optional but useful: `git`, your usual language toolchains, and either Tailscale or a private
@@ -76,7 +76,7 @@ Example for Claude:
 claude auth login
 ```
 
-Repeat for each provider you use ([install guide](./install.md#providers)). Finish browser or
+Repeat for each provider you use ([install guide](../docs/user/install.md#providers)). Finish browser or
 device auth from a machine that can open the login page; the **credential must end up on the VPS**.
 
 ### 3. Put your code on the VPS
@@ -190,8 +190,8 @@ Use this when the VPS and your clients share a tailnet and you want a private HT
 4. Open the pairing URL from the desktop app, mobile app, or a client that can reach the tailnet.
    For the hosted web app, the backend URL must be **HTTPS** (Tailscale Serve provides that).
 
-Details: [Remote access → Headless server](./remote-access.md#option-2-headless-server-cli) and
-[Tailscale endpoints](./remote-access.md#tailscale-endpoints).
+Details: [Remote access → Headless server](../docs/user/remote-access.md#option-2-headless-server-cli) and
+[Tailscale endpoints](../docs/user/remote-access.md#tailscale-endpoints).
 
 ---
 
@@ -208,7 +208,7 @@ background service is already running on the host, desktop reuses that server ra
 it. For an always-on host you control from phone or browser, prefer Connect + the background
 service instead of depending on the desktop to keep the SSH tunnel open.
 
-Details and Node/`PATH` troubleshooting: [Remote access → SSH](./remote-access.md#option-3-desktop-managed-ssh).
+Details and Node/`PATH` troubleshooting: [Remote access → SSH](../docs/user/remote-access.md#option-3-desktop-managed-ssh).
 
 ---
 
@@ -232,7 +232,7 @@ prefer **Update server** in the UI, or on the VPS:
 npx t3@<client-version> service update
 ```
 
-Use the exact version from the warning when possible. See [Keeping T3 Code in sync](./updating.md).
+Use the exact version from the warning when possible. See [Keeping T3 Code in sync](../docs/user/updating.md).
 
 ### Pair another device without Connect
 
@@ -279,7 +279,7 @@ The VPS steps above are the same. What changes is **which** client and CLI build
   `t3 service …` and default data still lives under `~/.t3` unless you set `T3CODE_HOME`.
 
 Operators standing up the shared Connect infrastructure (relay, Clerk, database, hosted app)
-should follow [Host your own T3 Code](../operations/host-your-own.md). That guide is not for
+should follow [Host your own T3 Code](../docs/operations/host-your-own.md). That guide is not for
 installing an individual agent host. Each VPS or laptop that should appear as an environment still
 runs the headless steps in this document against that stack.
 
@@ -301,7 +301,8 @@ runs the headless steps in this document against that stack.
 
 ## Related docs
 
-- [Install](./install.md) — Node and provider CLIs
-- [Remote access](./remote-access.md) — pairing, Tailscale, SSH launch
-- [Background service](./background-service.md) — systemd install / update / uninstall
-- [Keeping T3 Code in sync](./updating.md) — version skew and remote updates
+- [Install](../docs/user/install.md) — Node and provider CLIs
+- [Remote access](../docs/user/remote-access.md) — pairing, Tailscale, SSH launch
+- [Background service](../docs/user/background-service.md) — systemd install / update / uninstall
+- [Keeping T3 Code in sync](../docs/user/updating.md) — version skew and remote updates
+- [Infra master runbook](./README.md) — control-plane bring-up for this fork

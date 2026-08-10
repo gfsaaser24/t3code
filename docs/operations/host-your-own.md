@@ -10,7 +10,7 @@ This guide is the **Connect control plane** (relay, Clerk, database, hosted app,
 It is not the guide for “make agents run on my VPS.” Each machine that should own projects and
 provider sessions is still a normal T3 environment: install Node and providers, run headless
 Connect + the background service, then pick that environment in the client. See
-[Headless VPS environment](../user/headless-vps.md).
+[Headless VPS environment](../../infra/headless-vps.md).
 
 ## What you are assembling
 

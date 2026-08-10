@@ -5,7 +5,7 @@ boots and keeps running after you log out.
 
 This is the usual way to keep a **headless VPS** online as a remote environment. For provider setup,
 T3 Connect linking, and connecting clients to that host, see
-[Headless VPS environment](./headless-vps.md).
+[Headless VPS environment](../../infra/headless-vps.md).
 
 ## Manage the Service
 

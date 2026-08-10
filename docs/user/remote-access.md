@@ -3,7 +3,7 @@
 Use this when you want to connect to a T3 Code server from another device such as a phone, tablet, or separate desktop app.
 
 If the remote machine should **own** the work (repos, provider logins, agent processes) instead of
-your laptop, follow [Headless VPS environment](./headless-vps.md). That guide covers always-on Linux
+your laptop, follow [Headless VPS environment](../../infra/headless-vps.md). That guide covers always-on Linux
 hosts with T3 Connect, the background service, Tailscale, and SSH launch end to end. This page is
 the reference for pairing, endpoints, and access methods.
 
@@ -92,7 +92,7 @@ For `https://app.t3.codes`, prefer an HTTPS Tailnet or other HTTPS endpoint. A p
 Use this when you want to run the server without a GUI, for example on a remote machine over SSH.
 
 For an always-on VPS that should be the **working environment** (providers, repos, and agent work
-on that host), prefer the end-to-end flow in [Headless VPS environment](./headless-vps.md): link with
+on that host), prefer the end-to-end flow in [Headless VPS environment](../../infra/headless-vps.md): link with
 `t3 connect`, install the [background service](./background-service.md), then connect from your
 clients. The snippets below are the access-layer building blocks.
 
@@ -148,7 +148,7 @@ npx t3@latest connect
 
 Over SSH this uses out-of-band OAuth automatically (or pass `--headless`). Onboarding can install
 the background service so the host stays reachable after logout. Full steps:
-[Headless VPS environment](./headless-vps.md).
+[Headless VPS environment](../../infra/headless-vps.md).
 
 ### Option 3: Desktop-Managed SSH
 

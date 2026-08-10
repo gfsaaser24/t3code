@@ -72,4 +72,4 @@ If a step fails:
 
 For remote connection setup and access troubleshooting, see [Remote Access](./remote-access.md).
 For standing up an always-on Linux host as the working environment, see
-[Headless VPS environment](./headless-vps.md).
+[Headless VPS environment](../../infra/headless-vps.md).

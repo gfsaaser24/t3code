@@ -71,8 +71,8 @@ It does **not** install the machine that runs agents.
 Each VPS, cloud VM, or always-on Linux box that should own projects, provider CLIs, and agent work
 is a separate T3 **environment**. Operators and users set those up with:
 
-- [Headless VPS environment](../docs/user/headless-vps.md) — `t3 connect`, background service,
-  providers on the host, and connecting clients so work leaves the laptop
+- [Headless VPS environment](./headless-vps.md) — `t3 connect`, background service, providers on
+  the host, and connecting clients so work leaves the laptop
 - [Host your own T3 Code](../docs/operations/host-your-own.md) — ordering guide for the control
   plane this folder implements
 
