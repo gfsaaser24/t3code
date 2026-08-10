@@ -27,6 +27,7 @@ import { subscribeDynamic } from "../rpc/client.ts";
 import { ThreadSnapshotLoader, type ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyThreadDetailEvent } from "./threadReducer.ts";
+import { sortThreadActivities } from "./threadActivityOrder.ts";
 import { THREAD_STATE_IDLE_TTL_MS } from "./threadRetention.ts";
 import { followStreamInEnvironment } from "./runtime.ts";
 import {
@@ -435,7 +436,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         // windowed collections gain rows from the older page.
         ...loaded,
         messages: mergeById(older.messages, loaded.messages),
-        activities: mergeById(older.activities, loaded.activities),
+        // Concatenation is only sorted while the pages are truly disjoint; an
+        // overlapping page (server bug or cursor misuse) leaves the survivors
+        // interleaved. Consumers now trust store order instead of re-sorting
+        // per derivation, so the merge canonicalises its own output.
+        activities: sortThreadActivities(mergeById(older.activities, loaded.activities)),
         proposedPlans: mergeById(older.proposedPlans, loaded.proposedPlans),
         checkpoints: [
           ...older.checkpoints.filter((row) => !seenCheckpoints.has(row.turnId)),

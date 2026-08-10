@@ -11,6 +11,18 @@ import { ForwardCompatibleArray, TrimmedNonEmptyString, TrimmedString } from "..
 const decodeTrimmed = Schema.decodeUnknownSync(TrimmedString);
 const encodeTrimmed = Schema.encodeSync(TrimmedString);
 
+const LabelRow = Schema.Struct({ label: TrimmedNonEmptyString });
+const encodeLabelRow = Schema.encodeUnknownSync(LabelRow);
+
+const TrimmedIds = ForwardCompatibleArray(TrimmedNonEmptyString);
+const decodeTrimmedIds = Schema.decodeUnknownSync(TrimmedIds);
+const encodeTrimmedIds = Schema.encodeUnknownSync(TrimmedIds);
+
+const KnownRow = Schema.Struct({ id: TrimmedNonEmptyString, kind: Schema.Literal("known") });
+const KnownRows = ForwardCompatibleArray(KnownRow);
+const decodeKnownRows = Schema.decodeUnknownSync(KnownRows);
+const encodeKnownRows = Schema.encodeUnknownSync(KnownRows);
+
 describe("TrimmedString", () => {
   it("round-trips an already-trimmed value unchanged", () => {
     assert.equal(decodeTrimmed("already-trimmed"), "already-trimmed");
@@ -31,58 +43,38 @@ describe("TrimmedString", () => {
   });
 
   it("trims struct fields on the encode side, without a decode first", () => {
-    const Row = Schema.Struct({ label: TrimmedNonEmptyString });
     // The value never went through decode — it is handed straight to encode.
-    assert.deepEqual(Schema.encodeUnknownSync(Row)({ label: "  built  " }), { label: "built" });
+    assert.deepEqual(encodeLabelRow({ label: "  built  " }), { label: "built" });
   });
 });
 
 describe("ForwardCompatibleArray", () => {
   it("drops elements this build cannot decode and keeps the rest", () => {
-    const Ids = ForwardCompatibleArray(TrimmedNonEmptyString);
-
     // Two drops: the number and the whitespace-only string (empty after trimming).
-    assert.deepEqual(Schema.decodeUnknownSync(Ids)(["  keep  ", 42, "also-keep", "   "]), [
-      "keep",
-      "also-keep",
-    ]);
+    assert.deepEqual(decodeTrimmedIds(["  keep  ", 42, "also-keep", "   "]), ["keep", "also-keep"]);
   });
 
   it("drops undecodable struct variants without failing the whole payload", () => {
-    const Row = Schema.Struct({ id: TrimmedNonEmptyString, kind: Schema.Literal("known") });
-    const Rows = ForwardCompatibleArray(Row);
-
     assert.deepEqual(
-      Schema.decodeUnknownSync(Rows)([
-        { id: " a ", kind: "known" },
-        { id: "b", kind: "from-a-newer-server" },
-        7,
-      ]),
+      decodeKnownRows([{ id: " a ", kind: "known" }, { id: "b", kind: "from-a-newer-server" }, 7]),
       [{ id: "a", kind: "known" }],
     );
   });
 
   it("encodes elements through the element schema", () => {
-    const Ids = ForwardCompatibleArray(TrimmedNonEmptyString);
-    assert.deepEqual(Schema.encodeUnknownSync(Ids)(["a", "  b  "]), ["a", "b"]);
-
-    const Row = Schema.Struct({ id: TrimmedNonEmptyString, kind: Schema.Literal("known") });
-    assert.deepEqual(
-      Schema.encodeUnknownSync(ForwardCompatibleArray(Row))([{ id: "  a  ", kind: "known" }]),
-      [{ id: "a", kind: "known" }],
-    );
+    assert.deepEqual(encodeTrimmedIds(["a", "  b  "]), ["a", "b"]);
+    assert.deepEqual(encodeKnownRows([{ id: "  a  ", kind: "known" }]), [
+      { id: "a", kind: "known" },
+    ]);
   });
 
   it("names the failing element's index when encoding fails", () => {
     // The `Schema.Array(element)` target this replaced attached the index to
     // the issue path. Fail-fast encoding has to re-attach it by hand, or a bad
     // rule in a 40-entry config is unlocatable from the log line alone.
-    const Row = Schema.Struct({ id: TrimmedNonEmptyString, kind: Schema.Literal("known") });
-    const Rows = ForwardCompatibleArray(Row);
-
     assert.throws(
       () =>
-        Schema.encodeUnknownSync(Rows)([
+        encodeKnownRows([
           { id: "a", kind: "known" },
           { id: "b", kind: "not-known" },
         ]),
@@ -104,16 +96,16 @@ describe("ForwardCompatibleArray", () => {
         }),
       ),
     );
+    // Built inside the test because the counter is test-local; hoisting the
+    // compiled decoder here still satisfies the "once per schema" rule relative
+    // to the array helper under test.
+    const decodeCounted = Schema.decodeUnknownSync(ForwardCompatibleArray(Counted));
 
-    assert.deepEqual(Schema.decodeUnknownSync(ForwardCompatibleArray(Counted))(["a", "b", "c"]), [
-      "a",
-      "b",
-      "c",
-    ]);
+    assert.deepEqual(decodeCounted(["a", "b", "c"]), ["a", "b", "c"]);
     assert.equal(decodeCalls, 3);
 
     decodeCalls = 0;
-    assert.deepEqual(Schema.decodeUnknownSync(ForwardCompatibleArray(Counted))(["a", 1]), ["a"]);
+    assert.deepEqual(decodeCounted(["a", 1]), ["a"]);
     assert.equal(decodeCalls, 1);
   });
 });

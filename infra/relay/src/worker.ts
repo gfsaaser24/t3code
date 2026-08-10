@@ -48,6 +48,7 @@ import * as RelayDb from "./db.ts";
 import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
+import * as AgentActivityPublisherApnsDisabled from "./agentActivity/AgentActivityPublisherApnsDisabled.ts";
 import * as ApnsClient from "./agentActivity/ApnsClient.ts";
 import * as ApnsProviderTokens from "./agentActivity/ApnsProviderTokens.ts";
 import * as ApnsDeliveryQueue from "./agentActivity/ApnsDeliveryQueue.ts";
@@ -210,9 +211,17 @@ export const ApiLive = Api.make(
             ),
           );
 
+    // Same "APNs is off" condition as `apnsRuntimeLayer` above: with the
+    // disabled delivery layer every publish prepares deliveries that resolve to
+    // null, so the APNs-off publisher keeps the row write and skips the prep.
+    const agentActivityPublisherLayer =
+      apnsDeliveryQueueSender === null
+        ? AgentActivityPublisherApnsDisabled.layer
+        : AgentActivityPublisher.layer;
+
     const runtimeLayer = Layer.empty.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
-      Layer.provideMerge(AgentActivityPublisher.layer),
+      Layer.provideMerge(agentActivityPublisherLayer),
       Layer.provideMerge(EnvironmentConnector.layer),
       Layer.provideMerge(EnvironmentLinker.layer),
       Layer.provideMerge(EnvironmentPublishSignatures.layer),

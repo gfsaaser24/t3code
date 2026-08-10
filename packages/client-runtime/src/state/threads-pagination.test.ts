@@ -30,6 +30,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
+import { awaitPooled } from "../turbo/streamPoolTestClock.ts";
 import type { ThreadSnapshotWindow } from "./threadSnapshotHttp.ts";
 import {
   INITIAL_THREAD_USER_TURN_LIMIT,
@@ -216,8 +217,10 @@ const makeHarness = Effect.fn("TestThreadPagination.makeHarness")(function* (opt
     Effect.forkScoped,
   );
 
+  // Subscription items are pooled for one frame before they reach the state,
+  // so the virtual clock has to cross the pool window while this waits.
   const awaitState = (predicate: (state: EnvironmentThreadState) => boolean) =>
-    Queue.take(observed).pipe(Effect.repeat({ until: predicate }));
+    awaitPooled(Queue.take(observed).pipe(Effect.repeat({ until: predicate })));
   const resolveNextPage = (response: LoaderResponse) =>
     Queue.take(pendingPageResponses).pipe(
       Effect.flatMap((deferred) => Deferred.succeed(deferred, response)),

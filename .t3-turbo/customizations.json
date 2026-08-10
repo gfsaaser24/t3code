@@ -525,6 +525,55 @@
       ]
     },
     {
+      "id": "terminal-scrollback-batching",
+      "status": "implemented",
+      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the debounce runs on a per-session fiber (never inside the shared worker, which would serialize every session's batch interval and every drain behind one another) and is enqueued once per burst rather than once per chunk, the batch is a keyed coalescing worker that flushPersist enqueues into and drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
+      "checks": [
+        {
+          "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
+          "markers": [
+            "export function queueTerminalHistoryChunk",
+            "export function flushTerminalHistoryBuffer",
+            "export function endTerminalHistoryStream",
+            "export function readTerminalHistoryBuffer",
+            "export function takeTerminalHistoryToPersist",
+            "dirtySincePersist"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
+          "markers": [
+            "matches upstream across the cap-trim boundary",
+            "matches upstream's graceful degradation for a non-positive cap",
+            "is byte-identical however the recorded stream is chunked and batched",
+            "is byte-identical however the real stream is chunked and batched",
+            "still owes the persist when a read flushed the batch before the batch tick",
+            "import { capHistory, sanitizeTerminalHistoryChunk } from \"../terminal/Manager.ts\";"
+          ]
+        },
+        {
+          "path": "apps/server/src/terminal/Manager.ts",
+          "markers": [
+            "const DEFAULT_HISTORY_BATCH_MS = 16;",
+            "historyBuffer: TerminalHistoryBuffer;",
+            "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
+            "historyBatchWorker.drainKey(sessionKey);",
+            "readTerminalHistoryBuffer(session.historyBuffer)",
+            "takeTerminalHistoryToPersist(session.historyBuffer)",
+            "export function sanitizeTerminalHistoryChunk",
+            "export function capHistory",
+            "historyBatchScheduled: boolean;",
+            "if (session.historyBatchScheduled) {",
+            "session.historyBatchScheduled = false;"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/server/src/terminal/Manager.ts`"]
+        }
+      ]
+    },
+    {
       "id": "sqlite-fast-mode-pragma",
       "status": "implemented",
       "summary": "The single sqlite setup layer applies the standard WAL companion PRAGMA synchronous = NORMAL to every connection, leaving foreign_keys and journal_mode untouched.",
@@ -558,7 +607,7 @@
         {
           "path": "apps/web/src/session-logic.ts",
           "markers": [
-            "export function compareIsoTimestamps",
+            "import { compareIsoTimestamps } from \"@t3tools/client-runtime/state/thread-activity-order\"",
             "compareIsoTimestamps(left.createdAt, right.createdAt)",
             "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
             "compareIsoTimestamps(a.createdAt, b.createdAt)",
@@ -647,6 +696,179 @@
       ]
     },
     {
+      "id": "deferred-streaming-code-blocks",
+      "status": "implemented",
+      "summary": "Streaming code fences render as a row-capped, height-reserving placeholder inside the chat code-block frame and are highlighted exactly once when the message completes; the line count is incremental across deltas, the animation is the repo's duty-cycled skeleton sweep, and a fence that never grows is treated as history whose persisted streaming flag predates the reducer fix.",
+      "checks": [
+        {
+          "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
+          "markers": [
+            "export const STREAMING_CODE_FIRST_DELTA_MS = 500;",
+            "export const STREAMING_CODE_MAX_PLACEHOLDER_ROWS = 24;",
+            "if (input.stall === \"never-started\") return \"highlighted\";",
+            "export function countStreamingCodeLines(code: string): number",
+            "export function advanceStreamingCodeLineCount(",
+            "export function resolveStreamingCodeBlockView(input: {",
+            "export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall",
+            "export function StreamingCodeBlockFrame({",
+            "data-streaming-code-placeholder",
+            "data-streaming-code-spacer",
+            "import { Skeleton } from \"~/components/ui/skeleton\";"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/ChatMarkdown.tsx",
+          "markers": [
+            "import { StreamingCodeBlockFrame } from \"../turbo/streamingCodeBlock\";",
+            "<StreamingCodeBlockFrame",
+            "highlighted={"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
+          "markers": [
+            "grows one placeholder line per accumulated code line",
+            "caps the rendered rows and reserves the rest with one spacer",
+            "uses the duty-cycled skeleton sweep, not a per-frame pulse",
+            "agrees with the full scan at every prefix of a streamed fence",
+            "colours a fence that never grew, even though the message still claims to stream"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/web/src/components/ChatMarkdown.tsx`"]
+        }
+      ]
+    },
+    {
+      "id": "streaming-flag-cleared-on-turn-settle",
+      "status": "implemented",
+      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent — which never arrives when a turn dies — and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/state/threadReducer.ts",
+          "markers": [
+            "function clearStreamingForTurn(",
+            "messages: clearStreamingForTurn(thread.messages, event.payload.turnId),",
+            "clearStreamingForTurn(thread.messages, latestTurn.turnId)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/threadReducerStreamingSettle.test.ts",
+          "markers": [
+            "thread.session-set clears streaming on the settled turn",
+            "thread.turn-interrupt-requested clears streaming on the interrupted turn",
+            "returns the same messages array when nothing was streaming"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `packages/client-runtime/src/turbo/threadReducerStreamingSettle.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "terminal-buffer-byte-budget",
+      "status": "implemented",
+      "summary": "The client terminal buffer tracks its UTF-8 byte length in the reducer state and only re-encodes to trim once the total passes the cap plus a 25% slack window, then trims back down to the cap while keeping the multi-byte safety loop.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/state/terminalSession.ts",
+          "markers": [
+            "readonly bufferBytes: number;",
+            "export const TERMINAL_BUFFER_TRIM_SLACK_RATIO = 0.25;",
+            "function utf8ByteLength(text: string): number",
+            "appendedBytes <= terminalBufferTrimThreshold(maxBufferBytes)",
+            "(byte & 0b1100_0000) !== 0b1000_0000"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/terminalSession.test.ts",
+          "markers": [
+            "caps retained output by UTF-8 byte length once the slack threshold is crossed",
+            "expect(withinSlack.buffer.startsWith(snapshot.buffer)).toBe(true);"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `packages/client-runtime/src/state/terminalSession.ts`",
+            "**Tuned** `packages/client-runtime/src/state/terminalSession.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "terminal-drawer-redraw-gate",
+      "status": "implemented",
+      "summary": "The terminal drawer decides a redraw from the buffer and error it is about to write, not from a version counter that a reconnect restarts at 1 and a pooled burst can land on twice.",
+      "checks": [
+        {
+          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
+          "markers": [
+            "export function terminalNeedsRedraw(",
+            "current.buffer !== previous.buffer ||",
+            "current.error !== previous.error ||",
+            "if (!terminalNeedsRedraw(previous, current)) {"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/terminalDrawerRedraw.test.ts",
+          "markers": [
+            "redraws a reconnect that reuses the version number the screen already drew",
+            "still redraws on a version bump, which is what drives the mount focus"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `apps/web/src/components/ThreadTerminalDrawer.tsx`",
+            "**Additive** `apps/web/src/turbo/terminalDrawerRedraw.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "relay-apns-off-publish-skip",
+      "status": "implemented",
+      "summary": "With APNs off the relay's agent-activity publish keeps its row write verbatim and skips the delivery-user, active-row and Live Activity target queries whose results the disabled delivery layer discards; the APNs-on wiring is untouched.",
+      "checks": [
+        {
+          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts",
+          "markers": [
+            "export const layer = Layer.effect(AgentActivityPublisher, make);",
+            "return { ok: true, deliveries: [] } satisfies RelayPublishResponse;",
+            "yield* rows.upsert({"
+          ]
+        },
+        {
+          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.test.ts",
+          "markers": [
+            "stores the same row as the upstream publisher and returns the same response",
+            "skips the delivery prep the disabled delivery layer throws away"
+          ]
+        },
+        {
+          "path": "infra/relay/src/worker.ts",
+          "markers": [
+            "const agentActivityPublisherLayer =",
+            "? AgentActivityPublisherApnsDisabled.layer",
+            ": AgentActivityPublisher.layer;",
+            "Layer.provideMerge(agentActivityPublisherLayer),"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts`",
+            "**Optional** `infra/relay/src/worker.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-request-budget-and-clerk-client",
       "status": "implemented",
       "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",
@@ -679,6 +901,115 @@
             "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`",
             "**Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts`",
             "**Tuned** `infra/relay/src/http/Api.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "relay-auth-and-link-memos",
+      "status": "implemented",
+      "summary": "Successful Clerk verifications are remembered per isolate for at most 30 seconds, keyed by token digest and never past the token's own expiry, the user-link lookups answer from a 5 second memo while the allocation compare-and-swap record and the credential revocation check are never cached, every write-deciding link read bypasses that memo, an invalidated key stays unrememberable for one TTL so an in-transaction read cannot outlive the commit, and both memos share one TTL store whose eviction is insertion-order rather than a full clear.",
+      "checks": [
+        {
+          "path": "infra/relay/src/http/Api.ts",
+          "markers": [
+            "const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;",
+            "export function verifiedRelayClientTokenKey(token: string): string {",
+            "return sha256Base64Url(token);",
+            "function bearerTokenExpiryEpochMs(token: string): number | null {",
+            "bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,",
+            "const verified = yield* verifyRelayClientBearerTokenUncached(config, token);",
+            "\"relay.auth.memo_hit\": remembered !== null",
+            "Effect.withSpan(\"relay.auth.verify_client_bearer_token\")",
+            "bypassMemo: true,"
+          ]
+        },
+        {
+          "path": "infra/relay/src/environments/EnvironmentLinks.ts",
+          "markers": [
+            "const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;",
+            "readonly bypassMemo?: boolean;",
+            "input.bypassMemo === true ? null : readTtlMemo(linkRecordMemo, memoKey, nowMs);",
+            "if (link !== null && input.bypassMemo !== true) {",
+            "blockLinkLookup(linkLookupBarriers, linkRecordMemoKey(input), nowMs);",
+            "if (isLinkLookupBlocked(barriers, key, nowMs)) {"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/clientTokenVerificationMemo.test.ts",
+          "markers": [
+            "never trusts the memo past the token's own expiry",
+            "caps an unreadable expiry at thirty seconds and keeps the OAuth fallback chain",
+            "never remembers a failed verification",
+            "keys the memo by the token's SHA-256 digest, never by the token itself",
+            "drops the oldest entry when the memo is full of live ones, never the whole memo"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/environmentLinkLookupMemo.test.ts",
+          "markers": [
+            "serves a repeat link lookup from the memo until the five second window closes",
+            "never caches the allocation record that carries the compare-and-swap token",
+            "never caches the credential check that enforces instant revocation"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/ttlMemo.ts",
+          "markers": [
+            "export function makeTtlMemo<A>(limit: number): TtlMemo<A> {",
+            "export function readTtlMemo<A>(memo: TtlMemo<A>, key: string, nowMs: number): A | null {",
+            "while (memo.entries.size >= memo.limit) {",
+            "memo.entries.delete(oldest.value);"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/environmentLinkWritePath.test.ts",
+          "markers": [
+            "revokes the CURRENT credential when an unlink runs through a warm memo",
+            "does not let a read inside the open transaction re-cache the pre-revoke row"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `infra/relay/src/environments/EnvironmentLinks.ts`",
+            "**Additive** `infra/relay/src/turbo/ttlMemo.ts`",
+            "**Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts`",
+            "**Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts`",
+            "**Additive** `infra/relay/src/turbo/environmentLinkWritePath.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shared-sha256-base64url",
+      "status": "implemented",
+      "summary": "The base64url SHA-256 expression lives once in packages/shared with a module-scope TextEncoder, and the DPoP thumbprint, the DPoP access-token hash, and the relay token-memo key all call it.",
+      "checks": [
+        {
+          "path": "packages/shared/src/turbo/sha256.ts",
+          "markers": [
+            "export function sha256Base64Url(text: string): string {",
+            "const encoder = new TextEncoder();"
+          ]
+        },
+        {
+          "path": "packages/shared/package.json",
+          "markers": ["\"./turbo/sha256\"", "\"./src/turbo/sha256.ts\""]
+        },
+        {
+          "path": "packages/shared/src/dpop.ts",
+          "markers": [
+            "import { sha256Base64Url } from \"./turbo/sha256.ts\";",
+            "return sha256Base64Url(dpopThumbprintInput(jwk));",
+            "return sha256Base64Url(accessToken);"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `packages/shared/src/turbo/sha256.ts`",
+            "**Tuned** `packages/shared/src/dpop.ts`"
           ]
         }
       ]
@@ -760,6 +1091,175 @@
             "installer only in `gfsaaser24/t3code`",
             "last known-good release"
           ]
+        }
+      ]
+    },
+    {
+      "id": "unified-activity-order",
+      "status": "implemented",
+      "summary": "One canonical activity comparator (sequence with un-sequenced rows LAST via MAX_SAFE_INTEGER, then createdAt, then lifecycle phase, then id) replaces four divergent orderings across the store, the web view layer, mobile, and the server SQL; all four server ORDER BY clauses spell the null sink and the lifecycle rank out explicitly, a fork-owned equivalence test pins SQL against TS, the older-page merge sorts its output and the five per-derivation re-sorts in web collapse into one boundary sort.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/state/threadActivityOrder.ts",
+          "markers": [
+            "export function compareThreadActivities",
+            "export function compareIsoTimestamps",
+            "export function activityLifecycleRank",
+            "const MISSING_SEQUENCE = Number.MAX_SAFE_INTEGER;",
+            "export function sortThreadActivities"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadActivityOrder.test.ts",
+          "markers": [
+            "sorts un-sequenced rows after every numbered row",
+            "keeps a live checkpoint row at the END of a mixed thread",
+            "keeps resolved after requested through the full pipeline order"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/threadActivityOrderEquivalence.test.ts",
+          "markers": [
+            "const SHIPPED_CLAUSES: ReadonlyArray<ShippedClause>",
+            "ships each ORDER BY clause verbatim in its source file",
+            "returns sortThreadActivities' order under every shipped clause"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadReducer.ts",
+          "markers": [
+            "import { threadActivityOrder } from \"./threadActivityOrder.ts\";",
+            "Arr.sort(threadActivityOrder)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads.ts",
+          "markers": [
+            "import { sortThreadActivities } from \"./threadActivityOrder.ts\";",
+            "activities: sortThreadActivities(mergeById(older.activities, loaded.activities))"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/package.json",
+          "markers": ["\"./state/thread-activity-order\""]
+        },
+        {
+          "path": "apps/web/src/components/ChatView.tsx",
+          "markers": [
+            "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
+            "const orderedActivities = useMemo(",
+            "derivePendingApprovals(orderedActivities)"
+          ]
+        },
+        {
+          "path": "apps/mobile/src/lib/threadActivity.ts",
+          "markers": [
+            "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
+            "export { sortThreadActivities };"
+          ]
+        },
+        {
+          "path": "apps/web/src/session-logic.test.ts",
+          "markers": [
+            "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
+            "derivePendingApprovals(sortThreadActivities(activities))",
+            "derivePendingUserInputs(sortThreadActivities(activities))",
+            "deriveWorkLogEntries(sortThreadActivities(activities))"
+          ]
+        },
+        {
+          "path": "apps/server/src/persistence/Layers/ProjectionThreadActivities.ts",
+          "markers": [
+            "CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC",
+            "WHEN kind LIKE '%.started' THEN 0",
+            "WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2"
+          ]
+        },
+        {
+          "path": "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts",
+          "markers": [
+            "CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC",
+            "WHEN kind LIKE '%.started' THEN 0",
+            "WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2"
+          ]
+        },
+        {
+          "path": "apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts",
+          "markers": [
+            "unsequenced last",
+            "keeps thread detail activity ordering consistent with shell snapshot ordering"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `packages/client-runtime/src/state/threadActivityOrder.ts`",
+            "**Tuned** `packages/client-runtime/src/state/threadReducer.ts`",
+            "**Tuned** `apps/mobile/src/lib/threadActivity.ts`",
+            "**Tuned** `apps/web/src/session-logic.test.ts`",
+            "**Tuned** `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts`",
+            "**Optional** `packages/client-runtime/package.json`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pooled-subscription-frame",
+      "status": "implemented",
+      "summary": "Durable RPC subscriptions pool one frame (16 ms) of already-arrived stream items inside the per-session stream and release them as a single chunk, so a burst costs the screen one blip per frame instead of one per item; the pool is created and shut down with the session, and the \"synchronized\" connection marker is never held back by the window; subscriptions whose items are distinct facts rather than cumulative state (preview events, automation requests) bypass the pool entirely, because a chunk-collapsing atom consumer would otherwise drop all but the last item of a window.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/rpc/client.ts",
+          "markers": [
+            "export const POOL_WINDOW: Duration.Input = \"16 millis\";",
+            "export const flushesImmediately = (item: unknown): boolean =>",
+            "Effect.uninterruptibleMask((restore) =>",
+            "(item as { readonly kind: unknown }).kind === \"synchronized\";",
+            "function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {",
+            "const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([",
+            "WS_METHODS.subscribePreviewEvents,",
+            "WS_METHODS.previewAutomationConnect,",
+            "NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
+          "markers": [
+            "import { POOL_WINDOW } from \"../rpc/client.ts\";",
+            "const MAX_POOL_WINDOWS = 12;",
+            "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/streamPool.test.ts",
+          "markers": [
+            "drops pooled leftovers when the session dies",
+            "releases the synchronized marker without waiting out the window",
+            "releases one window's items as a single ordered chunk",
+            "never drops an item at a window boundary",
+            "never pools a subscription whose items are distinct facts",
+            "keeps the immediate-release bypass tied to the contracts literal"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads-sync.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads-pagination.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/shell-sync.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/server.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/client-runtime/src/rpc/client.ts`"]
         }
       ]
     }

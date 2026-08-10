@@ -19,6 +19,12 @@ export interface TerminalSessionState {
 
 export interface TerminalBufferState {
   readonly buffer: string;
+  /**
+   * Running UTF-8 byte length of `buffer`. It lives in the state object on purpose: the
+   * reducer is handed to `Stream.scan` by reference, so a running total passed as a
+   * function parameter would silently unbind and the buffer would be re-measured per append.
+   */
+  readonly bufferBytes: number;
   readonly status: TerminalSessionSnapshot["status"] | "closed";
   readonly error: string | null;
   readonly updatedAt: string | null;
@@ -46,6 +52,7 @@ export function selectRunningSubprocessTerminalIds(
 
 export const EMPTY_TERMINAL_BUFFER_STATE = Object.freeze<TerminalBufferState>({
   buffer: "",
+  bufferBytes: 0,
   status: "closed",
   error: null,
   updatedAt: null,
@@ -63,17 +70,65 @@ export const EMPTY_TERMINAL_SESSION_STATE = Object.freeze<TerminalSessionState>(
 });
 
 export const DEFAULT_MAX_TERMINAL_BUFFER_BYTES = 512 * 1024;
+
+/**
+ * Appends are allowed to overshoot the cap by this fraction before the buffer is trimmed
+ * back down *to* the cap. It bounds retained output at cap + slack (640 KiB by default,
+ * which phones still render fine) while making a trim — and the full repaint it forces in
+ * the xterm consumer — happen once per slack-worth of output instead of once per frame.
+ */
+export const TERMINAL_BUFFER_TRIM_SLACK_RATIO = 0.25;
+
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
+interface TrimmedTerminalBuffer {
+  readonly buffer: string;
+  readonly bufferBytes: number;
+}
+
+function terminalBufferTrimThreshold(maxBufferBytes: number): number {
   if (maxBufferBytes <= 0) {
-    return "";
+    return 0;
+  }
+  return maxBufferBytes + Math.ceil(maxBufferBytes * TERMINAL_BUFFER_TRIM_SLACK_RATIO);
+}
+
+/**
+ * UTF-8 byte length without allocating an encoded copy. Lone surrogates encode as U+FFFD
+ * (three bytes), matching `TextEncoder`, so this stays in step with `trimBufferToBytes`.
+ */
+function utf8ByteLength(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) {
+      bytes += 1;
+    } else if (code < 0x800) {
+      bytes += 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+      const low = text.charCodeAt(index + 1);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        bytes += 4;
+        index += 1;
+      } else {
+        bytes += 3;
+      }
+    } else {
+      bytes += 3;
+    }
+  }
+  return bytes;
+}
+
+function trimBufferToBytes(buffer: string, maxBufferBytes: number): TrimmedTerminalBuffer {
+  if (maxBufferBytes <= 0) {
+    return { buffer: "", bufferBytes: 0 };
   }
 
   const encoded = textEncoder.encode(buffer);
   if (encoded.byteLength <= maxBufferBytes) {
-    return buffer;
+    return { buffer, bufferBytes: encoded.byteLength };
   }
 
   let start = encoded.byteLength - maxBufferBytes;
@@ -85,15 +140,18 @@ function trimBufferToBytes(buffer: string, maxBufferBytes: number): string {
     start += 1;
   }
 
-  return textDecoder.decode(encoded.subarray(start));
+  const retained = encoded.subarray(start);
+  return { buffer: textDecoder.decode(retained), bufferBytes: retained.byteLength };
 }
 
 export function terminalBufferStateFromSnapshot(
   snapshot: TerminalSessionSnapshot,
   maxBufferBytes: number,
 ): TerminalBufferState {
+  const trimmed = trimBufferToBytes(snapshot.history, maxBufferBytes);
   return {
-    buffer: trimBufferToBytes(snapshot.history, maxBufferBytes),
+    buffer: trimmed.buffer,
+    bufferBytes: trimmed.bufferBytes,
     status: snapshot.status,
     error: null,
     updatedAt: snapshot.updatedAt,
@@ -131,18 +189,30 @@ export function applyTerminalAttachStreamEvent(
     case "snapshot":
     case "restarted":
       return terminalBufferStateFromSnapshot(event.snapshot, maxBufferBytes);
-    case "output":
+    case "output": {
+      const appended = `${current.buffer}${event.data}`;
+      const appendedBytes = current.bufferBytes + utf8ByteLength(event.data);
+      const status = current.status === "closed" ? "running" : current.status;
+      // Below the slack threshold the append stays verbatim, so the consumer's
+      // incremental-draw check (new buffer starts with the old one) keeps holding.
+      const trimmed =
+        appendedBytes <= terminalBufferTrimThreshold(maxBufferBytes)
+          ? { buffer: appended, bufferBytes: appendedBytes }
+          : trimBufferToBytes(appended, maxBufferBytes);
       return {
         ...current,
-        buffer: trimBufferToBytes(`${current.buffer}${event.data}`, maxBufferBytes),
-        status: current.status === "closed" ? "running" : current.status,
+        buffer: trimmed.buffer,
+        bufferBytes: trimmed.bufferBytes,
+        status,
         error: null,
         version: current.version + 1,
       };
+    }
     case "cleared":
       return {
         ...current,
         buffer: "",
+        bufferBytes: 0,
         error: null,
         version: current.version + 1,
       };

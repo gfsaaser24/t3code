@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import { DpopPublicJwk as DpopPublicJwkSchema, normalizeDpopHtu } from "./dpopCommon.ts";
 import type { DpopPublicJwk as DpopPublicJwkType } from "./dpopCommon.ts";
 import { stableStringify } from "./relaySigning.ts";
+import { sha256Base64Url } from "./turbo/sha256.ts";
 
 const DPOP_TYP = "dpop+jwt";
 const DPOP_ALG = "ES256";
@@ -76,11 +77,11 @@ function dpopThumbprintInput(jwk: DpopPublicJwkType): string {
 }
 
 export function computeDpopJwkThumbprint(jwk: DpopPublicJwkType): string {
-  return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(dpopThumbprintInput(jwk))));
+  return sha256Base64Url(dpopThumbprintInput(jwk));
 }
 
 export function computeDpopAccessTokenHash(accessToken: string): string {
-  return Encoding.encodeBase64Url(sha256(new TextEncoder().encode(accessToken)));
+  return sha256Base64Url(accessToken);
 }
 
 function publicKeyBytesFromJwk(jwk: DpopPublicJwkType): Uint8Array {

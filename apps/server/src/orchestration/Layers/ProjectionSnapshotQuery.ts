@@ -571,10 +571,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
+        -- Same total order as the canonical client comparator
+        -- (packages/client-runtime/src/state/threadActivityOrder.ts), which
+        -- sinks un-sequenced rows to the BOTTOM (MAX_SAFE_INTEGER). SQLite
+        -- defaults to NULLs-FIRST under ASC, so the CASE is mandatory: live
+        -- emitters (CheckpointReactor, setup scripts, command errors) append
+        -- with no sequence every turn, and a bare "sequence ASC" would hoist
+        -- them above the thread's first numbered row. The lifecycle rank
+        -- breaks (sequence, created_at) ties ahead of the id so an approval's
+        -- ".resolved" row can never surface before its ".requested" row.
         ORDER BY
           thread_id ASC,
+          CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC,
           sequence ASC,
           created_at ASC,
+          CASE
+            WHEN kind LIKE '%.started' THEN 0
+            WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2
+            ELSE 1
+          END ASC,
           activity_id ASC
       `,
   });
@@ -1017,9 +1032,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
+        -- Canonical total order — see listThreadActivityRows above and
+        -- packages/client-runtime/src/state/threadActivityOrder.ts. This query
+        -- feeds getThreadDetailById, the primary thread-detail snapshot, so it
+        -- needs BOTH CASEs: the null-sequence sink (SQLite defaults to
+        -- NULLs-FIRST) and the lifecycle rank ahead of the id tiebreak.
         ORDER BY
+          CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC,
           sequence ASC,
           created_at ASC,
+          CASE
+            WHEN kind LIKE '%.started' THEN 0
+            WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2
+            ELSE 1
+          END ASC,
           activity_id ASC
       `,
   });
@@ -1275,9 +1301,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               AND created_at < ${beforeAnchorAt}
             )
           )
+        -- Canonical total order — see listThreadActivityRows above and
+        -- packages/client-runtime/src/state/threadActivityOrder.ts. The window
+        -- variant of the thread-detail snapshot needs the identical clause, or
+        -- "load older messages" hands the client a differently-ordered page
+        -- from the one the full snapshot produced.
         ORDER BY
+          CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC,
           sequence ASC,
           created_at ASC,
+          CASE
+            WHEN kind LIKE '%.started' THEN 0
+            WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2
+            ELSE 1
+          END ASC,
           activity_id ASC
       `,
   });

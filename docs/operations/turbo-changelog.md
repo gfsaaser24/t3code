@@ -60,6 +60,95 @@ old orderings and the old wire bytes are part of the wave.
   require. No product code changed — the wave adds a fork-owned probe test that pins the
   consequence in bytes.
 
+Wave 2 of the speed plan: seven items across the same four surfaces, plus the fix rounds each one
+earned in review. Same rule as Wave 1 — the visible behavior stays put, and the tests that pin the
+old orderings and the old wire bytes ship with the wave.
+
+- **Threads sort themselves once, the same way everywhere (W2+W3).** The store, the web chat view,
+  mobile, and the server's SQL each carried their own idea of how a thread's activities are ordered,
+  and the web layer re-sorted the same list five more times on the way to the screen. There is now
+  one canonical comparator in the client runtime — sequence number first, then creation time, then
+  lifecycle phase, then id — and every surface calls it. Rows with no sequence number sort **last**,
+  which is what the thread timeline has always shown: a missing sequence does not mean "old", it
+  means "not part of the provider's numbered stream", and the rows that carry no sequence include
+  the "Checkpoint captured" line every turn writes. All four of the server's activity queries spell
+  that out explicitly (SQLite's own default is the opposite) along with the same lifecycle tiebreak
+  and a code-unit id tiebreak, so SQL and JavaScript agree character for character — and a
+  fork-owned test replays a generated corpus through every one of those queries and through the
+  comparator and asserts the two orders are identical, so a future edit to any single copy fails
+  there instead of in someone's thread. The older-page merge sorts its output, so pagination can no
+  longer hand the view an out-of-order page, and the five per-derivation re-sorts collapse into one
+  memoized sort at the view boundary. New seam `unified-activity-order`.
+- **Streaming code blocks stop re-colouring on every delta (W1).** A code fence was syntax
+  highlighted from scratch on every delta while the model typed it — the most expensive render in
+  the chat, repeated hundreds of times per block. It now shows a placeholder card inside the normal
+  code-block frame that reserves one line of height per line of code received, and gets exactly one
+  coloured render when the message completes. The placeholder draws at most two dozen shimmer rows
+  and reserves the rest as a single spacer, counts new lines by looking only at the text that just
+  arrived, and uses the app's existing duty-cycled shimmer rather than an animation that repaints
+  every frame for the life of the stream. An old message still flagged as streaming — those exist in
+  saved history — is highlighted immediately instead of pulsing forever.
+- **A message that stops streaming now says so (W1 follow-up).** "This message is streaming" was
+  only ever turned off by the message's own final chunk. If a turn ended any other way — the
+  provider errored or exited, the session stopped, or you pressed stop — that chunk never arrived,
+  the flag stayed on, and it was saved that way. One flag, five symptoms: code blocks that shimmered
+  forever, an "empty response" label, a missing message footer, a copy button stuck in its streaming
+  state, and turns grouped wrongly. The thread reducer now turns the flag off wherever it already
+  ends a turn, and none of those five places needed touching. New seam
+  `streaming-flag-cleared-on-turn-settle`; the code-fence work keeps the seam
+  `deferred-streaming-code-blocks`.
+- **The server terminal stops rebuilding its scrollback per chunk (S2).** Every PTY chunk chopped
+  and re-glued the whole retained scrollback string. A session now keeps scrollback as a list of
+  lines with incremental capping, and batches history-side appends on a ~16 ms coalescing worker.
+  Every read flushes the batch first, so the string handed to a client stays byte-identical to what
+  upstream produced; a dirty-since-persist flag — not the last flush's result — decides whether a
+  write is still owed, so a read racing the batch tick cannot strand the tail. Each session waits
+  out its own ~16 ms window: the coalescing worker is a single worker shared by every terminal, so
+  waiting inside it made eight busy terminals queue behind one another — their batches stretched to
+  eight times the intended window, one noisy terminal could hold up the rest, and Clear, Restart and
+  Close waited out unrelated terminals' timers before they could act. The window is also armed once
+  per burst of output instead of once per chunk from the shell. The wire cadence to the terminal is
+  unchanged: this is history-side only. New seam `terminal-scrollback-batching`.
+- **The client terminal buffer stops re-encoding itself to measure itself (C1).** Enforcing the byte
+  cap re-encoded the entire retained buffer on every append just to learn how big it was. The
+  reducer now carries a running byte count and only re-encodes once the total passes the cap plus a
+  25% slack window, then trims back down to the cap. The multi-byte safety loop that keeps a trim
+  from splitting a character is untouched. New seam `terminal-buffer-byte-budget`.
+- **Screen updates arrive one frame at a time (C2).** A burst of stream items used to cost the
+  screen one update each. Inside the per-session subscription, items that have already arrived now
+  pool for 16 ms and release as a single chunk — one blip per frame instead of one per item. The
+  pool is created and shut down with the session, the "synchronized" connection marker bypasses the
+  window so a reconnect is never held back, and the window boundary is drop-proof: a pool that is
+  closing flushes what it holds rather than dropping it. The streaming protocol and the wire bytes
+  are unchanged. New seam `pooled-subscription-frame`.
+- **The relay stops preparing pushes nobody will receive (R1).** With APNs off, publishing agent
+  activity still ran the delivery-user, active-row, and Live Activity target queries — and then
+  handed the results to a delivery layer that throws them away. A separate publisher layer keeps the
+  row write verbatim and returns the same response without those queries; it is selected only when
+  APNs is off, and the APNs-on wiring is untouched. New seam `relay-apns-off-publish-skip`.
+- **The relay remembers who it just verified (R3-B + R4).** Every request re-verified its bearer
+  token against Clerk and re-read the same user-link rows. Successful verifications are now
+  remembered per isolate for at most 30 seconds, keyed by the token's SHA-256 digest (never the
+  token itself) and never past the token's own expiry — an unreadable expiry caps at the same 30
+  seconds, and a failed verification is never remembered. The links-only lookup answers from a
+  5-second memo. The allocation record that carries the compare-and-swap token and the credential
+  check that enforces instant revocation are never cached. New seam `relay-auth-and-link-memos`.
+- **Mobile's copy of the streaming-code problem is written down, not fixed (W1 companion).**
+  `.plans/23b-w1-mobile-companion.md`: the mobile chat caches highlighted code under a key that
+  includes the code itself, so a streaming fence starts a fresh highlight job per delta and keeps
+  every intermediate version of the block in memory for five minutes. That is the same shape W1
+  fixed on web, but the mobile fix needs a product decision (plain text while streaming, or a mobile
+  placeholder) rather than a mechanical port, and mobile was not one of the surfaces this audit
+  measured. Filed so the asymmetry is visible: after this wave, web streams code cheaply and mobile
+  does not. No product code changed.
+
+Four trades this wave accepts, stated plainly: a revoked principal can keep working for up to 30
+seconds before the verification memo expires; for up to 5 seconds after an unlink a lookup can still
+return the old link record; terminal echo can lag by up to one frame (~16 ms) under the pool; and in
+threads old enough to predate activity sequence numbers, those oldest rows now sit at the bottom of
+the thread rather than the top. The last one is the price of putting every turn's "Checkpoint
+captured" line in the right place, and it matches what the store and the mobile app always did.
+
 No version manifests were bumped: this work ships with the next release, per the
 [runbook's version rules](./turbo-runbook.md).
 
@@ -122,7 +211,7 @@ region roles (#37), thinking orbs (#38).
 
 ## Seam registry snapshot (2026-08-09)
 
-Fifteen seams protected by `.t3-turbo/customizations.json` (108 checks; verify with
+Twenty-two seams protected by `.t3-turbo/customizations.json` (146 checks; verify with
 `pnpm --dir scripts turbo:customizations:verify`):
 
 | Seam                                    | Status      | What it protects                                                   |
@@ -140,5 +229,12 @@ Fifteen seams protected by `.t3-turbo/customizations.json` (108 checks; verify w
 | `cheap-timestamp-and-sort-keys`         | implemented | ISO string timestamp compares, decorate-sorted sidebar buckets     |
 | `cheap-message-unpacking`               | implemented | Both-directions trim, single-decode wire arrays                    |
 | `relay-request-budget-and-clerk-client` | implemented | One Clerk client per config, 7s mint budget under the 9s deadline  |
+| `unified-activity-order`                | implemented | One activity comparator across store, web, mobile, server SQL      |
+| `deferred-streaming-code-blocks`        | implemented | Growing placeholder while streaming, one colouring on completion   |
+| `terminal-scrollback-batching`          | implemented | Line-list scrollback, 16ms history batch, dirty-flag persist gate  |
+| `terminal-buffer-byte-budget`           | implemented | Byte-counted client terminal buffer, trim to cap on slack          |
+| `pooled-subscription-frame`             | implemented | 16ms pool-and-blip inside the per-session stream                   |
+| `relay-apns-off-publish-skip`           | implemented | No push-delivery prep when APNs is off                             |
+| `relay-auth-and-link-memos`             | implemented | 30s verified-token memo, 5s links-only lookup memo                 |
 | `relay-policy`                          | policy      | Relay/portal/tunnel credential and ownership boundaries            |
 | `nightly-and-secret-policy`             | policy      | 11 PM Eastern ingestion rules, fork-only publishing, no secrets    |

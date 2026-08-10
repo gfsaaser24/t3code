@@ -60,6 +60,7 @@ import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
+import { StreamingCodeBlockFrame } from "../turbo/streamingCodeBlock";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
 import {
@@ -1662,16 +1663,22 @@ function ChatMarkdown({
             fenceTitle={fenceTitle}
             theme={resolvedTheme}
           >
-            <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
-              <Suspense fallback={<pre {...props}>{children}</pre>}>
-                <SuspenseShikiCodeBlock
-                  className={codeBlock.className}
-                  code={codeBlock.code}
-                  themeName={diffThemeName}
-                  isStreaming={isStreaming}
-                />
-              </Suspense>
-            </RenderErrorBoundary>
+            <StreamingCodeBlockFrame
+              code={codeBlock.code}
+              isStreaming={isStreaming}
+              highlighted={
+                <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
+                  <Suspense fallback={<pre {...props}>{children}</pre>}>
+                    <SuspenseShikiCodeBlock
+                      className={codeBlock.className}
+                      code={codeBlock.code}
+                      themeName={diffThemeName}
+                      isStreaming={isStreaming}
+                    />
+                  </Suspense>
+                </RenderErrorBoundary>
+              }
+            />
           </MarkdownCodeBlock>
         );
       },

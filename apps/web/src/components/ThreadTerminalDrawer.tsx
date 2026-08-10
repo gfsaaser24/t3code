@@ -264,6 +264,29 @@ export function shouldHandleTerminalExit(
   );
 }
 
+interface TerminalRedrawInputs {
+  readonly buffer: string;
+  readonly error: string | null;
+  readonly version: number;
+}
+
+// T3 Turbo: the version alone is not a safe "nothing changed" test. A reconnect rebuilds the
+// buffer state from a fresh snapshot and restarts the counter at 1, so a reconnect burst that
+// arrives as ONE update can land on the same version number the screen already drew — the redraw
+// would be skipped and the screen would stay stale until the next byte of output, which on an idle
+// terminal never comes. The buffer and the error are the actual inputs to the write, so they
+// decide; the version stays in the test because it is what still drives the version-0 mount focus.
+export function terminalNeedsRedraw(
+  previous: TerminalRedrawInputs,
+  current: TerminalRedrawInputs,
+): boolean {
+  return (
+    current.buffer !== previous.buffer ||
+    current.error !== previous.error ||
+    current.version !== previous.version
+  );
+}
+
 interface TerminalViewportProps {
   advancedTypography: boolean;
   threadRef: ScopedThreadRef;
@@ -802,7 +825,7 @@ export function TerminalViewport({
 
     const previous = previousSessionRef.current;
     synchronizeTerminalStatus(terminal, current.status);
-    if (current.version === previous.version) {
+    if (!terminalNeedsRedraw(previous, current)) {
       return;
     }
 

@@ -7,6 +7,10 @@ import {
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+// The activity derivations below take canonical order as a precondition now
+// that the sort moved to the boundary (ChatView), the way mobile already did
+// it; fixtures that are deliberately out of order sort here instead.
+import { sortThreadActivities } from "@t3tools/client-runtime/state/thread-activity-order";
 
 import {
   deriveActiveWorkStartedAt,
@@ -94,7 +98,7 @@ describe("derivePendingApprovals", () => {
       }),
     ];
 
-    expect(derivePendingApprovals(activities)).toEqual([
+    expect(derivePendingApprovals(sortThreadActivities(activities))).toEqual([
       {
         requestId: "req-1",
         requestKind: "command",
@@ -282,7 +286,7 @@ describe("derivePendingUserInputs", () => {
       }),
     ];
 
-    expect(derivePendingUserInputs(activities)).toEqual([
+    expect(derivePendingUserInputs(sortThreadActivities(activities))).toEqual([
       {
         requestId: "req-user-input-1",
         createdAt: "2026-02-23T00:00:01.000Z",
@@ -903,7 +907,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities);
+    const entries = deriveWorkLogEntries(sortThreadActivities(activities));
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
 
@@ -1516,7 +1520,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities);
+    const entries = deriveWorkLogEntries(sortThreadActivities(activities));
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");

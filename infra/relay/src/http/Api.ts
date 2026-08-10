@@ -5,10 +5,12 @@ import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Record from "effect/Record";
 import * as Redacted from "effect/Redacted";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 import * as HttpEffect from "effect/unstable/http/HttpEffect";
@@ -50,6 +52,7 @@ import {
   RelayInternalError,
 } from "@t3tools/contracts/relay";
 import { normalizeRelayIssuer } from "@t3tools/shared/relayJwt";
+import { sha256Base64Url } from "@t3tools/shared/turbo/sha256";
 
 import * as DeliveryAttempts from "../agentActivity/DeliveryAttempts.ts";
 import * as AgentActivityRows from "../agentActivity/AgentActivityRows.ts";
@@ -69,6 +72,7 @@ import * as EnvironmentPublishSignatures from "../environments/EnvironmentPublis
 import * as MobileRegistrations from "../agentActivity/MobileRegistrations.ts";
 import { withSpanAttributes } from "../observability.ts";
 import * as RelayDb from "../db.ts";
+import { makeTtlMemo, readTtlMemo, writeTtlMemo, type TtlMemo } from "../turbo/ttlMemo.ts";
 
 const relayCorsAllowedMethods = ["GET", "POST", "DELETE", "OPTIONS"] as const;
 const relayCorsAllowedHeaders = [
@@ -438,9 +442,13 @@ export const unlinkEnvironmentRecord = Effect.fn("relay.api.client.unlinkEnviron
       userId: input.userId,
       environmentId: input.environmentId,
     });
+    // This read DECIDES a write: `link.environmentPublicKey` selects the credential to revoke. It
+    // must never come from the link memo -- after a key rotation a remembered record revokes the
+    // PREVIOUS credential and leaves the environment's current session authenticated.
     const link = yield* links.getForUser({
       userId: input.userId,
       environmentId: input.environmentId,
+      bypassMemo: true,
     });
     const unlinked =
       link === null
@@ -1227,7 +1235,7 @@ function verifyClerkOAuthBearerToken(
   });
 }
 
-export function verifyRelayClientBearerToken(
+function verifyRelayClientBearerTokenUncached(
   config: RelayConfiguration.RelayConfiguration["Service"],
   token: string,
 ) {
@@ -1243,6 +1251,105 @@ export function verifyRelayClientBearerToken(
       ),
     ),
   );
+}
+
+// Every authenticated relay request pays for a Clerk verification, and the OAuth fallback pays
+// with a full network round trip. Remember SUCCESSFUL verifications only, keyed by the SHA-256
+// hash of the presented token so the raw token is never a map key, and only until the sooner of
+// this cap and the token's own expiry. Failures are never remembered, so a rejected token is
+// re-verified on every request. The trade is deliberate and bounded: a banned user keeps access
+// for at most this window. The memo is a per-isolate Map on purpose -- a miss simply verifies
+// again, while shared or durable storage would widen that revocation window across locations.
+const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;
+const VERIFIED_CLIENT_TOKEN_MEMO_LIMIT = 1_024;
+
+type VerifiedRelayClientToken = {
+  readonly sub: string;
+  readonly mode: "clerk_session_bearer" | "clerk_oauth_bearer";
+};
+
+type VerifiedRelayClientTokenMemo = TtlMemo<VerifiedRelayClientToken>;
+
+const verifiedRelayClientTokens = new WeakMap<
+  RelayConfiguration.RelayConfiguration["Service"],
+  VerifiedRelayClientTokenMemo
+>();
+
+function verifiedRelayClientTokenMemo(
+  config: RelayConfiguration.RelayConfiguration["Service"],
+): VerifiedRelayClientTokenMemo {
+  const cached = verifiedRelayClientTokens.get(config);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const memo = makeTtlMemo<VerifiedRelayClientToken>(VERIFIED_CLIENT_TOKEN_MEMO_LIMIT);
+  verifiedRelayClientTokens.set(config, memo);
+  return memo;
+}
+
+// Exported so the fork-owned memo test can assert the key is a digest by CALLING this, instead of
+// pattern-matching the source text of this file.
+export function verifiedRelayClientTokenKey(token: string): string {
+  return sha256Base64Url(token);
+}
+
+const BearerTokenExpiryClaims = Schema.fromJsonString(Schema.Struct({ exp: Schema.Number }));
+const decodeBearerTokenExpiryClaims = Schema.decodeUnknownOption(BearerTokenExpiryClaims);
+
+// Soft detection only. Clerk issues opaque OAuth tokens, and some configurations issue
+// JWT-shaped CLI tokens; this never selects a verification path, so the fallback chain above
+// stays intact. It only shortens how long a success may be remembered. A token whose expiry
+// cannot be read falls back to the cap above.
+function bearerTokenExpiryEpochMs(token: string): number | null {
+  const segments = token.split(".");
+  const encodedClaims = segments.length === 3 ? segments[1] : undefined;
+  if (encodedClaims === undefined || encodedClaims.length === 0) {
+    return null;
+  }
+  const claimsJson = Result.getOrNull(Encoding.decodeBase64UrlString(encodedClaims));
+  if (claimsJson === null) {
+    return null;
+  }
+  const claims = Option.getOrNull(decodeBearerTokenExpiryClaims(claimsJson));
+  return claims === null || !Number.isFinite(claims.exp) ? null : claims.exp * 1_000;
+}
+
+function rememberVerifiedRelayClientToken(
+  memo: VerifiedRelayClientTokenMemo,
+  key: string,
+  verified: VerifiedRelayClientToken,
+  token: string,
+  nowMs: number,
+): void {
+  const expiresAtMs = Math.min(
+    nowMs + VERIFIED_CLIENT_TOKEN_TTL_MS,
+    bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,
+  );
+  // `writeTtlMemo` drops an already-expired entry on the floor, which is how a token that expires
+  // before the cap would is simply never remembered.
+  writeTtlMemo(memo, key, verified, expiresAtMs, nowMs);
+}
+
+export function verifyRelayClientBearerToken(
+  config: RelayConfiguration.RelayConfiguration["Service"],
+  token: string,
+): Effect.Effect<VerifiedRelayClientToken, ClerkTokenVerificationFailed> {
+  return Effect.gen(function* () {
+    const memo = verifiedRelayClientTokenMemo(config);
+    const key = verifiedRelayClientTokenKey(token);
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    const remembered = readTtlMemo(memo, key, nowMs);
+    // A memo hit skips the inner `verify_clerk_bearer_token` span entirely, so without this one a
+    // dashboard loses its denominator and a steady failure rate reads as a spike. This span is the
+    // per-request count; the attribute splits it into hits and misses.
+    yield* Effect.annotateCurrentSpan({ "relay.auth.memo_hit": remembered !== null });
+    if (remembered !== null) {
+      return remembered;
+    }
+    const verified = yield* verifyRelayClientBearerTokenUncached(config, token);
+    rememberVerifiedRelayClientToken(memo, key, verified, token, nowMs);
+    return verified;
+  }).pipe(Effect.withSpan("relay.auth.verify_client_bearer_token"));
 }
 
 const requireDpopPrincipalScope = Effect.fn("relay.api.require_dpop_principal_scope")(function* (

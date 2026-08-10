@@ -229,6 +229,7 @@ import {
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
+import { sortThreadActivities } from "@t3tools/client-runtime/state/thread-activity-order";
 import { vcsEnvironment } from "../state/vcs";
 import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
@@ -2175,8 +2176,20 @@ export function ChatViewContent(props: ChatViewProps) {
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
-  const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
-  const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
+  // Sort once at the boundary (mobile already does this in
+  // `use-selected-thread-requests`) instead of once inside each derivation.
+  // The store and the older-page merge already emit canonical order, so this
+  // is a cheap already-sorted pass that keeps the derivations honest for any
+  // caller that hands over an unsorted window.
+  const orderedActivities = useMemo(
+    () => sortThreadActivities(threadActivities),
+    [threadActivities],
+  );
+  const workLogEntries = useMemo(
+    () => deriveWorkLogEntries(orderedActivities),
+    [orderedActivities],
+  );
+  const turnPlans = useMemo(() => deriveTurnPlans(orderedActivities), [orderedActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
@@ -2185,17 +2198,20 @@ export function ChatViewContent(props: ChatViewProps) {
   const agentPanelModel = useMemo(
     () =>
       deriveAgentPanelModel({
-        agents: foldSubagentActivities(threadActivities, { sessionLive: agentSessionLive }),
+        // T3 Turbo: the same canonically ordered array every other derivation
+        // takes, so the Agents surface folds the identical sequence the work
+        // log and turn plans read.
+        agents: foldSubagentActivities(orderedActivities, { sessionLive: agentSessionLive }),
       }),
-    [agentSessionLive, threadActivities],
+    [agentSessionLive, orderedActivities],
   );
   const pendingApprovals = useMemo(
-    () => derivePendingApprovals(threadActivities),
-    [threadActivities],
+    () => derivePendingApprovals(orderedActivities),
+    [orderedActivities],
   );
   const pendingUserInputs = useMemo(
-    () => derivePendingUserInputs(threadActivities),
-    [threadActivities],
+    () => derivePendingUserInputs(orderedActivities),
+    [orderedActivities],
   );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
@@ -2240,8 +2256,8 @@ export function ChatViewContent(props: ChatViewProps) {
     );
   }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
   const activePlan = useMemo(
-    () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () => deriveActivePlanState(orderedActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, orderedActivities],
   );
   // Current step for the in-chat working row: only for the running turn's own
   // plan (deriveActivePlanState falls back to older turns' plans, which must

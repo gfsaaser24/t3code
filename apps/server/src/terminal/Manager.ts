@@ -59,6 +59,16 @@ import {
 } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
+import {
+  createTerminalHistoryBuffer,
+  endTerminalHistoryStream,
+  queueTerminalHistoryChunk,
+  readTerminalHistoryBuffer,
+  resetTerminalHistoryBuffer,
+  takeTerminalHistoryForPersist,
+  takeTerminalHistoryToPersist,
+  type TerminalHistoryBuffer,
+} from "../turbo/terminalHistoryBuffer.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
 export {
@@ -76,6 +86,8 @@ export {
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 40;
+/** T3 Turbo: one frame's worth of PTY output is sanitized and capped as a single batch. */
+const DEFAULT_HISTORY_BATCH_MS = 16;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_PROCESS_KILL_GRACE_MS = 1_000;
 const DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS = 128;
@@ -236,8 +248,18 @@ export interface TerminalSessionState {
   worktreePath: string | null;
   status: TerminalSessionStatus;
   pid: number | null;
-  history: string;
-  pendingHistoryControlSequence: string;
+  /**
+   * T3 Turbo: the scrollback lives as a line list with an incremental cap and a
+   * ~16 ms output batch instead of a string rebuilt per chunk. Read it through
+   * `readTerminalHistoryBuffer` - that flushes the batch first, so every consumer
+   * still sees the byte-identical string upstream handed out.
+   */
+  historyBuffer: TerminalHistoryBuffer;
+  /**
+   * T3 Turbo: whether this session's ~16 ms output debounce is already sleeping.
+   * Gates `queueHistoryBatch` to once per burst instead of once per PTY chunk.
+   */
+  historyBatchScheduled: boolean;
   pendingProcessEvents: Array<PendingProcessEvent>;
   pendingProcessEventIndex: number;
   processEventDrainRunning: boolean;
@@ -261,6 +283,11 @@ interface PersistHistoryRequest {
   immediate: boolean;
 }
 
+/** T3 Turbo: one pending output batch per session key; the session is mutated in place. */
+interface HistoryBatchRequest {
+  session: TerminalSessionState;
+}
+
 type PendingProcessEvent =
   | { type: "output"; data: string }
   | { type: "exit"; event: PtyAdapter.PtyExitEvent };
@@ -272,7 +299,6 @@ type DrainProcessEventAction =
       threadId: string;
       terminalId: string;
       sequence: number;
-      history: string | null;
       data: string;
     }
   | {
@@ -283,6 +309,8 @@ type DrainProcessEventAction =
       sequence: number;
       exitCode: number | null;
       exitSignal: number | null;
+      /** T3 Turbo: the scrollback string this drain still owes to disk, if any. */
+      historyToPersist: string | null;
     };
 
 interface TerminalManagerState {
@@ -331,7 +359,7 @@ function snapshot(session: TerminalSessionState): TerminalSessionSnapshot {
     worktreePath: session.worktreePath,
     status: session.status,
     pid: session.pid,
-    history: session.history,
+    history: readTerminalHistoryBuffer(session.historyBuffer),
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     label: terminalWireLabel(session),
@@ -852,7 +880,13 @@ function defaultSubprocessInspectorForPlatform(platform: NodeJS.Platform) {
   });
 }
 
-function capHistory(history: string, maxLines: number): string {
+/**
+ * T3 Turbo exports this (upstream keeps it module-private) so the fork-owned
+ * byte-identity test can drive the REAL cap through the incremental buffer. It stays
+ * live on the disk-load path here, so a frozen copy in the test would have proven
+ * only that the buffer matches a snapshot of upstream, not upstream itself.
+ */
+export function capHistory(history: string, maxLines: number): string {
   if (history.length === 0) return history;
   const hasTrailingNewline = history.endsWith("\n");
   const lines = history.split("\n");
@@ -950,7 +984,13 @@ function findEscapeSequenceEndIndex(input: string, start: number): number | null
   return isEscapeFinalByte(input.charCodeAt(cursor)) ? cursor + 1 : start + 1;
 }
 
-function sanitizeTerminalHistoryChunk(
+/**
+ * T3 Turbo exports this (upstream keeps it module-private) so the fork-owned
+ * byte-identity test can drive the real sanitizer through the batched buffer. Batching
+ * relies on it consuming a maximal prefix and carrying the rest verbatim; if upstream
+ * ever caps or rewrites the carry, that test is what catches it.
+ */
+export function sanitizeTerminalHistoryChunk(
   pendingControlSequence: string,
   data: string,
 ): { visibleText: string; pendingControlSequence: string } {
@@ -1259,6 +1299,14 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
     });
 
+  /** T3 Turbo: every session's scrollback shares the cap and the chunk sanitizer. */
+  const newHistoryBuffer = (text: string) =>
+    createTerminalHistoryBuffer({
+      text,
+      maxLines: historyLineLimit,
+      sanitize: sanitizeTerminalHistoryChunk,
+    });
+
   const historyPath = (threadId: string, terminalId: string) => {
     const threadPart = toSafeThreadId(threadId);
     if (terminalId === DEFAULT_TERMINAL_ID) {
@@ -1448,11 +1496,96 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     });
   });
 
+  /**
+   * T3 Turbo: PTY output accumulates in the session's scrollback batch and this
+   * worker applies it once per burst - one sanitize, one incremental cap and one
+   * join per burst instead of per chunk - then hands the result to the persist
+   * worker. It is a `makeKeyedCoalescingWorker` for the drain contract: `drainKey`
+   * resolves only when the key has nothing queued, pending or active, so
+   * `flushPersist` can wait on the batch instead of sleeping.
+   *
+   * `process` must NEVER sleep. This worker is a single fiber shared by every
+   * session, so a sleep here is not a per-session debounce: eight busy terminals
+   * serialize their sleeps and each one's effective batch interval degrades to
+   * ~8 x the constant, `processKey`'s self-recursion lets one noisy key starve
+   * the others' queued batches, and `flushPersist`'s `drainKey` - taken under the
+   * thread lock on Clear/Restart/Close - waits behind unrelated sessions' sleeps.
+   * The debounce lives on a per-session fiber in `queueHistoryBatch` instead.
+   */
+  const historyBatchWorker = yield* makeKeyedCoalescingWorker<
+    string,
+    HistoryBatchRequest,
+    never,
+    never
+  >({
+    merge: (_current, next) => next,
+    process: Effect.fn("terminal.historyBatchWorker")(function* (_sessionKey, request) {
+      const { threadId, terminalId, historyBuffer: buffer } = request.session;
+      // A racing snapshot/attach read may already have flushed this batch into the
+      // scrollback, so the question is "does the scrollback still owe a write?" - not
+      // "did this flush append?", which would strand the tail.
+      const history = yield* Effect.sync(() => takeTerminalHistoryToPersist(buffer));
+      if (history === null) {
+        return;
+      }
+      yield* queuePersist(threadId, terminalId, history);
+    }),
+  });
+
+  /**
+   * T3 Turbo: schedules the ~16 ms batch that turns queued chunks into scrollback.
+   *
+   * Called once per PTY chunk, so it has to be nearly free. `historyBatchScheduled`
+   * makes it once per BURST: every `enqueue` is an STM transaction that clones the
+   * worker's `latestByKey` map, and under a build that ran ~2,000 times a second
+   * for a provable no-op after the first of a burst.
+   *
+   * The flag is cleared BEFORE the enqueue, never after. A chunk arriving in that
+   * window schedules one redundant batch, which coalesces; clearing afterwards can
+   * instead leave a chunk that arrived after the worker's flush with no batch at
+   * all, and its tail would sit in the buffer until the next chunk happened along.
+   */
+  const queueHistoryBatch = Effect.fn("terminal.queueHistoryBatch")(function* (
+    session: TerminalSessionState,
+  ) {
+    if (session.historyBatchScheduled) {
+      return;
+    }
+    session.historyBatchScheduled = true;
+    const sessionKey = toSessionKey(session.threadId, session.terminalId);
+    yield* Effect.sleep(DEFAULT_HISTORY_BATCH_MS).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          session.historyBatchScheduled = false;
+          return historyBatchWorker.enqueue(sessionKey, { session });
+        }),
+      ),
+      Effect.forkIn(workerScope),
+    );
+  });
+
   const flushPersist = Effect.fn("terminal.flushPersist")(function* (
     threadId: string,
     terminalId: string,
   ) {
-    yield* persistWorker.drainKey(toSessionKey(threadId, terminalId));
+    const sessionKey = toSessionKey(threadId, terminalId);
+    // T3 Turbo: with the debounce on a per-session fiber, the worker may hold
+    // nothing for this key while a sleep is still counting down - and then
+    // `drainKey` would return without covering the buffer. Enqueue the batch
+    // here rather than waiting out the timer; this is what keeps the drain
+    // contract identical to the version that enqueued per chunk. It is not
+    // extra work: `takeTerminalHistoryToPersist` returns null unless the
+    // scrollback actually still owes a write, and a debounce fiber that fires
+    // after this finds exactly that.
+    const session = yield* Effect.map(readManagerState, (state) => state.sessions.get(sessionKey));
+    if (session !== undefined) {
+      session.historyBatchScheduled = false;
+      yield* historyBatchWorker.enqueue(sessionKey, { session });
+    }
+    // Drain the output batch first so whatever it is holding has reached the
+    // persist worker before we wait on that worker.
+    yield* historyBatchWorker.drainKey(sessionKey);
+    yield* persistWorker.drainKey(sessionKey);
   });
 
   const persistHistory = Effect.fn("terminal.persistHistory")(function* (
@@ -1708,17 +1841,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         }
 
         if (nextEvent.type === "output") {
-          const sanitized = sanitizeTerminalHistoryChunk(
-            session.pendingHistoryControlSequence,
-            nextEvent.data,
-          );
-          session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
-          if (sanitized.visibleText.length > 0) {
-            session.history = capHistory(
-              `${session.history}${sanitized.visibleText}`,
-              historyLineLimit,
-            );
-          }
+          // T3 Turbo: the chunk only joins the batch here; sanitizing, appending and
+          // capping happen once per ~16 ms burst (or on the next scrollback read).
+          queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);
           const eventStamp = advanceEventSequence(session);
 
           return {
@@ -1726,7 +1851,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             threadId: session.threadId,
             terminalId: session.terminalId,
             sequence: eventStamp.sequence,
-            history: sanitized.visibleText.length > 0 ? session.history : null,
             data: nextEvent.data,
           } as const;
         }
@@ -1738,7 +1862,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         session.hasRunningSubprocess = false;
         session.childCommandLabel = null;
         session.status = "exited";
-        session.pendingHistoryControlSequence = "";
+        // T3 Turbo: the exiting PTY's last batch lands now, and we take the write it
+        // still owes - the scheduled batch worker may never get another turn.
+        endTerminalHistoryStream(session.historyBuffer);
+        const historyToPersist = takeTerminalHistoryToPersist(session.historyBuffer);
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
@@ -1758,6 +1885,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           sequence: eventStamp.sequence,
           exitCode: session.exitCode,
           exitSignal: session.exitSignal,
+          historyToPersist,
         } as const;
       });
 
@@ -1766,9 +1894,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       }
 
       if (action.type === "output") {
-        if (action.history !== null) {
-          yield* queuePersist(action.threadId, action.terminalId, action.history);
-        }
+        yield* queueHistoryBatch(session);
 
         yield* publishEvent({
           type: "output",
@@ -1778,6 +1904,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           data: action.data,
         });
         continue;
+      }
+
+      if (action.historyToPersist !== null) {
+        yield* queuePersist(action.threadId, action.terminalId, action.historyToPersist);
       }
 
       yield* clearKillFiber(action.process);
@@ -1803,20 +1933,27 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     if (!process) return;
 
     const updatedAt = yield* nowIso;
-    yield* modifyManagerState((state) => {
+    // T3 Turbo: apply whatever the output batch is holding before the session goes
+    // idle - upstream had already folded these chunks into `history` by this point.
+    const historyToPersist = yield* modifyManagerState((state) => {
       cleanupProcessHandles(session);
       session.process = null;
       session.pid = null;
       session.hasRunningSubprocess = false;
       session.childCommandLabel = null;
       session.status = "exited";
-      session.pendingHistoryControlSequence = "";
+      endTerminalHistoryStream(session.historyBuffer);
+      const owed = takeTerminalHistoryToPersist(session.historyBuffer);
       session.pendingProcessEvents = [];
       session.pendingProcessEventIndex = 0;
       session.processEventDrainRunning = false;
       session.updatedAt = updatedAt;
-      return [undefined, state] as const;
+      return [owed, state] as const;
     });
+
+    if (historyToPersist !== null) {
+      yield* queuePersist(session.threadId, session.terminalId, historyToPersist);
+    }
 
     yield* clearKillFiber(process);
     yield* unregisterTerminal({
@@ -2025,7 +2162,11 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     if (Option.isSome(session)) {
       yield* stopProcess(session.value);
       yield* unregisterTerminal({ threadId, terminalId });
-      yield* persistHistory(threadId, terminalId, session.value.history);
+      yield* persistHistory(
+        threadId,
+        terminalId,
+        takeTerminalHistoryForPersist(session.value.historyBuffer),
+      );
     }
 
     yield* flushPersist(threadId, terminalId);
@@ -2198,8 +2339,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         worktreePath: input.worktreePath ?? null,
         status: "starting",
         pid: null,
-        history,
-        pendingHistoryControlSequence: "",
+        historyBuffer: newHistoryBuffer(history),
+        historyBatchScheduled: false,
         pendingProcessEvents: [],
         pendingProcessEventIndex: 0,
         processEventDrainRunning: false,
@@ -2259,21 +2400,27 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       liveSession.cwd = input.cwd;
       liveSession.worktreePath = nextWorktreePath;
       liveSession.runtimeEnv = nextRuntimeEnv;
-      liveSession.history = "";
-      liveSession.pendingHistoryControlSequence = "";
+      resetTerminalHistoryBuffer(liveSession.historyBuffer);
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
-      yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
+      yield* persistHistory(
+        liveSession.threadId,
+        liveSession.terminalId,
+        takeTerminalHistoryForPersist(liveSession.historyBuffer),
+      );
     } else if (liveSession.status === "exited" || liveSession.status === "error") {
       liveSession.runtimeEnv = nextRuntimeEnv;
       liveSession.worktreePath = nextWorktreePath;
-      liveSession.history = "";
-      liveSession.pendingHistoryControlSequence = "";
+      resetTerminalHistoryBuffer(liveSession.historyBuffer);
       liveSession.pendingProcessEvents = [];
       liveSession.pendingProcessEventIndex = 0;
       liveSession.processEventDrainRunning = false;
-      yield* persistHistory(liveSession.threadId, liveSession.terminalId, liveSession.history);
+      yield* persistHistory(
+        liveSession.threadId,
+        liveSession.terminalId,
+        takeTerminalHistoryForPersist(liveSession.historyBuffer),
+      );
     }
 
     if (!liveSession.process) {
@@ -2573,13 +2720,16 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       Effect.gen(function* () {
         const terminalId = input.terminalId;
         const session = yield* requireSession(input.threadId, terminalId);
-        session.history = "";
-        session.pendingHistoryControlSequence = "";
+        resetTerminalHistoryBuffer(session.historyBuffer);
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
         const eventStamp = advanceEventSequence(session);
-        yield* persistHistory(input.threadId, terminalId, session.history);
+        yield* persistHistory(
+          input.threadId,
+          terminalId,
+          takeTerminalHistoryForPersist(session.historyBuffer),
+        );
         yield* publishEvent({
           type: "cleared",
           threadId: input.threadId,
@@ -2610,8 +2760,8 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
             worktreePath: input.worktreePath ?? null,
             status: "starting",
             pid: null,
-            history: "",
-            pendingHistoryControlSequence: "",
+            historyBuffer: newHistoryBuffer(""),
+            historyBatchScheduled: false,
             pendingProcessEvents: [],
             pendingProcessEventIndex: 0,
             processEventDrainRunning: false,
@@ -2646,12 +2796,15 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
         const cols = input.cols ?? session.cols;
         const rows = input.rows ?? session.rows;
 
-        session.history = "";
-        session.pendingHistoryControlSequence = "";
+        resetTerminalHistoryBuffer(session.historyBuffer);
         session.pendingProcessEvents = [];
         session.pendingProcessEventIndex = 0;
         session.processEventDrainRunning = false;
-        yield* persistHistory(input.threadId, terminalId, session.history);
+        yield* persistHistory(
+          input.threadId,
+          terminalId,
+          takeTerminalHistoryForPersist(session.historyBuffer),
+        );
         yield* startSession(
           session,
           {

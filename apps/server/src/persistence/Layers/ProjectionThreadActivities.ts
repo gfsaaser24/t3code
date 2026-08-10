@@ -89,10 +89,25 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           created_at AS "createdAt"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
+        -- Mirrors the canonical client comparator
+        -- (packages/client-runtime/src/state/threadActivityOrder.ts): sequence
+        -- with un-sequenced rows LAST, then created_at, then lifecycle phase,
+        -- then id. The null sink is explicit because SQLite defaults to
+        -- NULLs-FIRST and live emitters (CheckpointReactor, setup scripts,
+        -- command errors) append un-sequenced rows every turn. The lifecycle
+        -- rank is what keeps an approval's ".resolved" row behind its
+        -- ".requested" row when both tie on (sequence, created_at) —
+        -- otherwise the id tiebreak can invert them and the client paints a
+        -- phantom pending-approval badge.
         ORDER BY
-          CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+          CASE WHEN sequence IS NULL THEN 1 ELSE 0 END ASC,
           sequence ASC,
           created_at ASC,
+          CASE
+            WHEN kind LIKE '%.started' THEN 0
+            WHEN kind LIKE '%.completed' OR kind LIKE '%.resolved' THEN 2
+            ELSE 1
+          END ASC,
           activity_id ASC
       `,
   });

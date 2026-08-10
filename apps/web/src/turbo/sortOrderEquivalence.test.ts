@@ -20,7 +20,7 @@ import {
   sortSnoozedThreadsForSidebar,
   sortThreadsForSidebar,
 } from "../components/Sidebar.logic";
-import { compareIsoTimestamps } from "../session-logic";
+import { compareIsoTimestamps } from "@t3tools/client-runtime/state/thread-activity-order";
 
 /** Deterministic LCG: the corpora must be identical on every machine.
  *  `Math.imul` is load-bearing: `state * 1103515245` overflows 2^53, and the

@@ -1,6 +1,7 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
+import { compareIsoTimestamps } from "@t3tools/client-runtime/state/thread-activity-order";
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
@@ -384,21 +385,16 @@ function isStalePendingRequestFailureDetail(detail: string | undefined): boolean
 }
 
 /**
- * Timestamp ordering for sort comparators. Every timestamp on the wire is
- * minted fixed width (`DateTime.formatIso` / `toISOString`), so two operands
- * differ first at a digit sitting at the same index — code-unit order is then
- * identical to `localeCompare`'s, without the collator. These comparators run
- * inside sorts that re-run per streamed word, so the collation is pure cost.
+ * Every `activities` parameter below is expected in canonical activity order
+ * (`sortThreadActivities`). The store, the older-page merge, and the server SQL
+ * all emit that order already, and the view layer sorts once at the boundary
+ * (`ChatView`), so these derivations no longer re-sort the whole activity
+ * history apiece on every streamed token.
  */
-export function compareIsoTimestamps(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export function derivePendingApprovals(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingApproval[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingApproval>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
 
   for (const activity of ordered) {
     const payload =
@@ -501,10 +497,9 @@ function parseUserInputQuestions(
 }
 
 export function derivePendingUserInputs(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
 ): PendingUserInput[] {
   const openByRequestId = new Map<ApprovalRequestId, PendingUserInput>();
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
 
   for (const activity of ordered) {
     const payload =
@@ -591,10 +586,9 @@ function planStateFromActivity(activity: OrchestrationThreadActivity): ActivePla
 }
 
 export function deriveActivePlanState(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): ActivePlanState | null {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
   // Prefer plan from the current turn; fall back to the most recent plan from any turn
   // so that TodoWrite tasks persist across follow-up messages.
@@ -625,9 +619,8 @@ export interface TurnPlanEntry {
  * plan activities collapse into a single chip keyed by thread order.
  */
 export function deriveTurnPlans(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
 ): TurnPlanEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const byTurn = new Map<string, TurnPlanEntry>();
   for (const activity of ordered) {
     if (activity.kind !== "turn.plan.updated") {
@@ -768,9 +761,8 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 }
 
 export function deriveWorkLogEntries(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  ordered: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
@@ -1552,47 +1544,6 @@ function extractChangedFiles(payload: Record<string, unknown> | null): string[] 
   const seen = new Set<string>();
   collectChangedFiles(asRecord(payload?.data), changedFiles, seen, 0);
   return changedFiles;
-}
-
-function compareActivitiesByOrder(
-  left: OrchestrationThreadActivity,
-  right: OrchestrationThreadActivity,
-): number {
-  if (left.sequence !== undefined && right.sequence !== undefined) {
-    if (left.sequence !== right.sequence) {
-      return left.sequence - right.sequence;
-    }
-  } else if (left.sequence !== undefined) {
-    return 1;
-  } else if (right.sequence !== undefined) {
-    return -1;
-  }
-
-  const createdAtComparison = compareIsoTimestamps(left.createdAt, right.createdAt);
-  if (createdAtComparison !== 0) {
-    return createdAtComparison;
-  }
-
-  const lifecycleRankComparison =
-    compareActivityLifecycleRank(left.kind) - compareActivityLifecycleRank(right.kind);
-  if (lifecycleRankComparison !== 0) {
-    return lifecycleRankComparison;
-  }
-
-  return left.id.localeCompare(right.id);
-}
-
-function compareActivityLifecycleRank(kind: string): number {
-  if (kind.endsWith(".started") || kind === "tool.started") {
-    return 0;
-  }
-  if (kind.endsWith(".progress") || kind.endsWith(".updated")) {
-    return 1;
-  }
-  if (kind.endsWith(".completed") || kind.endsWith(".resolved")) {
-    return 2;
-  }
-  return 1;
 }
 
 export function deriveTimelineEntries(
