@@ -6,6 +6,12 @@
 > [Self-host the hosted web app](./self-host-hosted-app.md), and
 > [T3 Connect](../internals/t3-connect.md).
 
+This guide is the **Connect control plane** (relay, Clerk, database, hosted app, client builds).
+It is not the guide for “make agents run on my VPS.” Each machine that should own projects and
+provider sessions is still a normal T3 environment: install Node and providers, run headless
+Connect + the background service, then pick that environment in the client. See
+[Headless VPS environment](../user/headless-vps.md).
+
 ## What you are assembling
 
 Six pieces, with hard dependencies between them:

@@ -71,3 +71,5 @@ If a step fails:
    `<client-version>` with the client version shown in the warning.
 
 For remote connection setup and access troubleshooting, see [Remote Access](./remote-access.md).
+For standing up an always-on Linux host as the working environment, see
+[Headless VPS environment](./headless-vps.md).

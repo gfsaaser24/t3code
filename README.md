@@ -9,6 +9,7 @@
 | What                                                                           | Where                                                            |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | Master runbook (bring-up order, architecture, threat model, secrets inventory) | [`infra/README.md`](infra/README.md)                             |
+| Headless VPS agent host (Connect + background service; work off the laptop)    | [`docs/user/headless-vps.md`](docs/user/headless-vps.md)         |
 | Rebase seam — upstream files we modify + conflict guidance                     | [`SEAM.md`](SEAM.md)                                             |
 | Supabase: schema, seed, RLS, setup rules                                       | [`infra/supabase/`](infra/supabase/)                             |
 | Cloudflare Tunnel configs + systemd unit                                       | [`infra/cloudflared/`](infra/cloudflared/)                       |
@@ -56,6 +57,9 @@ npx t3@latest
 This will launch T3 Code's backend on your machine as well as the local web app to control your agents.
 
 Tip: Use `npx t3@latest --help` for the full CLI reference.
+
+To run agents on a remote Linux VPS instead of your laptop (headless server + T3 Connect +
+background service), see [docs/user/headless-vps.md](./docs/user/headless-vps.md).
 
 ### Desktop app
 
@@ -158,6 +162,7 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
 - [Customize a project icon](./docs/user/project-settings.md)
+- [Headless VPS environment](./docs/user/headless-vps.md) (agents on a remote Linux host)
 - [Remote access from a phone or another machine](./docs/user/remote-access.md)
 - [Keeping app and server in sync](./docs/user/updating.md)
 - [Source control integrations](./docs/user/source-control.md)

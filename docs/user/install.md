@@ -1,6 +1,8 @@
 # Install T3 Code
 
-T3 Code is a web and desktop GUI for running coding agents on your machine.
+T3 Code is a web and desktop GUI for running coding agents. The server (and the agents it drives)
+run on one machine — your laptop, a desktop, or a remote Linux host. Clients only connect and
+direct the work.
 
 ## Requirements
 
@@ -79,6 +81,7 @@ For multi-account setups, see [Codex](./providers-codex.md) and [Claude](./provi
 ## Next Steps
 
 - [Permission modes](./permission-modes.md): how much T3 Code asks before acting
+- [Headless VPS environment](./headless-vps.md): run the server on a remote Linux host so agents work there
 - [Remote access](./remote-access.md): connect from a phone, tablet, or another desktop
 - [Keeping T3 Code in sync](./updating.md): client and server version skew
 - [Running in the background](./background-service.md): Linux background service

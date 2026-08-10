@@ -63,6 +63,23 @@ the legacy PlanetScale path and the deploy fails without its credentials.
 `relay.t3turbo.pro` is a Worker custom domain. `app.t3turbo.pro` is a Cloudflare Tunnel hostname.
 They must not be assigned to the same DNS record or tunnel ingress rule.
 
+## Agent hosts (headless VPS)
+
+This directory stands up the **shared Connect control plane** (relay, Clerk, database, hosted app).
+It does **not** install the machine that runs agents.
+
+Each VPS, cloud VM, or always-on Linux box that should own projects, provider CLIs, and agent work
+is a separate T3 **environment**. Operators and users set those up with:
+
+- [Headless VPS environment](../docs/user/headless-vps.md) — `t3 connect`, background service,
+  providers on the host, and connecting clients so work leaves the laptop
+- [Host your own T3 Code](../docs/operations/host-your-own.md) — ordering guide for the control
+  plane this folder implements
+
+Client and CLI builds must use this fork’s Connect public config (baked at build time, or matching
+runtime `T3CODE_*` overrides) so headless hosts link to `relay.t3turbo.pro`, not the official
+stack.
+
 ## Threat model
 
 TLS certificate issuance records hostnames in public Certificate Transparency logs. Treat

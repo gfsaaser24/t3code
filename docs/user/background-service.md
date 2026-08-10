@@ -3,6 +3,10 @@
 On a Linux host, T3 Code can run as a background service for your user. It starts when the machine
 boots and keeps running after you log out.
 
+This is the usual way to keep a **headless VPS** online as a remote environment. For provider setup,
+T3 Connect linking, and connecting clients to that host, see
+[Headless VPS environment](./headless-vps.md).
+
 ## Manage the Service
 
 Install it with the latest T3 Code release:

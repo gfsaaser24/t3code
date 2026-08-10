@@ -10,6 +10,7 @@
 - [Markdown files](./user/markdown-files.md)
 - [Organizing threads](./user/thread-sidebar.md)
 - [Customize a project icon](./user/project-settings.md)
+- [Headless VPS environment](./user/headless-vps.md)
 - [Remote access](./user/remote-access.md)
 - [Keeping app and server in sync](./user/updating.md)
 - [Source control integrations](./user/source-control.md)
@@ -42,6 +43,9 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 
 ### Runbooks
 
+- [Host your own T3 Code](./operations/host-your-own.md)
+- [Self-host the T3 Connect relay](./operations/self-host-relay.md)
+- [Self-host the hosted web app](./operations/self-host-hosted-app.md)
 - [Release](./operations/release.md)
 - [Observability](./operations/observability.md)
 - [Relay observability](./operations/relay-observability.md)

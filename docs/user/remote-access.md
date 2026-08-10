@@ -2,6 +2,11 @@
 
 Use this when you want to connect to a T3 Code server from another device such as a phone, tablet, or separate desktop app.
 
+If the remote machine should **own** the work (repos, provider logins, agent processes) instead of
+your laptop, follow [Headless VPS environment](./headless-vps.md). That guide covers always-on Linux
+hosts with T3 Connect, the background service, Tailscale, and SSH launch end to end. This page is
+the reference for pairing, endpoints, and access methods.
+
 ## Quick Pairing for a Running Server
 
 If a server is already running on this machine, mint a fresh pairing token and QR code without restarting anything:
@@ -10,7 +15,9 @@ If a server is already running on this machine, mint a fresh pairing token and Q
 npx t3 pair
 ```
 
-`t3 pair` finds the running server (the shared `~/.t3` install, or the current worktree's dev server when run inside one), issues a one-time pairing token, and prints the pairing URL as a QR code you can scan from your phone.
+`t3 pair` finds the running server (the shared `~/.t3` install, or a local dev server when you run
+the command from that checkout), issues a one-time pairing token, and prints the pairing URL as a
+QR code you can scan from your phone.
 
 If the server is only bound to loopback, the printed URL is not reachable from another device. Pair over your tailnet instead:
 
@@ -84,10 +91,17 @@ For `https://app.t3.codes`, prefer an HTTPS Tailnet or other HTTPS endpoint. A p
 
 Use this when you want to run the server without a GUI, for example on a remote machine over SSH.
 
+For an always-on VPS that should be the **working environment** (providers, repos, and agent work
+on that host), prefer the end-to-end flow in [Headless VPS environment](./headless-vps.md): link with
+`t3 connect`, install the [background service](./background-service.md), then connect from your
+clients. The snippets below are the access-layer building blocks.
+
+#### Foreground headless serve (pairing)
+
 Run the server with `t3 serve`.
 
 ```bash
-npx t3 serve --host "$(tailscale ip -4)"
+npx t3@latest serve --host "$(tailscale ip -4)"
 ```
 
 `t3 serve` starts the server without opening a browser and prints:
@@ -109,38 +123,55 @@ Use `t3 serve --help` for the full flag reference. It supports the same general 
 For hosted web pairing over Tailscale HTTPS, opt in to Tailscale Serve:
 
 ```bash
-npx t3 serve --tailscale-serve
+npx t3@latest serve --tailscale-serve
 ```
 
 By default this configures Tailscale Serve on HTTPS port 443 and advertises
 `https://machine.tailnet.ts.net/`. Advanced users can choose a different HTTPS port:
 
 ```bash
-npx t3 serve --tailscale-serve --tailscale-serve-port 8443
+npx t3@latest serve --tailscale-serve --tailscale-serve-port 8443
 ```
 
 Once paired, add projects normally: open the Command Palette and choose **Add Project**, then pick
 the environment the project lives on. Every saved environment is offered, not only the local one.
+Provider CLIs and project paths must exist on the machine running `t3 serve`, not only on the
+device you browse from.
 
-### Option 3: Desktop-Managed SSH Launch
+#### T3 Connect from a headless host
+
+To publish a headless machine through T3 Connect (managed tunnel, no public inbound port):
+
+```bash
+npx t3@latest connect
+```
+
+Over SSH this uses out-of-band OAuth automatically (or pass `--headless`). Onboarding can install
+the background service so the host stays reachable after logout. Full steps:
+[Headless VPS environment](./headless-vps.md).
+
+### Option 3: Desktop-Managed SSH
 
 Use this when you want the desktop app to start or reuse T3 Code on another machine over SSH.
 
 1. Open **Settings** → **Connections**.
-2. Under **Remote Environments**, choose **Add environment**.
-3. Select the SSH launch flow.
+2. Under **Remote environments**, choose **Add environment**.
+3. Select **SSH**.
 4. Enter the SSH target, such as `user@example.com`.
 5. Confirm the launch. The desktop app probes the host, starts or reuses a remote T3 server, opens a local port forward, and saves the environment.
 
-After setup, the renderer connects to a local forwarded HTTP/WebSocket endpoint. The remote host still owns the actual T3 server, projects, files, git state, terminals, and provider sessions.
+After setup, the desktop app connects through a local forwarded HTTP/WebSocket endpoint. The remote host still owns the actual T3 server, projects, files, git state, terminals, and provider sessions.
 
-SSH launch is a desktop feature because it needs local process and SSH access. Once the environment is paired and saved, it uses the same environment list and connection model as direct LAN, Tailscale, HTTPS, or future tunnel-backed environments.
+SSH is a desktop feature because it needs local process and SSH access. Once the environment is paired and saved, it uses the same environment list and connection model as direct LAN, Tailscale, HTTPS, or tunnel-backed environments.
 
-#### SSH Launch Troubleshooting
+#### SSH troubleshooting
 
-The desktop SSH launcher connects with a non-interactive `sh` session, writes a small launcher script under `~/.t3/ssh-launch/<host-key>/`, starts or reuses a remote T3 server, and forwards the remote loopback port back to your desktop.
+The desktop SSH launcher opens a non-interactive remote shell, writes a small launcher script under
+`~/.t3/ssh-launch/<host-key>/`, starts or reuses a remote T3 server, and forwards the remote
+loopback port back to your desktop. If a compatible T3 server is already running on the host (for
+example the background service), the launcher reuses it.
 
-The remote host must have a compatible Node.js runtime. T3 Code uses the server package's `engines.node` requirement:
+The remote host must have a compatible Node.js runtime:
 
 ```text
 ^22.16 || ^23.11 || >=24.10
@@ -151,21 +182,29 @@ looks in the usual install directories and tries to activate a version manager i
 (Volta, asdf, mise, fnm, nodenv, nvm). That covers most setups, but a version manager that only
 initializes from an interactive shell profile will not be picked up.
 
-If launch fails with `node: command not found`, a port-scan failure, or a message that the remote Node version does not satisfy the required range, SSH into the host and check the same non-interactive shell path T3 Code uses:
+If launch fails with `node: command not found`, a port-scan failure, or a message that the remote
+Node version does not satisfy the required range, SSH into the host and check a non-interactive
+shell (the launcher does not load a full login profile):
 
 ```bash
-ssh user@example.com 'sh -lc "command -v node && node --version"'
+ssh user@example.com 'command -v node && node --version'
 ```
 
-If that does not print a compatible Node version, configure your version manager for non-interactive shells or install a compatible Node binary in one of the searched locations. For example, with nvm you may need a default alias:
+If that does not print a compatible Node version, install Node where non-interactive shells can
+find it, or configure your version manager so its shims resolve without an interactive profile.
+For example, with nvm you may need a default alias:
 
 ```bash
 nvm alias default 24
 ```
 
-With mise, asdf, fnm, or nodenv, make sure the tool's shim directory is installed and resolves to a Node version satisfying the range above without an interactive shell.
+With mise, asdf, fnm, or nodenv, make sure the tool's shim directory is installed and resolves to a
+Node version satisfying the range above without an interactive shell.
 
-If reconnecting after an app update fails, retry the SSH launch once. The launcher now compares its generated runner script, stops stale launcher-managed remote servers, clears the SSH launch PID/port state, and starts a fresh remote server. You should not normally need to delete `~/.t3/ssh-launch` or kill `t3` processes manually.
+If reconnecting after an app update fails, retry the SSH connection once. The launcher compares its
+generated runner script, stops stale launcher-managed remote servers, clears the SSH launch
+PID/port state, and starts a fresh remote server when needed. You should not normally need to
+delete `~/.t3/ssh-launch` or kill `t3` processes manually.
 
 ## Updating a Remote Server
 
@@ -186,7 +225,9 @@ The remote device does not need a long-lived secret up front.
 
 Instead:
 
-1. `t3 serve` issues a one-time owner pairing token.
+1. `t3 serve` issues a one-time startup pairing token with administrative scopes (enough for
+   Settings → Connections on that environment). `t3 pair` against a running server issues a
+   standard client pairing token.
 2. The remote device exchanges that token with the server.
 3. The server creates an authenticated session for that device.
 
