@@ -152,6 +152,21 @@ captured" line in the right place, and it matches what the store and the mobile 
 No version manifests were bumped: this work ships with the next release, per the
 [runbook's version rules](./turbo-runbook.md).
 
+- **Both waves merged to `turbo`** ([#47](https://github.com/gfsaaser24/t3code/pull/47) →
+  `131038e1`, [#48](https://github.com/gfsaaser24/t3code/pull/48) → `07d6d50c`). Seam registry
+  after the merges: **25 seams / 164 file checks**, verified on the merged tip.
+- **Forward-looking status recorded** in
+  [`.plans/25-turbo-work-status.md`](../../.plans/25-turbo-work-status.md): the seams each wave
+  added, waves 3 and 4 held by operator decision (the plan's bigger rebuilds, plus the follow-ups
+  the reviews produced), the pending upstream backlog with its collision assessment, and the two
+  distinct guard failures that stalled the nightly sync.
+- **Nightly sync diagnosis.** The scheduled runs on 08-08 and 08-09 failed because
+  `upstream.json`'s `version` stopped deriving from its `nightlyTag` once the fork took its own
+  version line — the PR #46 ingestion already restored that field. A manual dispatch then failed
+  on the cutoff guard, which correctly refused to move the anchor backward relative to the window
+  it was resolving. No repair needed; the next scheduled run resolves forward. Both guards and the
+  standing risk are written up in the status plan.
+
 ## 0.0.38 — 2026-08-09 (desktop installer not yet shipped)
 
 - Ingested upstream `main` through official nightly `.1042` (21 commits) via
