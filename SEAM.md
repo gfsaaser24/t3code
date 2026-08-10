@@ -8,7 +8,11 @@ fork's change.
   agent guide. On conflict, take the new upstream body and reapply the Turbo header verbatim.
 - **Replaced** `CLAUDE.md` — Turbo preamble plus an explicit `@AGENTS.md` import (upstream ships a
   bare pointer). On conflict, keep the fork file.
-- **Gated** `.github/workflows/deploy-relay.yml` — fork-safe credential detection, manual dispatch,
+- **Gated** `.github/workflows/deploy-relay.yml` — deploys on pushes to **`turbo`** (the fork's
+  product mainline, where `infra/relay` actually changes) filtered to the relay paths, never on
+  `main`. Upstream ships `push: main`; on conflict re-apply the `turbo` branch and the path filter,
+  because a `main`-triggered deploy ships whatever relay code that diverged branch carries and
+  silently reverts the fork's relay work. Also: fork-safe credential detection, manual dispatch,
   and external-database/optional-service inputs.
 - **Gated** `.github/workflows/release.yml` — release artifacts remain buildable when Connect is not
   configured.
