@@ -62,6 +62,24 @@ describe("ProviderUsageLimitsStoreLive", () => {
     }).pipe(Effect.provide(ProviderUsageLimitsStoreLive)),
   );
 
+  it.effect("does not wedge the debounce when the wall clock jumps backwards", () =>
+    Effect.gen(function* () {
+      // An NTP correction or a wake in another timezone can move
+      // `currentTimeMillis` backwards. A plain `now - lastRefreshAt` reads
+      // negative, which would look like "still inside the window" and block
+      // refreshes until the clock caught up.
+      const store = yield* ProviderUsageLimitsStore;
+
+      yield* TestClock.adjust(USAGE_REFRESH_DEBOUNCE_MS * 10);
+      assert.isTrue(yield* store.claimRefreshSlot(CLAUDE));
+      yield* TestClock.setTime(0);
+      assert.isTrue(
+        yield* store.claimRefreshSlot(CLAUDE),
+        "a backwards clock should expire the slot, not extend it",
+      );
+    }).pipe(Effect.provide(ProviderUsageLimitsStoreLive)),
+  );
+
   it.effect("keeps the newest reading when writes arrive out of order", () =>
     Effect.gen(function* () {
       const store = yield* ProviderUsageLimitsStore;

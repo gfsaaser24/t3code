@@ -398,6 +398,10 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
   activeThreadProviderDisplayName: string | null;
+  // Scoped to the instance the meters read from, which is the selection for
+  // the *next* turn — not the thread's persisted provider. Picking a new
+  // provider swaps the numbers, so the title has to move with them.
+  usageProviderDisplayName: string | null;
   usageWindows: ReadonlyArray<ProviderUsageWindow>;
   usageUpdatedAt: string | null;
   onRequestUsageRefresh: () => void;
@@ -434,7 +438,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         windows={props.usageWindows}
         updatedAt={props.usageUpdatedAt}
         compact={props.compact}
-        providerDisplayName={props.activeThreadProviderDisplayName}
+        providerDisplayName={props.usageProviderDisplayName}
         onRequestRefresh={props.onRequestUsageRefresh}
       />
       {props.isPreparingWorktree ? (
@@ -985,6 +989,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       globalThis.removeEventListener("focus", onFocus);
     };
   }, [requestUsageRefresh]);
+  // The meters read `selectedInstanceId`, so their label must too. Using the
+  // thread's persisted provider here would attribute the new provider's
+  // quota to the old provider's name for the whole gap between picking a
+  // model and sending the next turn.
+  const usageProviderDisplayName = useMemo(() => {
+    const entry = providerStatuses.find((status) => status.instanceId === selectedInstanceId);
+    return entry
+      ? getProviderDisplayName(providerStatuses, entry.driver)
+      : formatProviderDisplayName(selectedInstanceId);
+  }, [providerStatuses, selectedInstanceId]);
   const activeThreadProviderDisplayName = useMemo(() => {
     if (!activeThreadModelSelection) return null;
     const entry = providerStatuses.find(
@@ -3253,6 +3267,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   compact={isComposerPrimaryActionsCompact}
                   activeContextWindow={activeContextWindow}
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
+                  usageProviderDisplayName={usageProviderDisplayName}
                   usageWindows={usageWindows}
                   usageUpdatedAt={usageUpdatedAt}
                   onRequestUsageRefresh={requestUsageRefresh}
