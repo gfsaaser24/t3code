@@ -192,8 +192,10 @@ describe("ComposerPrimaryActions", () => {
     // The actual "locked containment": if the box changed with the orb, the
     // button would still jump at turn boundaries.
     const slot = /<div class="(relative isolate[^"]*)"/;
-    expect(renderStandaloneStop().match(slot)?.[1]).toBe(
-      renderStandaloneStop({ withActivityOrb: true }).match(slot)?.[1],
-    );
+    const withoutOrb = renderStandaloneStop().match(slot)?.[1];
+    // Without this the test passes when *neither* side matches, which is
+    // exactly the regression it exists to catch.
+    expect(withoutOrb).toBeDefined();
+    expect(renderStandaloneStop({ withActivityOrb: true }).match(slot)?.[1]).toBe(withoutOrb);
   });
 });

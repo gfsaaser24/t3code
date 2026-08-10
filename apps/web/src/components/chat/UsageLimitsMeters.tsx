@@ -71,8 +71,11 @@ function UsageRing(props: { usedPercent: number }) {
   );
 }
 
-function UsageWindowSummary(props: { window: ProviderUsageWindow; nowMs: number }) {
-  const resetLabel = formatUsageResetLabel(props.window.resetsAt, props.nowMs);
+function UsageWindowSummary(props: { window: ProviderUsageWindow; nowMs: number | null }) {
+  // `nowMs` stays null until the popover opens. Measuring the countdown
+  // against epoch zero instead would render every reset as decades past.
+  const resetLabel =
+    props.nowMs === null ? null : formatUsageResetLabel(props.window.resetsAt, props.nowMs);
   return (
     <div className="flex items-center justify-between gap-3 text-[11px] leading-4">
       <span className="text-secondary-label">{props.window.label}</span>
@@ -107,8 +110,8 @@ function UsageMeterButton(props: {
   // this coarse ("in 2h 15m", "as of 12m ago"). Reading the clock on open is
   // the only moment the numbers are actually looked at.
   const [openedAtMs, setOpenedAtMs] = useState<number | null>(null);
-  const nowMs = openedAtMs ?? 0;
-  const staleLabel = openedAtMs === null ? null : formatUsageUpdatedAtLabel(props.updatedAt, nowMs);
+  const staleLabel =
+    openedAtMs === null ? null : formatUsageUpdatedAtLabel(props.updatedAt, openedAtMs);
 
   return (
     <Popover
@@ -150,7 +153,7 @@ function UsageMeterButton(props: {
           <div className="font-medium text-muted-foreground text-xs">{props.title}</div>
           <div className="flex flex-col gap-1">
             {props.windows.map((window) => (
-              <UsageWindowSummary key={window.id} window={window} nowMs={nowMs} />
+              <UsageWindowSummary key={window.id} window={window} nowMs={openedAtMs} />
             ))}
           </div>
           {staleLabel ? (

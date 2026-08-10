@@ -21,10 +21,19 @@ import * as Option from "effect/Option";
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
-/** Coerce the many shapes a percentage arrives in, clamped to 0-100. */
+/**
+ * Coerce the many shapes a percentage arrives in, clamped to 0-100.
+ *
+ * Blank strings are rejected rather than coerced: `Number("")` is `0`, which
+ * would draw a confident "0% used" meter for a field the provider left empty.
+ */
 const readPercent = (value: unknown): number | null => {
   const parsed =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim().length > 0
+        ? Number(value)
+        : NaN;
   if (!Number.isFinite(parsed)) {
     return null;
   }

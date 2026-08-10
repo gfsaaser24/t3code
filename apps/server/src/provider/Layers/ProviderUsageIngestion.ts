@@ -71,7 +71,16 @@ export const ProviderUsageIngestionLive = Layer.effectDiscard(
           return;
         }
         yield* usageStore.set(instanceId, usage, "partial");
-      }),
+      }).pipe(
+        // Per event, not per subscription. `streamEvents` cannot fail and only
+        // ends when the service scope closes, so the fiber's real risk is a
+        // defect thrown while handling one event — which would otherwise take
+        // the whole feed down for the life of the process and leave every
+        // meter frozen with nothing logged at the point of failure. Same
+        // stance as the on-demand pull: a reading we cannot take is ambient,
+        // so drop it and keep listening.
+        Effect.ignoreCause({ log: true }),
+      ),
     ).pipe(Effect.forkScoped);
   }),
 );

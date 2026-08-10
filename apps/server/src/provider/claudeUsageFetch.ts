@@ -68,9 +68,17 @@ export const readAccessToken = (raw: string, nowMillis: number): string | null =
   }
   // Absent or unparseable `expiresAt` means "assume usable" — the endpoint
   // is the real authority and a 401 already degrades to blank meters.
+  //
+  // The stamp arrives in either epoch flavour depending on which CLI version
+  // wrote the file, and the 1e12 split is the same one `readIsoTimestamp`
+  // uses. Reading seconds as milliseconds would date every token to 1970 and
+  // permanently report "no token", which looks identical to being logged out.
   const expiresAt = credentials.expiresAt;
-  if (typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt <= nowMillis) {
-    return null;
+  if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
+    const expiresAtMillis = expiresAt < 1e12 ? expiresAt * 1000 : expiresAt;
+    if (expiresAtMillis <= nowMillis) {
+      return null;
+    }
   }
   return accessToken;
 };
