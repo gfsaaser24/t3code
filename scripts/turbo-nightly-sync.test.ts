@@ -9,16 +9,18 @@ import { assert, it } from "@effect/vitest";
 
 import {
   compareTurboNightlyTags,
-  createTurboDailyVersion,
-  createTurboMainSnapshotVersion,
+  compareTurboVersions,
   decodeTurboUpstreamState,
   findPathCollisions,
+  nextTurboVersion,
   renderTurboCollisionReport,
   renderTurboRegisteredRefStatus,
   renderTurboSuccessReport,
+  resolveTurboCutoffOverride,
   resolveTurboEasternCutoff,
   resolveTurboInboundUpdate,
   selectLatestNightlyRelease,
+  selectTurboVersionBase,
 } from "./turbo-nightly-sync.ts";
 
 const readWorkflow = (filename: string) =>
@@ -41,6 +43,33 @@ it("runs once at the 11 PM Eastern cutoff and names the dated Turbo release", ()
   assert.include(workflow, '--release-sequence "$GITHUB_RUN_NUMBER"');
   assert.include(workflow, '--title "T3 Turbo $CUTOFF_LABEL.exe"');
   assert.notInclude(workflow, 'cron: "20 */3 * * *"');
+});
+
+it("lets a manual dispatch pin the ingestion cutoff", () => {
+  const workflow = readTurboWorkflow();
+
+  assert.include(workflow, "cutoff_instant:");
+  assert.include(workflow, "TURBO_CUTOFF_INSTANT: ${{ inputs.cutoff_instant }}");
+});
+
+it("uses an explicit cutoff override only when one is supplied", () => {
+  // 2026-08-09 20:40 Eastern: mid-day, so the scheduled resolver would still be on 08-08.
+  assert.deepStrictEqual(
+    resolveTurboCutoffOverride("2026-08-10T00:40:00Z", "2026-08-10T00:45:00.000Z"),
+    {
+      cutoffDate: "2026-08-09",
+      cutoffLabel: "08-09-26",
+      cutoffInstant: "2026-08-10T00:40:00.000Z",
+    },
+  );
+  assert.strictEqual(
+    resolveTurboEasternCutoff("2026-08-10T00:40:00.000Z").cutoffDate,
+    "2026-08-08",
+  );
+  assert.throws(() =>
+    resolveTurboCutoffOverride("2026-08-10T00:40:00Z", "2026-08-09T00:00:00.000Z"),
+  );
+  assert.throws(() => resolveTurboCutoffOverride("not-an-instant", "2026-08-10T00:45:00.000Z"));
 });
 
 it("resolves the latest completed 11 PM Eastern cutoff across daylight-saving time", () => {
@@ -155,7 +184,7 @@ it("validates the durable upstream state", () => {
       mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
       nightlyTag: "v0.0.32-nightly.20260802.980",
       nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-      version: "0.0.32-nightly.20260802.980",
+      version: "0.0.39",
     }),
     {
       repository: "pingdotgg/t3code",
@@ -163,8 +192,20 @@ it("validates the durable upstream state", () => {
       mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
       nightlyTag: "v0.0.32-nightly.20260802.980",
       nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-      version: "0.0.32-nightly.20260802.980",
+      version: "0.0.39",
     },
+  );
+  // The recorded version is still upstream-derived until the first run on the fork's own line.
+  assert.strictEqual(
+    decodeTurboUpstreamState({
+      repository: "pingdotgg/t3code",
+      branch: "main",
+      mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      nightlyTag: "v0.0.33-nightly.20260809.1042",
+      nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
+      version: "0.0.33-nightly.20260809.1042",
+    }).version,
+    "0.0.33-nightly.20260809.1042",
   );
   assert.throws(() =>
     decodeTurboUpstreamState({
@@ -183,7 +224,7 @@ it("validates the durable upstream state", () => {
       mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
       nightlyTag: "v0.0.32-nightly.20260802.980",
       nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-      version: "0.0.32-nightly.20260802.980.turbo.0",
+      version: "0.0.39-turbo",
     }),
   );
   assert.deepInclude(
@@ -193,7 +234,7 @@ it("validates the durable upstream state", () => {
       mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
       nightlyTag: "v0.0.32-nightly.20260802.980",
       nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-      version: "0.0.32-nightly.20260802.980.turbo.20260804.42",
+      version: "0.0.39",
       cutoffDate: "2026-08-04",
       cutoffInstant: "2026-08-05T03:00:00.000Z",
     }),
@@ -209,144 +250,122 @@ it("validates the durable upstream state", () => {
       mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
       nightlyTag: "v0.0.32-nightly.20260802.980",
       nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-      version: "0.0.32-nightly.20260802.980.turbo.20260804.42",
+      version: "0.0.39",
       cutoffDate: "2026-08-03",
       cutoffInstant: "2026-08-05T03:00:00.000Z",
     }),
   );
 });
 
-it("generates deterministic Turbo versions for upstream main snapshots", () => {
-  assert.strictEqual(
-    createTurboMainSnapshotVersion({
-      releaseVersion: "0.0.32-nightly.20260802.980",
-      mainDistance: 0,
-    }),
-    "0.0.32-nightly.20260802.980",
-  );
-  assert.strictEqual(
-    createTurboMainSnapshotVersion({
-      releaseVersion: "0.0.32-nightly.20260802.980",
-      mainDistance: 3,
-    }),
-    "0.0.32-nightly.20260802.980.turbo.3",
-  );
-  assert.isAbove(
-    compareTurboNightlyTags(
-      "v0.0.32-nightly.20260802.980.turbo.3",
-      "v0.0.32-nightly.20260802.980.turbo.2",
-    ),
-    0,
-  );
+it("advances the fork's own version line by a single patch per build", () => {
+  assert.strictEqual(nextTurboVersion("0.0.38"), "0.0.39");
+  assert.strictEqual(nextTurboVersion("0.0.39"), "0.0.40");
+  assert.strictEqual(nextTurboVersion("1.2.9"), "1.2.10");
+  assert.throws(() => nextTurboVersion("0.0.33-nightly.20260809.1042"));
+  assert.isAbove(compareTurboVersions("0.0.40", "0.0.39"), 0);
+  assert.strictEqual(compareTurboVersions("0.0.39", "0.0.39"), 0);
 });
 
-it("generates a unique semver release for each Eastern cutoff and workflow run", () => {
+it("counts up from the fork manifest and never moves the version backward", () => {
+  // Migration: the recorded version is still the legacy upstream-derived string, so the manifest
+  // counter wins and the first run on the new scheme publishes 0.0.39.
   assert.strictEqual(
-    createTurboDailyVersion({
-      releaseVersion: "0.0.32-nightly.20260803.986",
-      cutoffDate: "2026-08-04",
-      releaseSequence: 42,
+    selectTurboVersionBase({
+      manifestVersion: "0.0.38",
+      stateVersion: "0.0.33-nightly.20260809.1042",
     }),
-    "0.0.32-nightly.20260803.986.turbo.20260804.42",
+    "0.0.38",
+  );
+  assert.strictEqual(
+    selectTurboVersionBase({ manifestVersion: "0.0.38", stateVersion: "0.0.41" }),
+    "0.0.41",
+  );
+  assert.strictEqual(
+    selectTurboVersionBase({ manifestVersion: "0.0.38", stateVersion: "0.0.30" }),
+    "0.0.38",
   );
   assert.throws(() =>
-    createTurboDailyVersion({
-      releaseVersion: "0.0.32-nightly.20260803.986",
-      cutoffDate: "08-04-2026",
-      releaseSequence: 42,
-    }),
+    selectTurboVersionBase({ manifestVersion: "not-a-version", stateVersion: "0.0.38" }),
   );
 });
 
-it("builds once per daily cutoff even when official source is unchanged", () => {
+it("publishes the next fork version only when upstream actually moved", () => {
   const state = {
     repository: "pingdotgg/t3code",
     branch: "main",
     mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-    nightlyTag: "v0.0.32-nightly.20260803.986",
+    nightlyTag: "v0.0.33-nightly.20260809.1042",
     nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-    version: "0.0.32-nightly.20260803.986",
+    version: "0.0.33-nightly.20260809.1042",
   };
   const release = {
     tag: state.nightlyTag,
-    version: state.version,
-    publishedAt: "2026-08-03T02:00:00Z",
+    version: "0.0.33-nightly.20260809.1042",
+    publishedAt: "2026-08-09T02:00:00Z",
   };
 
-  const daily = resolveTurboInboundUpdate({
+  const moved = resolveTurboInboundUpdate({
     state,
+    release,
+    mainSha: "ffffffffffffffffffffffffffffffffffffffff",
+    nightlySha: state.nightlySha,
+    currentVersion: "0.0.38",
+    cutoffDate: "2026-08-09",
+  });
+  assert.strictEqual(moved.has_update, "true");
+  assert.strictEqual(moved.version, "0.0.39");
+  assert.strictEqual(moved.tag, "v0.0.39");
+  assert.strictEqual(moved.old_version, state.version);
+  assert.strictEqual(moved.cutoff_label, "08-09-26");
+
+  // Upstream stood still: no build, and the recorded version must not drift.
+  const still = resolveTurboInboundUpdate({
+    state: { ...state, version: "0.0.39" },
     release,
     mainSha: state.mainSha,
     nightlySha: state.nightlySha,
-    mainDistance: 0,
-    cutoffDate: "2026-08-04",
-    releaseSequence: 42,
+    currentVersion: "0.0.39",
   });
-  assert.strictEqual(daily.has_update, "true");
-  assert.strictEqual(daily.version, "0.0.32-nightly.20260803.986.turbo.20260804.42");
-  assert.strictEqual(daily.cutoff_label, "08-04-26");
+  assert.strictEqual(still.has_update, "false");
+  assert.strictEqual(still.version, "0.0.39");
 
+  // A later run continues from the recorded value rather than the lagging manifest.
   assert.strictEqual(
     resolveTurboInboundUpdate({
-      state: { ...state, version: daily.version, cutoffDate: "2026-08-04" },
+      state: { ...state, version: "0.0.41" },
       release,
-      mainSha: state.mainSha,
+      mainSha: "ffffffffffffffffffffffffffffffffffffffff",
       nightlySha: state.nightlySha,
-      mainDistance: 0,
-      cutoffDate: "2026-08-04",
-      releaseSequence: 42,
-    }).has_update,
-    "false",
+      currentVersion: "0.0.38",
+    }).version,
+    "0.0.42",
   );
 });
 
-it("tracks upstream main commits even when the official release tag is unchanged", () => {
+it("refuses to move the recorded official Nightly anchor backward", () => {
   const state = {
     repository: "pingdotgg/t3code",
     branch: "main",
     mainSha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-    nightlyTag: "v0.0.32-nightly.20260802.980",
+    nightlyTag: "v0.0.33-nightly.20260809.1042",
     nightlySha: "e60821f0e0d82a5d671ca3b94719c49d333921c8",
-    version: "0.0.32-nightly.20260802.980",
-  };
-  const release = {
-    tag: state.nightlyTag,
-    version: state.version,
-    publishedAt: "2026-08-02T09:56:51Z",
+    version: "0.0.39",
   };
 
-  assert.deepStrictEqual(
-    resolveTurboInboundUpdate({
-      state,
-      release,
-      mainSha: "ffffffffffffffffffffffffffffffffffffffff",
-      nightlySha: state.nightlySha,
-      mainDistance: 1,
-    }),
-    {
-      has_update: "true",
-      tag: "v0.0.32-nightly.20260802.980.turbo.1",
-      version: "0.0.32-nightly.20260802.980.turbo.1",
-      official_tag: state.nightlyTag,
-      nightly_sha: state.nightlySha,
-      source_sha: "ffffffffffffffffffffffffffffffffffffffff",
-      old_tag: state.nightlyTag,
-      old_nightly_sha: state.nightlySha,
-      old_main_sha: state.mainSha,
-      old_version: state.version,
-      repository: state.repository,
-      branch: state.branch,
-    },
-  );
-  assert.strictEqual(
-    resolveTurboInboundUpdate({
-      state,
-      release,
-      mainSha: state.mainSha,
-      nightlySha: state.nightlySha,
-      mainDistance: 0,
-    }).has_update,
-    "false",
+  assert.throws(
+    () =>
+      resolveTurboInboundUpdate({
+        state,
+        release: {
+          tag: "v0.0.33-nightly.20260808.1041",
+          version: "0.0.33-nightly.20260808.1041",
+          publishedAt: "2026-08-08T02:00:00Z",
+        },
+        mainSha: "ffffffffffffffffffffffffffffffffffffffff",
+        nightlySha: state.nightlySha,
+        currentVersion: "0.0.38",
+      }),
+    /backward/u,
   );
 });
 
@@ -549,6 +568,7 @@ it("resolves update metadata through the CLI", () => {
         version: "0.0.32-nightly.20260802.980",
       }),
     );
+    const currentVersion = "0.0.38";
     NodeFS.writeFileSync(
       releasesPath,
       JSON.stringify([
@@ -586,13 +606,15 @@ it("resolves update metadata through the CLI", () => {
         mainPath,
         "--compare",
         comparePath,
+        "--current-version",
+        currentVersion,
       ],
       { encoding: "utf8" },
     );
     assert.deepStrictEqual(JSON.parse(stdout), {
       has_update: "true",
-      tag: "v0.0.33-nightly.20260803.1.turbo.2",
-      version: "0.0.33-nightly.20260803.1.turbo.2",
+      tag: "v0.0.39",
+      version: "0.0.39",
       official_tag: "v0.0.33-nightly.20260803.1",
       nightly_sha: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       source_sha: "ffffffffffffffffffffffffffffffffffffffff",

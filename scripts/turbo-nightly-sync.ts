@@ -29,10 +29,16 @@ export interface TurboNightlyRelease {
   readonly publishedAt: string;
 }
 
+// Upstream's official Nightly tags. This describes `pingdotgg/t3code`, never our own releases.
 const NIGHTLY_TAG_PATTERN = /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+)$/u;
-const TURBO_NIGHTLY_TAG_PATTERN =
-  /^v(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+(?:\.\d+)?)?)$/u;
-const TURBO_NIGHTLY_VERSION_PATTERN =
+// T3 Turbo publishes on its own version line: a plain MAJOR.MINOR.PATCH counter that gains one
+// patch per published build and carries no upstream version component.
+const TURBO_NIGHTLY_TAG_PATTERN = /^v(\d+)\.(\d+)\.(\d+)$/u;
+const TURBO_NIGHTLY_VERSION_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/u;
+// The version recorded before the fork moved to its own line was derived from upstream's Nightly
+// tag. It is accepted on read until the first run on the new scheme rewrites it, and it is treated
+// as lower than any plain semver so base selection falls back to the fork's manifest version.
+const LEGACY_TURBO_VERSION_PATTERN =
   /^\d+\.\d+\.\d+-nightly\.\d{8}\.\d+(?:\.turbo\.\d+(?:\.\d+)?)?$/u;
 const CUTOFF_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
@@ -119,6 +125,19 @@ function easternLocalTimeToInstant(parts: ZonedDateTimeParts): number {
   return candidate;
 }
 
+function formatCalendarDate(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function formatCutoffLabel(cutoffDate: string): string {
+  return `${cutoffDate.slice(5, 7)}-${cutoffDate.slice(8, 10)}-${cutoffDate.slice(2, 4)}`;
+}
+
+function easternCalendarDate(timestamp: number): string {
+  const parts = getEasternDateTimeParts(timestamp);
+  return formatCalendarDate(parts.year, parts.month, parts.day);
+}
+
 export function resolveTurboEasternCutoff(now: string | Date = new Date()): {
   readonly cutoffDate: string;
   readonly cutoffLabel: string;
@@ -139,11 +158,38 @@ export function resolveTurboEasternCutoff(now: string | Date = new Date()): {
   const cutoffInstant = new Date(
     easternLocalTimeToInstant({ year, month, day, hour: 23, minute: 0, second: 0 }),
   ).toISOString();
-  const cutoffDate = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const cutoffDate = formatCalendarDate(year, month, day);
+  return { cutoffDate, cutoffLabel: formatCutoffLabel(cutoffDate), cutoffInstant };
+}
+
+/**
+ * Resolves the cutoff from an explicit instant supplied by a manual run, so an operator can ingest
+ * before the scheduled 11 PM Eastern boundary. The cutoff date is the Eastern calendar date the
+ * instant falls on. Scheduled runs never take this path.
+ */
+export function resolveTurboCutoffOverride(
+  cutoffInstant: string,
+  now: string | Date = new Date(),
+): {
+  readonly cutoffDate: string;
+  readonly cutoffLabel: string;
+  readonly cutoffInstant: string;
+} {
+  const timestamp = Date.parse(cutoffInstant);
+  if (!Number.isFinite(timestamp)) {
+    throw new Error("Turbo cutoff override must be an ISO-8601 instant.");
+  }
+  const nowTimestamp =
+    typeof now === "string" ? decodeInstant(now, "Turbo cutoff reference time") : now.getTime();
+  if (!Number.isFinite(nowTimestamp)) throw new Error("Turbo cutoff reference time is invalid.");
+  if (timestamp > nowTimestamp) {
+    throw new Error("Turbo cutoff override cannot be in the future.");
+  }
+  const cutoffDate = easternCalendarDate(timestamp);
   return {
     cutoffDate,
-    cutoffLabel: `${cutoffDate.slice(5, 7)}-${cutoffDate.slice(8, 10)}-${cutoffDate.slice(2, 4)}`,
-    cutoffInstant,
+    cutoffLabel: formatCutoffLabel(cutoffDate),
+    cutoffInstant: new Date(timestamp).toISOString(),
   };
 }
 
@@ -151,15 +197,16 @@ function validateCutoffDateAndInstant(cutoffDate: string, cutoffInstant: string)
   if (!CUTOFF_DATE_PATTERN.test(cutoffDate)) {
     throw new Error("Turbo cutoff date must use YYYY-MM-DD.");
   }
-  const resolved = resolveTurboEasternCutoff(cutoffInstant);
-  if (resolved.cutoffDate !== cutoffDate || resolved.cutoffInstant !== cutoffInstant) {
-    throw new Error("Turbo cutoff date and instant must identify the same 11 PM Eastern boundary.");
+  const timestamp = decodeInstant(cutoffInstant, "Turbo cutoff instant");
+  if (easternCalendarDate(timestamp) !== cutoffDate) {
+    throw new Error("Turbo cutoff date and instant must identify the same Eastern calendar day.");
   }
 }
 
+/** Orders upstream's official Nightly tags. The fork's own versions use {@link compareTurboVersions}. */
 export function compareTurboNightlyTags(left: string, right: string): number {
-  if (!TURBO_NIGHTLY_TAG_PATTERN.test(left) || !TURBO_NIGHTLY_TAG_PATTERN.test(right)) {
-    throw new Error("Cannot compare invalid Turbo nightly tags.");
+  if (!NIGHTLY_TAG_PATTERN.test(left) || !NIGHTLY_TAG_PATTERN.test(right)) {
+    throw new Error("Cannot compare invalid official nightly tags.");
   }
   const leftParts = left.match(/\d+/gu)?.map(Number) ?? [];
   const rightParts = right.match(/\d+/gu)?.map(Number) ?? [];
@@ -224,51 +271,53 @@ export function decodeTurboUpstreamState(value: unknown): TurboUpstreamState {
   if (!SHA_PATTERN.test(state.mainSha) || !SHA_PATTERN.test(state.nightlySha)) {
     throw new Error("Turbo upstream state has an invalid commit sha.");
   }
-  if (!TURBO_NIGHTLY_VERSION_PATTERN.test(state.version)) {
-    throw new Error(`Turbo upstream state has an invalid published version: ${state.version}`);
-  }
-  const nightlyVersion = state.nightlyTag.slice(1);
-  const snapshotSuffix = state.version.slice(nightlyVersion.length);
   if (
-    state.version !== nightlyVersion &&
-    (!state.version.startsWith(nightlyVersion) ||
-      !/^\.turbo\.[1-9]\d*(?:\.[1-9]\d*)?$/u.test(snapshotSuffix))
+    !TURBO_NIGHTLY_VERSION_PATTERN.test(state.version) &&
+    !LEGACY_TURBO_VERSION_PATTERN.test(state.version)
   ) {
-    throw new Error("Turbo published version must derive from its recorded Nightly tag.");
+    throw new Error(`Turbo upstream state has an invalid published version: ${state.version}`);
   }
   return state;
 }
 
-export function createTurboMainSnapshotVersion(input: {
-  readonly releaseVersion: string;
-  readonly mainDistance: number;
-}): string {
-  if (!NIGHTLY_TAG_PATTERN.test(`v${input.releaseVersion}`)) {
-    throw new Error(`Invalid official Nightly version: ${input.releaseVersion}`);
+/** Orders two versions on the fork's own plain-semver line. */
+export function compareTurboVersions(left: string, right: string): number {
+  const leftParts = TURBO_NIGHTLY_VERSION_PATTERN.exec(left);
+  const rightParts = TURBO_NIGHTLY_VERSION_PATTERN.exec(right);
+  if (!leftParts || !rightParts) {
+    throw new Error("Cannot compare invalid Turbo versions.");
   }
-  if (!Number.isSafeInteger(input.mainDistance) || input.mainDistance < 0) {
-    throw new Error("Upstream main distance must be a non-negative integer.");
+  for (let index = 1; index <= 3; index += 1) {
+    const difference = Number(leftParts[index]) - Number(rightParts[index]);
+    if (difference !== 0) return difference;
   }
-  return input.mainDistance === 0
-    ? input.releaseVersion
-    : `${input.releaseVersion}.turbo.${input.mainDistance}`;
+  return 0;
 }
 
-export function createTurboDailyVersion(input: {
-  readonly releaseVersion: string;
-  readonly cutoffDate: string;
-  readonly releaseSequence: number;
+/** Every published Turbo build is a single patch increase over the previous one. */
+export function nextTurboVersion(current: string): string {
+  const parts = TURBO_NIGHTLY_VERSION_PATTERN.exec(current);
+  if (!parts) throw new Error(`Invalid Turbo version: ${current}`);
+  return `${parts[1]}.${parts[2]}.${Number(parts[3]) + 1}`;
+}
+
+/**
+ * Picks the version the next build counts up from. The fork's manifests are authoritative; the
+ * recorded state wins only when it is a plain semver ahead of them, so the counter never moves
+ * backward. A legacy upstream-derived `state.version` is treated as lower than any plain semver,
+ * which is what makes the first run on the new scheme continue from the manifest.
+ */
+export function selectTurboVersionBase(input: {
+  readonly manifestVersion: string;
+  readonly stateVersion: string;
 }): string {
-  if (!NIGHTLY_TAG_PATTERN.test(`v${input.releaseVersion}`)) {
-    throw new Error(`Invalid official Nightly version: ${input.releaseVersion}`);
+  if (!TURBO_NIGHTLY_VERSION_PATTERN.test(input.manifestVersion)) {
+    throw new Error(`Invalid Turbo manifest version: ${input.manifestVersion}`);
   }
-  const cutoffMatch = CUTOFF_DATE_PATTERN.exec(input.cutoffDate);
-  if (!cutoffMatch) throw new Error("Turbo cutoff date must use YYYY-MM-DD.");
-  const cutoff = `${cutoffMatch[1]}${cutoffMatch[2]}${cutoffMatch[3]}`;
-  if (!Number.isSafeInteger(input.releaseSequence) || input.releaseSequence <= 0) {
-    throw new Error("Turbo release sequence must be a positive integer.");
-  }
-  return `${input.releaseVersion}.turbo.${cutoff}.${input.releaseSequence}`;
+  return TURBO_NIGHTLY_VERSION_PATTERN.test(input.stateVersion) &&
+    compareTurboVersions(input.stateVersion, input.manifestVersion) > 0
+    ? input.stateVersion
+    : input.manifestVersion;
 }
 
 export function resolveTurboInboundUpdate(input: {
@@ -276,9 +325,9 @@ export function resolveTurboInboundUpdate(input: {
   readonly release: TurboNightlyRelease;
   readonly mainSha: string;
   readonly nightlySha: string;
-  readonly mainDistance: number;
+  /** The fork's current published version, read from `apps/desktop/package.json`. */
+  readonly currentVersion: string;
   readonly cutoffDate?: string;
-  readonly releaseSequence?: number;
 }) {
   if (!/^[0-9a-f]{40}$/u.test(input.mainSha) || !/^[0-9a-f]{40}$/u.test(input.nightlySha)) {
     throw new Error("Official inbound metadata has an invalid commit sha.");
@@ -291,28 +340,29 @@ export function resolveTurboInboundUpdate(input: {
     throw new Error("The recorded official Nightly tag now points at a different commit.");
   }
 
-  if ((input.cutoffDate === undefined) !== (input.releaseSequence === undefined)) {
-    throw new Error("Turbo daily releases require both cutoffDate and releaseSequence.");
+  // Upstream movement alone decides whether we build. The fork's version always advances, so
+  // including it here would make every run publish even when upstream stood still.
+  const hasUpdate = releaseOrder > 0 || input.mainSha !== input.state.mainSha;
+  const version = hasUpdate
+    ? nextTurboVersion(
+        selectTurboVersionBase({
+          manifestVersion: input.currentVersion,
+          stateVersion: input.state.version,
+        }),
+      )
+    : input.state.version;
+  if (hasUpdate && !TURBO_NIGHTLY_TAG_PATTERN.test(`v${version}`)) {
+    throw new Error(`Refusing to publish a tag off the Turbo version line: v${version}`);
   }
-  const version =
-    input.cutoffDate === undefined || input.releaseSequence === undefined
-      ? createTurboMainSnapshotVersion({
-          releaseVersion: input.release.version,
-          mainDistance: input.mainDistance,
-        })
-      : createTurboDailyVersion({
-          releaseVersion: input.release.version,
-          cutoffDate: input.cutoffDate,
-          releaseSequence: input.releaseSequence,
-        });
-  const hasUpdate =
-    releaseOrder > 0 || input.mainSha !== input.state.mainSha || version !== input.state.version;
-  const versionOrder = compareTurboNightlyTags(`v${version}`, `v${input.state.version}`);
-  if (hasUpdate && versionOrder <= 0) {
-    throw new Error("Refusing to publish an upstream main snapshot without advancing the version.");
+  if (
+    hasUpdate &&
+    TURBO_NIGHTLY_VERSION_PATTERN.test(input.state.version) &&
+    compareTurboVersions(version, input.state.version) <= 0
+  ) {
+    throw new Error("Refusing to publish a Turbo build without advancing the version.");
   }
-  if (!hasUpdate && versionOrder !== 0) {
-    throw new Error("Recorded Turbo version does not match the current upstream snapshot.");
+  if (!hasUpdate && version !== input.state.version) {
+    throw new Error("Recorded Turbo version must not change when upstream has not moved.");
   }
   return {
     has_update: String(hasUpdate),
@@ -508,6 +558,21 @@ function readJson(path: string): unknown {
   return JSON.parse(NodeFS.readFileSync(path, "utf8"));
 }
 
+/**
+ * The fork's current published version. `apps/desktop/package.json` is the authoritative manifest;
+ * `--current-version` overrides it so the CLI stays testable outside a checkout.
+ */
+function readTurboManifestVersion(explicit: string | undefined): string {
+  if (explicit !== undefined) return explicit;
+  const manifest = readJson(
+    NodePath.resolve(NodePath.dirname(import.meta.filename), "../apps/desktop/package.json"),
+  );
+  if (!isRecord(manifest) || typeof manifest.version !== "string") {
+    throw new Error("apps/desktop/package.json must contain a version string.");
+  }
+  return manifest.version;
+}
+
 function readPathList(path: string | undefined): ReadonlyArray<string> {
   if (!path || !NodeFS.existsSync(path)) return [];
   return NodeFS.readFileSync(path, "utf8")
@@ -573,9 +638,19 @@ function runLatest(values: Record<string, string | boolean | undefined>): void {
 }
 
 function runCutoff(values: Record<string, string | boolean | undefined>): void {
-  const cutoff = resolveTurboEasternCutoff(
-    typeof values.now === "string" ? values.now : new Date(),
-  );
+  const now = typeof values.now === "string" ? values.now : new Date();
+  // A manual dispatch may pin the cutoff so it can ingest before the scheduled 11 PM Eastern
+  // boundary. Scheduled runs leave both the flag and the environment variable empty.
+  const override = [
+    typeof values["cutoff-instant"] === "string" ? values["cutoff-instant"] : undefined,
+    process.env.TURBO_CUTOFF_INSTANT,
+  ]
+    .map((value) => value?.trim())
+    .find((value) => Boolean(value));
+  const cutoff =
+    override === undefined
+      ? resolveTurboEasternCutoff(now)
+      : resolveTurboCutoffOverride(override, now);
   const output = {
     cutoff_date: cutoff.cutoffDate,
     cutoff_label: cutoff.cutoffLabel,
@@ -613,17 +688,15 @@ function runResolve(values: Record<string, string | boolean | undefined>): void 
   if (typeof cutoffDate === "string" && typeof cutoffInstant === "string") {
     validateCutoffDateAndInstant(cutoffDate, cutoffInstant);
   }
-  const releaseSequenceValue = values["release-sequence"];
-  const releaseSequence =
-    typeof releaseSequenceValue === "string" ? Number(releaseSequenceValue) : undefined;
   const output = resolveTurboInboundUpdate({
     state,
     release,
     mainSha,
     nightlySha: comparison.nightlySha,
-    mainDistance: comparison.distance,
+    currentVersion: readTurboManifestVersion(
+      typeof values["current-version"] === "string" ? values["current-version"] : undefined,
+    ),
     ...(typeof cutoffDate === "string" ? { cutoffDate } : {}),
-    ...(releaseSequence === undefined ? {} : { releaseSequence }),
   });
   if (values["github-output"] === true) appendGitHubOutput(output);
   else process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -717,6 +790,8 @@ if (isMain) {
       compare: { type: "string" },
       "cutoff-date": { type: "string" },
       "cutoff-instant": { type: "string" },
+      "current-version": { type: "string" },
+      // Accepted for workflow compatibility; the fork's version line no longer uses a run sequence.
       "release-sequence": { type: "string" },
       now: { type: "string" },
       "github-output": { type: "boolean" },

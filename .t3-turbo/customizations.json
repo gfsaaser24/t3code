@@ -1080,7 +1080,17 @@
             "Create nightly completion report",
             "T3CODE_DESKTOP_UPDATE_REPOSITORY",
             "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",
-            "--force-with-lease"
+            "--force-with-lease",
+            "TURBO_CUTOFF_INSTANT: ${{ inputs.cutoff_instant }}"
+          ]
+        },
+        {
+          "path": "scripts/turbo-nightly-sync.ts",
+          "markers": [
+            "nextTurboVersion",
+            "selectTurboVersionBase",
+            "resolveTurboCutoffOverride",
+            "Refusing to move the recorded official Nightly release backward."
           ]
         },
         {
