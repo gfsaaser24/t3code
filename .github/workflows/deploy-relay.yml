@@ -1,9 +1,10 @@
 name: Deploy T3 Connect relay
 
+# T3 Turbo: production relay deploys run from the fork's product mainline (`turbo`), where the
+# relay source actually changes. This branch has diverged from it, so a push-triggered deploy here
+# would ship stale relay code over the live one — it is how the speed-plan relay work stayed out of
+# production. Manual dispatch only.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
