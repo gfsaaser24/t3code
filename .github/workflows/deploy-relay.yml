@@ -1,9 +1,17 @@
 name: Deploy T3 Connect relay
 
+# T3 Turbo: the fork's product mainline is `turbo`, not `main`, and the relay source only ever
+# changes there. Deploying on `main` pushes shipped whatever relay code `main` happened to carry,
+# which silently reverted the fork's relay work; the two branches have diverged badly enough that
+# `main` lacked every relay change from the speed-plan waves. The path filter keeps unrelated
+# product pushes from redeploying production.
 on:
   push:
     branches:
-      - main
+      - turbo
+    paths:
+      - "infra/relay/**"
+      - ".github/workflows/deploy-relay.yml"
   workflow_dispatch:
 
 permissions:

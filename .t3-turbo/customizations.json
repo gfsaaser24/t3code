@@ -1040,7 +1040,9 @@
           "markers": [
             "name: Detect Cloudflare configuration",
             "if: steps.cloudflare_config.outputs.enabled == 'true'",
-            "RELAY_TUNNEL_ZONE_NAME"
+            "RELAY_TUNNEL_ZONE_NAME",
+            "      - turbo",
+            "      - \"infra/relay/**\""
           ]
         }
       ]
