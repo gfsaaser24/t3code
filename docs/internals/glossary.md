@@ -118,7 +118,7 @@ A point-in-time view of state. The word is used in multiple layers, including or
 
 #### Usage window
 
-One quota bucket a provider account is metered against — Claude's 5-hour session window, its weekly window, its weekly Fable window, Codex's primary and secondary windows. Modelled provider-agnostically in [the server contracts][21] as `{ id, label, usedPercent, resetsAt }`, so clients map over the list rather than branching per provider. Provider-shaped payloads are flattened into it by `normalizeClaudeUsage` / `normalizeCodexUsage` in [usageLimits.ts][20]. Readings are volatile and never persisted: two feeds write them, the free `account.rate-limits.updated` turn events and a debounced on-demand pull, and the newer reading always wins. Cursor, Grok, and OpenCode report none.
+One quota bucket a provider account is metered against — Claude's 5-hour session window, its weekly window, its weekly Fable window, Codex's primary and secondary windows. Modelled provider-agnostically in [the server contracts][26] as `{ id, label, usedPercent, resetsAt }`, so clients map over the list rather than branching per provider. Provider-shaped payloads are flattened into it by `normalizeClaudeUsage` / `normalizeCodexUsage` in [usageLimits.ts][25]. Readings are volatile and never persisted: two feeds write them, the free `account.rate-limits.updated` turn events and a debounced on-demand pull, and the newer reading always wins. Cursor, Grok, and OpenCode report none.
 
 ### Checkpointing
 
@@ -178,10 +178,10 @@ The file patch and changed-file summary for one turn. It is usually computed in 
 [17]: ../../apps/server/src/provider/Layers/CodexAdapter.ts
 [18]: ../user/permission-modes.md
 [19]: ../../apps/server/src/checkpointing/CheckpointStore.ts
-[20]: ../../apps/server/src/provider/usageLimits.ts
-[21]: ../../packages/contracts/src/server.ts
 [20]: ../../apps/server/src/checkpointing/CheckpointDiffQuery.ts
 [21]: ../../apps/server/src/persistence/Services/ProjectionCheckpoints.ts
 [22]: ../../apps/server/src/checkpointing/Utils.ts
 [23]: ../../apps/server/src/checkpointing/Diffs.ts
 [24]: ./overview.md
+[25]: ../../apps/server/src/provider/usageLimits.ts
+[26]: ../../packages/contracts/src/server.ts

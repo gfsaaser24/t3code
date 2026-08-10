@@ -72,6 +72,13 @@ describe("normalizeClaudeUsage", () => {
     expect(normalizeClaudeUsage({}, UPDATED_AT)).toBeNull();
     expect(normalizeClaudeUsage({ five_hour: { utilization: "abc" } }, UPDATED_AT)).toBeNull();
   });
+
+  it("treats a blank percentage as absent rather than zero", () => {
+    // `Number("")` is 0, which would draw a confident empty meter for a
+    // bucket the provider declined to report.
+    expect(normalizeClaudeUsage({ five_hour: { utilization: "" } }, UPDATED_AT)).toBeNull();
+    expect(normalizeClaudeUsage({ five_hour: { utilization: "  " } }, UPDATED_AT)).toBeNull();
+  });
 });
 
 /**
