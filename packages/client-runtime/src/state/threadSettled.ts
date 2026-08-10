@@ -233,6 +233,15 @@ export function effectiveSettled(
     readonly now: string;
     readonly autoSettleAfterDays: number | null;
     readonly changeRequestState?: ChangeRequestStateLike | null;
+    /**
+     * The change request's last-updated time (ISO). An upper bound on when a
+     * merged/closed PR completed: instant PR auto-settle applies only when
+     * the thread has no activity NEWER than this — work continuing after the
+     * merge falls back to the inactivity rule instead of vanishing mid-burst.
+     * Absent (old callers / no data): every merged/closed PR settles
+     * instantly, the pre-gate behavior.
+     */
+    readonly changeRequestUpdatedAt?: string | null;
   },
 ): boolean {
   // Blocked work must remain visible even when a user explicitly settled it.
@@ -258,17 +267,30 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
+  const lastActivityAt = threadLastActivityAt(shell);
   if (options.changeRequestState === "merged" || options.changeRequestState === "closed") {
-    return true;
+    // Instant settle is for threads that went quiet at the merge/close.
+    // Activity newer than the PR's last update is the user still working in
+    // the thread AFTER completion — follow-up fixes, a new task on the same
+    // branch — and insta-settling would hide the thread the moment each
+    // burst ends. Such threads fall through to the inactivity rule (an open
+    // PR no longer blocks it: this one is done). Without a timestamp the
+    // comparison is unknowable and the original instant behavior applies.
+    const completedAtMs = Date.parse(options.changeRequestUpdatedAt ?? "");
+    const activityAfterCompletion =
+      !Number.isNaN(completedAtMs) &&
+      lastActivityAt !== null &&
+      Date.parse(lastActivityAt) > completedAtMs;
+    if (!activityAfterCompletion) return true;
+  } else if (options.changeRequestState === "open") {
+    // An open PR is unfinished business regardless of how long the thread
+    // has been quiet: review can take days, and hiding the thread would
+    // bury the work waiting on it. Only merge/close (above) or an explicit
+    // user settle resolves it.
+    return false;
   }
-  // An open PR is unfinished business regardless of how long the thread has
-  // been quiet: review can take days, and hiding the thread would bury the
-  // work waiting on it. Only merge/close (above) or an explicit user settle
-  // resolves it.
-  if (options.changeRequestState === "open") return false;
   if (options.autoSettleAfterDays === null) return false;
 
-  const lastActivityAt = threadLastActivityAt(shell);
   if (lastActivityAt === null) return false;
 
   // threadLastActivityAt only returns candidates whose Date.parse beat

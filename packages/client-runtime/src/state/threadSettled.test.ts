@@ -178,6 +178,67 @@ describe("effectiveSettled", () => {
     }
   });
 
+  it("holds a completed-PR thread active while activity is newer than the PR", () => {
+    // Work continuing after the merge — follow-up fixes in the same worktree —
+    // must not vanish the moment each burst ends. With the PR's timestamp
+    // available, instant settle applies only when the thread went quiet at or
+    // before completion; newer activity falls back to the inactivity rule.
+    const completedAt = "2026-04-08T00:00:00.000Z";
+    for (const changeRequestState of ["merged", "closed"] as const) {
+      const activeAfterMerge = makeShell({ activityAt: FRESH });
+      expect(
+        effectiveSettled(activeAfterMerge, {
+          now: NOW,
+          autoSettleAfterDays: 3,
+          changeRequestState,
+          changeRequestUpdatedAt: completedAt,
+        }),
+      ).toBe(false);
+
+      // Post-merge activity that then goes stale settles via inactivity —
+      // a completed PR no longer blocks that path the way an open one does.
+      const staleAfterMerge = makeShell({ activityAt: STALE });
+      expect(
+        effectiveSettled(staleAfterMerge, {
+          now: NOW,
+          autoSettleAfterDays: 3,
+          changeRequestState,
+          changeRequestUpdatedAt: "2026-04-05T00:00:00.000Z",
+        }),
+      ).toBe(true);
+      // ...but never when inactivity auto-settle is disabled.
+      expect(
+        effectiveSettled(staleAfterMerge, {
+          now: NOW,
+          autoSettleAfterDays: null,
+          changeRequestState,
+          changeRequestUpdatedAt: "2026-04-05T00:00:00.000Z",
+        }),
+      ).toBe(false);
+
+      // Quiet since before completion: instant settle, as always.
+      const quietSinceMerge = makeShell({ activityAt: "2026-04-07T00:00:00.000Z" });
+      expect(
+        effectiveSettled(quietSinceMerge, {
+          now: NOW,
+          autoSettleAfterDays: null,
+          changeRequestState,
+          changeRequestUpdatedAt: completedAt,
+        }),
+      ).toBe(true);
+
+      // No timestamp (old callers / providers without one): the original
+      // instant behavior holds even with fresh activity.
+      expect(
+        effectiveSettled(activeAfterMerge, {
+          now: NOW,
+          autoSettleAfterDays: null,
+          changeRequestState,
+        }),
+      ).toBe(true);
+    }
+  });
+
   it("never auto-settles a stale thread with an open change request", () => {
     const stale = makeShell({ activityAt: STALE });
     expect(

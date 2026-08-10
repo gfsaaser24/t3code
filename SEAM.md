@@ -29,6 +29,29 @@ label is the nature of this fork's change.
 - **Optional** `infra/relay/src/observability.ts` — Axiom resources require the complete pair.
 - **Optional** `infra/relay/src/worker.ts` — APNs queues and tracing layers are conditional.
 
+## Settled-lifecycle fix (upstream candidate)
+
+One behavioral change carried until upstream lands its own (see pingdotgg/t3code#5575 /
+pingdotgg/t3code#5643): the explicit un-settle pin is sticky against activity, and a merged/closed
+PR only insta-settles a thread whose activity is not newer than the PR's `updatedAt`.
+
+- **Behavioral** `apps/server/src/orchestration/decider.ts` — activity un-settles only a `"settled"`
+  override; the `"active"` keep-alive pin survives messages, session starts, and approval/input
+  requests (three sites).
+- **Behavioral** `packages/client-runtime/src/state/threadSettled.ts` — `effectiveSettled` accepts
+  `changeRequestUpdatedAt`; post-completion activity defers a merged/closed PR to the inactivity
+  rule.
+- **Additive** `packages/contracts/src/git.ts` — optional `updatedAt` on `VcsStatusChangeRequest`.
+- **Additive** `apps/server/src/git/GitManager.ts` — `toStatusPr` forwards the PR's `updatedAt`.
+- **Additive** web (`SidebarV2.tsx`, `ChatView.tsx`, `chat/ChatHeader.tsx`,
+  `hooks/useThreadActionMenu.ts`) and mobile (`threadListV2.ts`, `thread-list-v2-items.tsx`,
+  `HomeScreen.tsx`, `ThreadNavigationSidebar.tsx`, `state/thread-pr-presentation.ts`) — thread the
+  PR `updatedAt` into the settled classification.
+
+On a nightly-sync conflict here, prefer upstream's version wholesale if upstream has merged an
+equivalent (a sticky un-settle or a completed-PR settle gate/toggle); otherwise reapply only the
+behavior above.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the
