@@ -880,19 +880,28 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 />
                 {worstUsageWindow ? (
                   <ControlPillMenu actions={usageMenuActions} title="Usage">
-                    <ComposerToolbarTrigger
-                      accessibilityLabel={`Usage, ${worstUsageWindow.label} ${formatUsagePercent(
-                        worstUsageWindow.usedPercent,
-                      )} used`}
-                      icon="gauge.with.dots.needle.bottom.50percent"
-                      label={formatUsagePercent(worstUsageWindow.usedPercent)}
-                      onPress={() => {
-                        // Restamp the relative labels and ask for a fresh
-                        // reading; the server debounces the pull.
-                        setUsageMenuNonce((nonce) => nonce + 1);
-                        requestUsageRefresh();
-                      }}
-                    />
+                    {/*
+                      Render-function form so the trigger stays interactive on
+                      Android, where a plain child sits under a
+                      `pointerEvents="none"` view and never sees the tap.
+                      `open` is a no-op on iOS, which opens natively.
+                    */}
+                    {(open) => (
+                      <ComposerToolbarTrigger
+                        accessibilityLabel={`Usage, ${worstUsageWindow.label} ${formatUsagePercent(
+                          worstUsageWindow.usedPercent,
+                        )} used`}
+                        icon="gauge.with.dots.needle.bottom.50percent"
+                        label={formatUsagePercent(worstUsageWindow.usedPercent)}
+                        onPress={() => {
+                          // Restamp the relative labels and ask for a fresh
+                          // reading; the server debounces the pull.
+                          setUsageMenuNonce((nonce) => nonce + 1);
+                          requestUsageRefresh();
+                          open();
+                        }}
+                      />
+                    )}
                   </ControlPillMenu>
                 ) : null}
                 {showStopAction ? (

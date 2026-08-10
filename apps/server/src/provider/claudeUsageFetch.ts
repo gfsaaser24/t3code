@@ -162,16 +162,17 @@ export const fetchClaudeUsage = Effect.fn("fetchClaudeUsage")(function* (
     HttpClientRequest.setHeader("anthropic-beta", OAUTH_USAGE_BETA),
     HttpClientRequest.setHeader("accept", "application/json"),
   );
-  const response = yield* client.execute(request).pipe(
+  // The timeout has to cover the body too. A server that sends 2xx headers
+  // and then trickles the body would satisfy a timeout scoped to `execute`
+  // alone and leave this fiber parked on `json` forever.
+  const payload = yield* client.execute(request).pipe(
+    Effect.flatMap((httpResponse) =>
+      httpResponse.status < 200 || httpResponse.status >= 300
+        ? Effect.succeed(null)
+        : httpResponse.json,
+    ),
     Effect.timeoutOption(USAGE_REQUEST_TIMEOUT_MS),
-    Effect.orElseSucceed(() => Option.none()),
+    Effect.orElseSucceed(() => Option.none<unknown>()),
   );
-  if (Option.isNone(response)) {
-    return null;
-  }
-  const httpResponse = response.value;
-  if (httpResponse.status < 200 || httpResponse.status >= 300) {
-    return null;
-  }
-  return yield* httpResponse.json.pipe(Effect.orElseSucceed(() => null));
+  return Option.getOrNull(payload);
 });

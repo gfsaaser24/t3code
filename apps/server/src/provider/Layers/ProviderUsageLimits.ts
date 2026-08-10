@@ -77,7 +77,12 @@ export const ProviderUsageLimitsStoreLive = Layer.effect(
           Effect.flatMap((now) =>
             Ref.modify(lastRefreshAtRef, (previous) => {
               const lastRefreshAt = previous.get(instanceId);
-              if (lastRefreshAt !== undefined && now - lastRefreshAt < USAGE_REFRESH_DEBOUNCE_MS) {
+              const elapsed = lastRefreshAt === undefined ? undefined : now - lastRefreshAt;
+              // A negative elapsed means the wall clock moved backwards — an
+              // NTP correction, a laptop waking in another timezone. Treating
+              // that as "still inside the window" would wedge the meters until
+              // the clock caught back up, which can be hours.
+              if (elapsed !== undefined && elapsed >= 0 && elapsed < USAGE_REFRESH_DEBOUNCE_MS) {
                 return [false, previous] as const;
               }
               const next = new Map(previous);
