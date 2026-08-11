@@ -79,6 +79,17 @@ describe("normalizeClaudeUsage", () => {
     expect(normalizeClaudeUsage({ five_hour: { utilization: "" } }, UPDATED_AT)).toBeNull();
     expect(normalizeClaudeUsage({ five_hour: { utilization: "  " } }, UPDATED_AT)).toBeNull();
   });
+
+  it("falls through to the next percent alias when the first is unreadable", () => {
+    // A present-but-malformed `used_percentage` must not mask a readable
+    // `utilization` on the same bucket.
+    const usage = normalizeClaudeUsage(
+      { five_hour: { used_percentage: "abc", utilization: 42 } },
+      UPDATED_AT,
+    );
+
+    expect(usage?.windows[0]?.usedPercent).toBe(42);
+  });
 });
 
 /**

@@ -45,6 +45,7 @@ import {
   selectProvidersByKind,
 } from "./ProviderRegistry.ts";
 import { ProviderUsageLimitsStoreLive } from "./ProviderUsageLimits.ts";
+import { ProviderUsageLimitsStore } from "../Services/ProviderUsageLimits.ts";
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
 import { readProviderStatusCache, resolveProviderStatusCachePath } from "../providerStatusCache.ts";
@@ -1662,6 +1663,128 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             assert.deepStrictEqual(spawnedCommands, [firstMissing, secondMissing]);
             assert.strictEqual(reprobedCodex?.status, "error");
             assert.strictEqual(reprobedCodex?.installed, false);
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      // A rebuilt instance may point at a different account. Its snapshots
+      // arrive without `usageLimits` (usage is decorated from the store),
+      // so without an explicit clear the registry would keep decorating the
+      // new configuration with the previous account's numbers.
+      it.effect("drops stored usage when settings rebuild the instance", () =>
+        Effect.gen(function* () {
+          const firstMissing = `t3code_codex_usage_first_`;
+          const secondMissing = `t3code_codex_usage_second_`;
+          const spawnedCommands: Array<string> = [];
+          const serverSettings = yield* makeMutableServerSettingsService(
+            decodeServerSettings(
+              deepMerge(encodedDefaultServerSettings, {
+                providers: {
+                  codex: { enabled: true, binaryPath: firstMissing },
+                  claudeAgent: { enabled: false },
+                  cursor: { enabled: false },
+                  grok: { enabled: false },
+                  opencode: { enabled: false },
+                },
+              }),
+            ),
+          );
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const providerRegistryLayer = ProviderRegistryLive.pipe(
+            Layer.provideMerge(ProviderUsageLimitsStoreLive),
+            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(
+              Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
+            ),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-",
+              }),
+            ),
+            Layer.provideMerge(TestHttpClientLive),
+            Layer.provideMerge(
+              Layer.succeed(
+                ProviderEventLoggers.ProviderEventLoggers,
+                ProviderEventLoggers.NoOpProviderEventLoggers,
+              ),
+            ),
+            Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
+            Layer.updateService(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
+              ChildProcessSpawner.make((command) => {
+                spawnedCommands.push((command as { readonly command: string }).command);
+                return spawner.spawn(command);
+              }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+            Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
+          );
+          const runtimeServices = yield* Layer.build(providerRegistryLayer).pipe(
+            Scope.provide(scope),
+          );
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry.ProviderRegistry;
+            const usageStore = yield* ProviderUsageLimitsStore;
+            const codexId = ProviderInstanceId.make("codex");
+
+            // Wait for the boot-time probe so the instance exists.
+            let initialProviders = yield* registry.getProviders;
+            for (
+              let attempts = 0;
+              attempts < 50 &&
+              initialProviders.find((provider) => provider.instanceId === "codex")?.status !==
+                "error";
+              attempts += 1
+            ) {
+              yield* TestClock.adjust("10 millis");
+              yield* Effect.yieldNow;
+              initialProviders = yield* registry.getProviders;
+            }
+
+            // A reading lands for the current configuration.
+            yield* usageStore.set(
+              codexId,
+              {
+                windows: [
+                  { id: "codex-primary", label: "Session", usedPercent: 55, resetsAt: null },
+                ],
+                updatedAt: "2026-08-09T12:00:00.000Z",
+              },
+              "full",
+            );
+
+            // Rebuild the instance by changing its configuration.
+            yield* serverSettings.updateSettings({
+              providers: {
+                codex: { enabled: true, binaryPath: secondMissing },
+              },
+            });
+
+            // Poll until the rebuilt instance's probe ran and the stored
+            // reading is gone.
+            let storedAfterRebuild = yield* usageStore.get(codexId);
+            for (
+              let attempts = 0;
+              attempts < 60 &&
+              !(storedAfterRebuild === undefined && spawnedCommands.includes(secondMissing));
+              attempts += 1
+            ) {
+              yield* TestClock.adjust("50 millis");
+              yield* Effect.yieldNow;
+              storedAfterRebuild = yield* usageStore.get(codexId);
+            }
+            assert.isUndefined(
+              storedAfterRebuild,
+              "a rebuilt instance must not inherit the previous configuration's reading",
+            );
+
+            const providers = yield* registry.getProviders;
+            const rebuiltCodex = providers.find((provider) => provider.instanceId === "codex");
+            assert.isUndefined(
+              rebuiltCodex?.usageLimits,
+              "the rebuilt snapshot must not be decorated with stale usage",
+            );
           }).pipe(Effect.provide(runtimeServices));
         }),
       );

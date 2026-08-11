@@ -599,6 +599,20 @@ export const ProviderRegistryLive = Layer.effect(
           newlyAdded.push([instanceId, instance] as const);
         }
 
+        // Forget stored usage for every instance that was not carried over
+        // unchanged: a rebuilt instance may point at a different account,
+        // and `applyProviderUsageLimits` would otherwise decorate its fresh
+        // snapshots with the previous configuration's numbers until a new
+        // reading happened to arrive. Removed instances get the same
+        // treatment so a later instance reusing the id starts clean. Done
+        // before the rebuilt instance's snapshot is read, so its own probe
+        // seeds the store first.
+        for (const instanceId of previousSubs.keys()) {
+          if (!carriedOver.has(instanceId)) {
+            yield* usageStore.clear(instanceId);
+          }
+        }
+
         // Fork long-lived subscriptions to each new/rebuilt instance's
         // change stream before reading its current snapshot. If the
         // driver's own initial probe finishes during this sync, either
@@ -700,9 +714,17 @@ export const ProviderRegistryLive = Layer.effect(
           const provider = providers.find(
             (candidate) => snapshotInstanceKey(candidate) === instanceId,
           );
-          return provider === undefined
-            ? Effect.void
-            : upsertProviders([provider], { persist: false });
+          if (provider === undefined) {
+            return Effect.void;
+          }
+          // Strip the previous decoration before re-upserting: the snapshot
+          // in `providersRef` carries whatever `usageLimits` the store held
+          // last time, and `applyProviderUsageLimits` seeds snapshot values
+          // back into the store. Left on, a cleared reading would boomerang —
+          // the clear announces, this subscriber re-upserts the stale
+          // decoration, and the seed resurrects exactly what was cleared.
+          const { usageLimits: _usageLimits, ...undecorated } = provider;
+          return upsertProviders([undecorated], { persist: false });
         }),
       ),
     ).pipe(Effect.forkScoped);

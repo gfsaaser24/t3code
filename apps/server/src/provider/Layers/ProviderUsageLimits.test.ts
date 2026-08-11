@@ -159,4 +159,42 @@ describe("ProviderUsageLimitsStoreLive", () => {
       assert.isUndefined(yield* store.get(CODEX));
     }).pipe(Effect.provide(ProviderUsageLimitsStoreLive)),
   );
+
+  it.effect("clear drops the reading and frees the debounce slot", () =>
+    Effect.gen(function* () {
+      // A rebuilt instance may point at a different account; its old
+      // reading must not survive, and it must be allowed to pull
+      // immediately rather than inherit the old instance's debounce.
+      const store = yield* ProviderUsageLimitsStore;
+
+      yield* store.set(CLAUDE, usageAt("2026-08-09T12:00:00.000Z", 50), "full");
+      assert.isTrue(yield* store.claimRefreshSlot(CLAUDE));
+      yield* store.clear(CLAUDE);
+
+      assert.isUndefined(yield* store.get(CLAUDE));
+      assert.isTrue(
+        yield* store.claimRefreshSlot(CLAUDE),
+        "a cleared instance should be allowed to pull immediately",
+      );
+    }).pipe(Effect.provide(ProviderUsageLimitsStoreLive)),
+  );
+
+  it.effect("clear announces only when a reading was actually dropped", () =>
+    Effect.gen(function* () {
+      const store = yield* ProviderUsageLimitsStore;
+      const changes = yield* store.subscribeChanges;
+
+      // First clear finds nothing and must stay silent; the set and the
+      // second clear should each announce once. A wrongly-announcing first
+      // clear would surface as a third buffered element here.
+      yield* store.clear(CLAUDE);
+      yield* store.set(CLAUDE, usageAt("2026-08-09T12:00:00.000Z", 50), "full");
+      yield* store.clear(CLAUDE);
+      assert.strictEqual(
+        (yield* PubSub.takeAll(changes)).length,
+        2,
+        "only the reading and its removal should announce",
+      );
+    }).pipe(Effect.provide(ProviderUsageLimitsStoreLive), Effect.scoped),
+  );
 });

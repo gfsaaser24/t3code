@@ -25,7 +25,7 @@ stops you at any number.
 
 ## Seeing more detail
 
-Hover a circle for the exact percentage and when that limit resets. Resets
+Hover a circle for the displayed percentage and when that limit resets. Resets
 less than a day away count down ("resets in 2h 15m"); further out they show
 the day and time ("resets Mon 9:00 AM"), and beyond a couple of days the date
 comes along too.

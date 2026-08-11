@@ -93,9 +93,33 @@ export const ProviderUsageLimitsStoreLive = Layer.effect(
         ),
       );
 
+    const clear = (instanceId: ProviderInstanceId) =>
+      Effect.gen(function* () {
+        yield* Ref.update(lastRefreshAtRef, (previous) => {
+          if (!previous.has(instanceId)) {
+            return previous;
+          }
+          const next = new Map(previous);
+          next.delete(instanceId);
+          return next;
+        });
+        const hadReading = yield* Ref.modify(usageRef, (previous) => {
+          if (!previous.has(instanceId)) {
+            return [false, previous] as const;
+          }
+          const next = new Map(previous);
+          next.delete(instanceId);
+          return [true, next] as const;
+        });
+        if (hadReading) {
+          yield* PubSub.publish(changes, instanceId);
+        }
+      });
+
     return {
       get: (instanceId) => Ref.get(usageRef).pipe(Effect.map((usage) => usage.get(instanceId))),
       set,
+      clear,
       claimRefreshSlot,
       get streamChanges() {
         return Stream.fromPubSub(changes);

@@ -45,6 +45,15 @@ export interface ProviderUsageLimitsStoreShape {
   ) => Effect.Effect<void>;
 
   /**
+   * Forget everything about an instance: its reading and its refresh
+   * debounce. For instances that were removed or rebuilt with a changed
+   * configuration — a rebuilt instance may point at a different account,
+   * and its old numbers must not decorate the new one's snapshots.
+   * Emits on `streamChanges` only when a reading was actually dropped.
+   */
+  readonly clear: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+
+  /**
    * Whether an upstream pull for this instance is due, and claim the slot if
    * so. Debouncing lives here rather than in each client so three clients
    * hovering a meter at once produce one upstream call.

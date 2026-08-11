@@ -87,9 +87,15 @@ const readClaudeBucket = (
   if (!isRecord(value)) {
     return null;
   }
-  const usedPercent = readPercent(
-    value.used_percentage ?? value.utilization ?? value.usedPercentage ?? value.percent,
-  );
+  // Try each alias through the parser rather than `??`-chaining the raw
+  // values: a present-but-malformed first alias must not mask a readable
+  // later one.
+  const usedPercent = [
+    value.used_percentage,
+    value.utilization,
+    value.usedPercentage,
+    value.percent,
+  ].reduce<number | null>((found, candidate) => found ?? readPercent(candidate), null);
   if (usedPercent === null) {
     return null;
   }
