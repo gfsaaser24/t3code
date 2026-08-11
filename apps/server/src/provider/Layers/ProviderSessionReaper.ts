@@ -6,7 +6,6 @@ import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { ThreadBackgroundLivenessService } from "../../orchestration/ThreadBackgroundLiveness.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import {
   ProviderSessionReaper,
@@ -35,7 +34,6 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
     const providerService = yield* ProviderService;
     const directory = yield* ProviderSessionDirectory;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
 
     const inactivityThresholdMs = Math.max(
       1,
@@ -84,19 +82,17 @@ const makeProviderSessionReaper = (options?: ProviderSessionReaperLiveOptions) =
           continue;
         }
 
-        // Background agents and monitors run on after the turn settles, with
-        // no activeTurnId and no lastSeenAt refresh. The liveness registry is
-        // the decaying signal for that work (entries clear on terminal task
-        // status, session exit, and server restart), so defer reaping while
-        // it reports work — up to the wedge cap. Info-level on purpose: rare
-        // and decision-bearing.
-        const backgroundLiveness = threadBackgroundLiveness.getThreadBackgroundLiveness(
-          binding.threadId,
-        );
-        if (backgroundLiveness !== null && idleDurationMs < backgroundWorkMaxIdleMs) {
-          yield* Effect.logInfo("provider.session.reaper.skipped-live-background-work", {
+        // The turn can settle while background work runs on (subagent
+        // fleets, workflow runs, Monitor watch loops). Those live inside the
+        // provider process, so stopping the session would kill them silently,
+        // and nothing bumps lastSeenAt between turns. Defer only up to the
+        // wedge cap: a task that has been "live" this long without reaching
+        // a terminal state is wedged, and holding its session (and child
+        // process) forever is worse than reaping it.
+        if (thread?.backgroundLiveness != null && idleDurationMs < backgroundWorkMaxIdleMs) {
+          yield* Effect.logDebug("provider.session.reaper.skipped-background-work", {
             threadId: binding.threadId,
-            backgroundLiveness,
+            backgroundLiveness: thread.backgroundLiveness,
             idleDurationMs,
           });
           continue;

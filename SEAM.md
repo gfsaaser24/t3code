@@ -43,7 +43,7 @@ PR only insta-settles a thread whose activity is not newer than the PR's `update
   rule.
 - **Additive** `packages/contracts/src/git.ts` — optional `updatedAt` on `VcsStatusChangeRequest`.
 - **Additive** `apps/server/src/git/GitManager.ts` — `toStatusPr` forwards the PR's `updatedAt`.
-- **Additive** web (`SidebarV2.tsx`, `ChatView.tsx`, `chat/ChatHeader.tsx`,
+- **Additive** web (`Sidebar.tsx` — formerly `SidebarV2.tsx`, `ChatView.tsx`, `chat/ChatHeader.tsx`,
   `hooks/useThreadActionMenu.ts`) and mobile (`threadListV2.ts`, `thread-list-v2-items.tsx`,
   `HomeScreen.tsx`, `ThreadNavigationSidebar.tsx`, `state/thread-pr-presentation.ts`) — thread the
   PR `updatedAt` into the settled classification.
@@ -51,6 +51,24 @@ PR only insta-settles a thread whose activity is not newer than the PR's `update
 On a nightly-sync conflict here, prefer upstream's version wholesale if upstream has merged an
 equivalent (a sticky un-settle or a completed-PR settle gate/toggle); otherwise reapply only the
 behavior above.
+
+## Reaper wedge cap (upstream adopted the base fix)
+
+Upstream #5677 landed the fork's background-liveness reaper skip (the
+`ThreadBackgroundLiveness` service and the thread-shell `backgroundLiveness` field are now
+upstream-owned). The fork's remaining delta is only the wedge cap: background work may defer
+reaping, but never forever.
+
+- **Behavioral** `apps/server/src/provider/Layers/ProviderSessionReaper.ts` —
+  `backgroundWorkMaxIdleMs` option (default 4 h, floored at the inactivity threshold); the
+  background-liveness skip applies only while `idleDurationMs` is under the cap.
+- **Behavioral** `apps/server/src/provider/Layers/ProviderSessionReaper.test.ts` — upstream's
+  "skips stale sessions while background work is still live" pins its idle time inside the cap,
+  and the additive "reaps sessions with live background work once past the wedge cap" exercises
+  the cap through the thread-shell field.
+
+On a nightly-sync conflict here, take upstream's reaper wholesale and reapply only the cap
+condition; drop the cap if upstream grows an equivalent bound.
 
 ## Nightly sync conflicts
 
