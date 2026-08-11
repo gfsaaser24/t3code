@@ -62,9 +62,10 @@ reaping, but never forever.
 - **Behavioral** `apps/server/src/provider/Layers/ProviderSessionReaper.ts` —
   `backgroundWorkMaxIdleMs` option (default 4 h, floored at the inactivity threshold); the
   background-liveness skip applies only while `idleDurationMs` is under the cap.
-- **Additive** `apps/server/src/provider/Layers/ProviderSessionReaper.test.ts` — "skips idle
-  sessions while background work is live" and "reaps sessions with live background work once past
-  the wedge cap" exercise the cap through the thread-shell field.
+- **Behavioral** `apps/server/src/provider/Layers/ProviderSessionReaper.test.ts` — upstream's
+  "skips stale sessions while background work is still live" pins its idle time inside the cap,
+  and the additive "reaps sessions with live background work once past the wedge cap" exercises
+  the cap through the thread-shell field.
 
 On a nightly-sync conflict here, take upstream's reaper wholesale and reapply only the cap
 condition; drop the cap if upstream grows an equivalent bound.

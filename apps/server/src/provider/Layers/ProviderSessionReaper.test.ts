@@ -355,55 +355,9 @@ describe("ProviderSessionReaper", () => {
       Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
     );
 
-    await runtime!.runPromise(
-      repository.upsert({
-        threadId,
-        providerName: "claudeAgent",
-        providerInstanceId: null,
-        adapterKey: "claudeAgent",
-        runtimeMode: "full-access",
-        status: "running",
-        lastSeenAt: "2026-04-14T00:00:00.000Z",
-        resumeCursor: {
-          opaque: "resume-background-work",
-        },
-        runtimePayload: null,
-      }),
-    );
-
-    await startReaper();
-    await Effect.runPromise(drainFibers);
-
-    expect(harness.stopSession).not.toHaveBeenCalled();
-    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
-    expect(Option.isSome(remaining)).toBe(true);
-  });
-
-  it("skips idle sessions while background work is live", async () => {
-    const threadId = ThreadId.make("thread-reaper-background-work");
-    const now = "2026-01-01T00:00:00.000Z";
-    const harness = await createHarness({
-      readModel: makeReadModel([
-        {
-          id: threadId,
-          session: {
-            threadId,
-            status: "ready",
-            providerName: "claudeAgent",
-            runtimeMode: "full-access",
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: now,
-          },
-          backgroundLiveness: "working",
-        },
-      ]),
-    });
-    const repository = await runtime!.runPromise(
-      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
-    );
-
-    // Past the inactivity threshold (1s) but inside the default wedge cap.
+    // Past the inactivity threshold (1s) but inside the default wedge cap —
+    // beyond the cap the fork reaps even live background work (see the
+    // wedge-cap test below).
     const nowMs = await runtime!.runPromise(Clock.currentTimeMillis);
     await runtime!.runPromise(
       repository.upsert({
@@ -421,12 +375,12 @@ describe("ProviderSessionReaper", () => {
       }),
     );
 
-    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await runtime!.runPromise(Scope.make("sequential"));
-    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
-    await runtime!.runPromise(drainFibers);
+    await startReaper();
+    await Effect.runPromise(drainFibers);
 
     expect(harness.stopSession).not.toHaveBeenCalled();
+    const remaining = await runtime!.runPromise(repository.getByThreadId({ threadId }));
+    expect(Option.isSome(remaining)).toBe(true);
   });
 
   it("reaps sessions with live background work once past the wedge cap", async () => {
