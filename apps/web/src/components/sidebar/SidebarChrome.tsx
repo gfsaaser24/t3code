@@ -1,4 +1,4 @@
-import { ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
+import { ChartNoAxesColumnIcon, GitPullRequestIcon, SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
@@ -8,6 +8,7 @@ import { usePrimaryEnvironmentId } from "../../state/environments";
 import { DesktopEnvironmentSwitcher } from "../desktop/DesktopEnvironmentSwitcher";
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { usePrimaryEnvironment } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -121,12 +122,22 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const activeEnvironmentId = useActiveEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const switcherEnvironmentId = activeEnvironmentId ?? primaryEnvironmentId;
-  const handleSettingsClick = useCallback(() => {
+  const primaryEnvironment = usePrimaryEnvironment();
+  const pullRequestsSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
+  const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
     }
+  }, [isMobile, setOpenMobile]);
+  const handlePullRequestsClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/pull-requests", search: { involvement: "all", state: "open" } });
+  }, [closeMobileSidebar, navigate]);
+  const handleSettingsClick = useCallback(() => {
+    closeMobileSidebar();
     void navigate({ to: "/settings" });
-  }, [isMobile, navigate, setOpenMobile]);
+  }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
     if (isMobile) {
@@ -145,6 +156,14 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
         </div>
       ) : null}
       <SidebarMenu>
+        {pullRequestsSupported ? (
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={handlePullRequestsClick}>
+              <GitPullRequestIcon />
+              <span>Pull Requests</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : null}
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleUsageClick}>
             <ChartNoAxesColumnIcon />

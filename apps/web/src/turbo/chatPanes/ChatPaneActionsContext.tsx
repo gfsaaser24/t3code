@@ -272,15 +272,20 @@ export function ChatPaneActionsProvider({
       if (!projectRef) {
         return;
       }
-      const draftId = await createDraftThread(projectRef, {
+      const created = await createDraftThread(projectRef, {
         navigation: "none",
         sourceTarget: source.target,
       });
+      // null: a concurrent creation won the race and its navigation is
+      // landing — opening a pane on top of it would fight that navigation.
+      if (!created) {
+        return;
+      }
       const current = currentLayout();
       const next = applyNewChatPaneTarget(
         current,
         sourcePaneId,
-        newPane({ kind: "draft", draftId }),
+        newPane({ kind: "draft", draftId: created.draftId }),
         placement,
       );
       if (next !== current) {

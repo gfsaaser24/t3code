@@ -4,7 +4,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
-import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef } from "@t3tools/contracts";
+import { DEFAULT_RUNTIME_MODE, type ScopedProjectRef, type ThreadId } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
 import {
@@ -90,7 +90,13 @@ export function useCreateDraftThreadHandler() {
   }, [router]);
 
   return useCallback(
-    (projectRef: ScopedProjectRef, options?: CreateDraftThreadOptions): Promise<DraftId> => {
+    (
+      projectRef: ScopedProjectRef,
+      options?: CreateDraftThreadOptions,
+      // Which draft the thread ended up in, so a caller that has something to put in it — a
+      // prepared checkout, a task to write — addresses that one rather than looking the project
+      // up again and finding whichever draft it happens to hold.
+    ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -234,12 +240,7 @@ export function useCreateDraftThreadHandler() {
               getComposerDraft(emptyStoredDraftThread.draftId),
             );
             if (openedMeanwhile || promotedMeanwhile || remappedMeanwhile || investedMeanwhile) {
-              // The winner may have registered a fresh draft; report whichever
-              // draft the logical project now maps to.
-              return (
-                getDraftSessionByLogicalProjectKey(logicalProjectKey)?.draftId ??
-                emptyStoredDraftThread.draftId
-              );
+              return null;
             }
             workspaceContext = {
               branch: null,
@@ -281,6 +282,10 @@ export function useCreateDraftThreadHandler() {
               ...(carryInteractionMode ? { interactionMode: carryInteractionMode } : {}),
             },
           );
+          const opened = {
+            draftId: emptyStoredDraftThread.draftId,
+            threadId: emptyStoredDraftThread.threadId,
+          };
           // Re-read the route: the snapshot from before the await is stale
           // once a concurrent invocation's navigation lands, and navigating
           // again would push a duplicate history entry.
@@ -289,7 +294,7 @@ export function useCreateDraftThreadHandler() {
             routeTargetAfterWrites?.kind === "draft" &&
             routeTargetAfterWrites.draftId === emptyStoredDraftThread.draftId
           ) {
-            return emptyStoredDraftThread.draftId;
+            return opened;
           }
           if (options?.navigation !== "none") {
             await router.navigate({
@@ -298,7 +303,7 @@ export function useCreateDraftThreadHandler() {
               replace: options?.replace ?? false,
             });
           }
-          return emptyStoredDraftThread.draftId;
+          return opened;
         })();
       }
 
@@ -326,7 +331,10 @@ export function useCreateDraftThreadHandler() {
           interactionMode: sourceDraftThread.interactionMode,
           ...pickExplicitWorkspaceOptions(options),
         });
-        return Promise.resolve(sourceTarget.draftId);
+        return Promise.resolve({
+          draftId: sourceTarget.draftId,
+          threadId: sourceDraftThread.threadId,
+        });
       }
 
       const draftId = newDraftId();
@@ -370,7 +378,7 @@ export function useCreateDraftThreadHandler() {
               replace: options?.replace ?? false,
             });
           }
-          return racedDraft.draftId;
+          return { draftId: racedDraft.draftId, threadId: racedDraft.threadId };
         }
         setLogicalProjectDraftThreadId(logicalProjectKey, projectRef, draftId, {
           threadId,
@@ -404,7 +412,7 @@ export function useCreateDraftThreadHandler() {
             replace: options?.replace ?? false,
           });
         }
-        return draftId;
+        return { draftId, threadId };
       })();
     },
     [getCurrentRouteTarget, primaryServerSettings, projectGroupingSettings, projects, router],
@@ -415,9 +423,8 @@ export function useCreateDraftThreadHandler() {
 export function useNewThreadHandler() {
   const createDraftThread = useCreateDraftThreadHandler();
   return useCallback(
-    async (projectRef: ScopedProjectRef, options?: NewThreadOptions): Promise<void> => {
-      await createDraftThread(projectRef, { ...options, navigation: "route" });
-    },
+    (projectRef: ScopedProjectRef, options?: NewThreadOptions) =>
+      createDraftThread(projectRef, { ...options, navigation: "route" }),
     [createDraftThread],
   );
 }
