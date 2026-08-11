@@ -49,6 +49,7 @@ const permissionOptionIds = {
 };
 const sessionId = "mock-session-1";
 const grokNativeFixture = process.env.T3_ACP_GROK_NATIVE_FIXTURE === "1";
+const omitModes = process.env.T3_ACP_OMIT_MODES === "1";
 const configuredUsageSize = Number(process.env.T3_ACP_USAGE_SIZE ?? "272000");
 const configuredUsageUsed = Number(process.env.T3_ACP_USAGE_USED ?? "42000");
 const usageSize =
@@ -308,6 +309,10 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
+function sessionModes(): AcpSchema.SessionModeState | null {
+  return omitModes ? null : modeState();
+}
+
 const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   { modelId: "grok-build", name: "Grok Build" },
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
@@ -342,7 +347,7 @@ const program = Effect.gen(function* () {
   yield* agent.handleCreateSession(() =>
     Effect.succeed({
       sessionId,
-      modes: modeState(),
+      modes: sessionModes(),
       models: modelState(),
       configOptions: configOptions(),
     }),
@@ -387,7 +392,7 @@ const program = Effect.gen(function* () {
         });
         yield* Effect.sleep(loadSessionDelayMs);
         return {
-          modes: modeState(),
+          modes: sessionModes(),
           models: modelState(),
           configOptions: configOptions(),
         };
@@ -403,7 +408,7 @@ const program = Effect.gen(function* () {
         },
       });
       return {
-        modes: modeState(),
+        modes: sessionModes(),
         models: modelState(),
         configOptions: configOptions(),
       };

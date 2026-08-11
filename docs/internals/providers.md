@@ -110,7 +110,10 @@ subsequent standard `session/update` notifications as the source of truth for op
 - The provider advertises the Plan/Build control only when the negotiated mode list contains a
   distinct plan-like mode and a distinct build/default-like mode. T3's persisted
   `ProviderInteractionMode` is applied immediately before `session/prompt`; native mode-change
-  notifications are retained in the native log and do not overwrite T3 state.
+  notifications are retained in the native log and do not overwrite T3 state. A plan selection is
+  ignored when no pair is negotiated (it is carried-over UI state from a session that had the
+  toggle), and default turns only write the mode when the session sits in the negotiated plan
+  mode — other native modes (for example a permission-gating "ask" mode) are left untouched.
 - A select option whose negotiated category/name identifies reasoning is exposed as the canonical
   T3 `reasoning` descriptor. Grok builds that advertise `supportsReasoningEffort` instead expose
   the exact `_meta.reasoningEfforts[].value` list on each model; the adapter applies those values

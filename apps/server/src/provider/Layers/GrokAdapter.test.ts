@@ -285,6 +285,98 @@ it.layer(grokAdapterTestLayer)("GrokAdapterLive", (it) => {
     }),
   );
 
+  it.effect("ignores a carried-over Plan selection when no mode pair is negotiated", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-plan-without-modes");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-acp-no-modes-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* makeMockGrokWrapper({
+        T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+        T3_ACP_OMIT_MODES: "1",
+      });
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const turnCompleted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(turnCompleted, undefined) : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-build" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "plan carried over from another provider",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      yield* Deferred.await(turnCompleted);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const modeWrite = requests.find(
+        (request) =>
+          request.method === "session/set_config_option" &&
+          (request.params as { configId?: unknown } | undefined)?.configId === "mode",
+      );
+      expect(modeWrite).toBeUndefined();
+      expect(requests.some((request) => request.method === "session/prompt")).toBe(true);
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("leaves the session's native mode untouched on default turns", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("grok-default-keeps-native-mode");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "grok-acp-keep-mode-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const wrapperPath = yield* makeMockGrokWrapper({
+        T3_ACP_REQUEST_LOG_PATH: requestLogPath,
+      });
+      const adapter = yield* makeTestAdapter(wrapperPath);
+      const turnCompleted = yield* Deferred.make<void>();
+      const eventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        event.type === "turn.completed" ? Deferred.succeed(turnCompleted, undefined) : Effect.void,
+      ).pipe(Effect.forkChild);
+
+      // The mock session starts in its permission-gating "ask" mode; a
+      // default turn must not force it into the build/default mode.
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("grok"),
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+        modelSelection: { instanceId: ProviderInstanceId.make("grok"), model: "grok-build" },
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "ordinary turn",
+        attachments: [],
+      });
+      yield* Deferred.await(turnCompleted);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const modeWrite = requests.find(
+        (request) =>
+          request.method === "session/set_config_option" &&
+          (request.params as { configId?: unknown } | undefined)?.configId === "mode",
+      );
+      expect(modeWrite).toBeUndefined();
+      expect(requests.some((request) => request.method === "session/prompt")).toBe(true);
+
+      yield* Fiber.interrupt(eventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("closes the ACP child process when a session stops", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("grok-stop-session-close");

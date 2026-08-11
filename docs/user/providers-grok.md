@@ -10,7 +10,8 @@ separate build/default mode. T3 applies the selected mode to the ACP session bef
 turn; it does not add instructions to your prompt.
 
 If the toggle is missing, the CLI did not negotiate a usable native mode pair. Normal prompts and
-existing Grok plan updates continue to work.
+existing Grok plan updates continue to work, and a Plan selection carried over from another
+provider is ignored rather than blocking the turn.
 
 ## Reasoning controls
 

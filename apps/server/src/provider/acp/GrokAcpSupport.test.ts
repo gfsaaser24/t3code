@@ -176,6 +176,24 @@ describe("Grok ACP negotiated capabilities", () => {
     expect(resolveGrokAcpReasoningValue(reasoningOption, "deep-native")).toBe("deep-native");
     expect(resolveGrokAcpReasoningValue(reasoningOption, "Deep Native")).toBe("deep-native");
     expect(resolveGrokAcpReasoningValue(reasoningOption, "unknown")).toBeUndefined();
+    // Another option's value must outrank an earlier option's label: "Low"
+    // here names the "minimal" option but is the normalized value of "low".
+    expect(
+      resolveGrokAcpReasoningValue(
+        {
+          id: "reasoning",
+          name: "Reasoning",
+          category: "thought_level",
+          type: "select",
+          currentValue: "minimal",
+          options: [
+            { value: "minimal", name: "Low" },
+            { value: "low", name: "Reduced" },
+          ],
+        },
+        "Low",
+      ),
+    ).toBe("low");
   });
 
   it("decodes the verified Grok model reasoning metadata shape", () => {

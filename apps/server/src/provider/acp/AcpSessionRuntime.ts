@@ -792,12 +792,7 @@ export const make = (
               return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
             }
             return Ref.get(configOptionsRef).pipe(
-              Effect.map(
-                (configOptions) =>
-                  configOptions.find(
-                    (option) => option.category === "mode" || option.id.trim() === "mode",
-                  )?.id ?? "mode",
-              ),
+              Effect.map((configOptions) => findModeConfigOption(configOptions)?.id ?? "mode"),
               Effect.flatMap((modeConfigId) => setConfigOption(modeConfigId, modeId)),
               Effect.tap(() => updateCurrentModeId(modeId)),
               Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
@@ -849,6 +844,12 @@ function sessionConfigOptionsFromSetup(
   return response?.configOptions ?? [];
 }
 
+function findModeConfigOption(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+): EffectAcpSchema.SessionConfigOption | undefined {
+  return configOptions.find((option) => option.category === "mode" || option.id.trim() === "mode");
+}
+
 function configOptionCurrentValueMatches(
   configOption: EffectAcpSchema.SessionConfigOption,
   value: string | boolean,
@@ -890,6 +891,19 @@ const handleSessionUpdate = ({
     for (const event of parsed.events) {
       if (event._tag === "ConfigOptionsChanged") {
         yield* Ref.set(configOptionsRef, event.configOptions);
+        // The update carries the full option set including the mode option,
+        // so reconcile the cached mode state too; otherwise setMode's
+        // already-current short-circuit can skip a required write after the
+        // agent changes modes announced only through this notification.
+        const modeOption = findModeConfigOption(event.configOptions);
+        if (modeOption && typeof modeOption.currentValue === "string") {
+          const nextModeId = modeOption.currentValue.trim();
+          if (nextModeId) {
+            yield* Ref.update(modeStateRef, (current) =>
+              current === undefined ? current : updateModeState(current, nextModeId),
+            );
+          }
+        }
         yield* Queue.offer(queue, event);
         continue;
       }

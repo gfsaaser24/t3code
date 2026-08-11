@@ -144,17 +144,21 @@ export function resolveGrokAcpModelReasoningValue(
     return undefined;
   }
   // Mirror resolveGrokAcpReasoningValue: exact match first, then normalized
-  // value-or-label so persisted selections like "extra-high" still resolve
-  // against advertised "extra_high" values across CLI builds.
+  // values, then normalized labels, so persisted selections like "extra-high"
+  // still resolve against advertised "extra_high" values across CLI builds
+  // without an option's label ever outranking another option's value.
   const exact = reasoning.options.find((option) => option.value === requestedValue.trim());
   if (exact) {
     return exact.value;
   }
   const normalizedRequested = normalizeGrokCapabilityToken(requestedValue);
-  return reasoning.options.find(
-    (option) =>
-      normalizeGrokCapabilityToken(option.value) === normalizedRequested ||
-      normalizeGrokCapabilityToken(option.label) === normalizedRequested,
+  return (
+    reasoning.options.find(
+      (option) => normalizeGrokCapabilityToken(option.value) === normalizedRequested,
+    ) ??
+    reasoning.options.find(
+      (option) => normalizeGrokCapabilityToken(option.label) === normalizedRequested,
+    )
   )?.value;
 }
 
@@ -221,11 +225,15 @@ export function resolveGrokAcpReasoningValue(
     if (exact) {
       return exact.value;
     }
+    // Match all values before any label: with an interleaved pass an earlier
+    // option's label (e.g. name "Low") would outrank a later option's actual
+    // value "low" and select the wrong effort.
     const normalizedRequested = normalizeGrokCapabilityToken(requestedValue);
-    return options.find(
-      (option) =>
-        normalizeGrokCapabilityToken(option.value) === normalizedRequested ||
-        normalizeGrokCapabilityToken(option.name) === normalizedRequested,
+    return (
+      options.find(
+        (option) => normalizeGrokCapabilityToken(option.value) === normalizedRequested,
+      ) ??
+      options.find((option) => normalizeGrokCapabilityToken(option.name) === normalizedRequested)
     )?.value;
   }
   const currentValue = configOption.currentValue.trim();

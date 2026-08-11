@@ -62,7 +62,7 @@ import {
   decodeGrokAcpModelReasoningCapabilities,
   findGrokAcpReasoningConfigOption,
   makeGrokAcpRuntime,
-  resolveGrokAcpInteractionModeId,
+  resolveGrokAcpModeIds,
   resolveGrokAcpModelReasoningValue,
   resolveGrokAcpReasoningValue,
   resolveGrokAcpBaseModelId,
@@ -757,10 +757,8 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
           });
 
           const availableModels = started.sessionSetupResult.models?.availableModels ?? [];
-          const initialModelId =
-            boundModelId ?? currentGrokModelIdFromSessionSetup(started.sessionSetupResult);
           const initialReasoning = decodeGrokAcpModelReasoningCapabilities(
-            availableModels.find((model) => model.modelId === initialModelId),
+            availableModels.find((model) => model.modelId === boundModelId),
           );
 
           const now = yield* nowIso;
@@ -795,7 +793,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             interruptedTurnIds: new Set(),
             promptsInFlight: 0,
             availableModels,
-            currentModelId: initialModelId,
+            currentModelId: boundModelId,
             currentReasoningEffort: initialReasoning?.currentValue,
             stopped: false,
           };
@@ -1086,18 +1084,22 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               }
 
               const interactionMode: ProviderInteractionMode = input.interactionMode ?? "default";
-              const modeId = resolveGrokAcpInteractionModeId(
-                yield* ctx.acp.getModeState,
-                interactionMode,
-              );
-              if (interactionMode === "plan" && modeId === undefined) {
-                return yield* new ProviderAdapterRequestError({
-                  provider: PROVIDER,
-                  method: "session/set_config_option",
-                  detail:
-                    "Grok did not advertise a usable native Plan/Build mode pair for this session.",
-                });
-              }
+              const modeState = yield* ctx.acp.getModeState;
+              const grokModeIds = resolveGrokAcpModeIds(modeState);
+              // A plan request without a negotiated pair is carried-over UI
+              // state from another provider (the toggle is hidden for these
+              // sessions), so drop it like a stale reasoning selection
+              // instead of blocking every turn on the thread. Default turns
+              // only leave the negotiated plan mode; agents may gate
+              // permissions behind modes T3 does not model (e.g. "ask"), and
+              // forcing the default mode on every turn would silently bypass
+              // them.
+              const modeId =
+                interactionMode === "plan"
+                  ? grokModeIds?.planModeId
+                  : grokModeIds !== undefined && modeState?.currentModeId === grokModeIds.planModeId
+                    ? grokModeIds.defaultModeId
+                    : undefined;
               if (modeId !== undefined) {
                 yield* ctx.acp
                   .setMode(modeId)
