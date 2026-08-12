@@ -9,6 +9,7 @@
 - [Import official T3 Code data](./user/official-t3-import.md)
 - [Markdown files](./user/markdown-files.md)
 - [Organizing threads](./user/thread-sidebar.md)
+- [Review usage](./user/usage.md)
 - [Customize a project icon](./user/project-settings.md)
 - [Headless VPS environment](../infra/headless-vps.md)
 - [Remote access](./user/remote-access.md)

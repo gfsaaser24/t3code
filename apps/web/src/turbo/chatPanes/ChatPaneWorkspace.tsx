@@ -24,7 +24,8 @@ import { environmentShell } from "../../state/shell";
 import { useEnvironments } from "../../state/environments";
 import { resolveThreadRouteRenderState } from "../../threadRoutes";
 import { resolveThreadSyncPhase } from "../../threadSync";
-import { chatPaneWeight, type ChatPane } from "./chatPaneLayout";
+import { useMatches } from "@tanstack/react-router";
+import { chatPaneWeight, isChatPaneTargetRouteId, type ChatPane } from "./chatPaneLayout";
 import { ChatPaneDivider, MIN_CHAT_PANE_WIDTH } from "./ChatPaneDivider";
 import { ChatPaneScope, useChatPaneActions } from "./ChatPaneActionsContext";
 import { isServerPaneEnvironmentUnavailable } from "./chatPaneActions.logic";
@@ -228,12 +229,19 @@ function ChatPaneTarget({
 export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }) {
   const { focusPane, layout } = useChatPaneActions();
   const { environments, isReady: environmentCatalogReady } = useEnvironments();
+  // Full-page children of the _chat layout (the pull-requests page today)
+  // render through the outlet; the pane workspace only owns pane targets.
+  // Without this, navigating there changes the URL while the panes keep
+  // painting — the click appears to do nothing.
+  const isPaneTargetRoute = useMatches({
+    select: (matches) => isChatPaneTargetRouteId(matches[matches.length - 1]?.routeId),
+  });
   const knownEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
 
-  if (!layout) {
+  if (!layout || !isPaneTargetRoute) {
     return <DiffWorkerPoolProvider>{fallback}</DiffWorkerPoolProvider>;
   }
 

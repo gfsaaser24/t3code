@@ -8,6 +8,7 @@ import {
   parseThemeFile,
   getThemeColorVariable,
   THEME_COLOR_ROLES,
+  toCanonicalThemeColor,
   withDerivedRegionThemeRoles,
   type ThemeAppearance,
   type ThemeColorRole,
@@ -105,8 +106,10 @@ describe("region theme roles", () => {
       colors: withoutRegionRoles,
     });
 
-    expect(parsed.colors.menuSurface).toBe("#0a1f16");
-    expect(parsed.colors.sidebarCardSurface).toBe("#123322");
+    // The loader canonicalizes stored colors to OKLCH, so derived region
+    // roles compare in canonical form rather than the file's hex spelling.
+    expect(parsed.colors.menuSurface).toBe(toCanonicalThemeColor("#0a1f16"));
+    expect(parsed.colors.sidebarCardSurface).toBe(toCanonicalThemeColor("#123322"));
     expect(parsed.colors.menuSurface).not.toBe(getDefaultThemeColors("light").menuSurface);
   });
 
