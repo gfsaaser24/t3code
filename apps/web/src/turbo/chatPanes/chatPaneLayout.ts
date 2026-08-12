@@ -229,3 +229,17 @@ export function resetChatPaneWeights(layout: ChatPaneLayout): ChatPaneLayout {
   ];
   return { ...layout, panes };
 }
+
+// The pane workspace replaces the router outlet, which is safe only while
+// every child of the _chat layout is a pane target (a thread, a draft, or
+// the index). Full-page children like /pull-requests must render through
+// the outlet or clicking them changes the URL and nothing else.
+const CHAT_PANE_TARGET_ROUTE_IDS: ReadonlySet<string> = new Set([
+  "/_chat/",
+  "/_chat/$environmentId/$threadId",
+  "/_chat/draft/$draftId",
+]);
+
+export function isChatPaneTargetRouteId(routeId: string | undefined): boolean {
+  return routeId !== undefined && CHAT_PANE_TARGET_ROUTE_IDS.has(routeId);
+}

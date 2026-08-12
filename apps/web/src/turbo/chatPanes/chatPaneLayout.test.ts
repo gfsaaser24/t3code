@@ -10,6 +10,7 @@ import {
   focus,
   insertLeft,
   insertRight,
+  isChatPaneTargetRouteId,
   promoteDraft,
   reconcileFocusedRoute,
   replaceFocused,
@@ -181,5 +182,19 @@ describe("chatPaneLayout", () => {
     const deduplicated = reconcileFocusedRoute(current, serverTarget("thread-a"));
     expect(deduplicated.panes).toEqual([first, second]);
     expect(deduplicated.focusedPaneId).toBe(first.id);
+  });
+});
+
+describe("isChatPaneTargetRouteId", () => {
+  it("treats the index, thread, and draft routes as pane targets", () => {
+    expect(isChatPaneTargetRouteId("/_chat/")).toBe(true);
+    expect(isChatPaneTargetRouteId("/_chat/$environmentId/$threadId")).toBe(true);
+    expect(isChatPaneTargetRouteId("/_chat/draft/$draftId")).toBe(true);
+  });
+
+  it("routes full-page children like pull-requests through the outlet", () => {
+    expect(isChatPaneTargetRouteId("/_chat/pull-requests")).toBe(false);
+    expect(isChatPaneTargetRouteId("/_chat")).toBe(false);
+    expect(isChatPaneTargetRouteId(undefined)).toBe(false);
   });
 });
