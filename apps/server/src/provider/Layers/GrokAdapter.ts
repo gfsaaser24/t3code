@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type GrokSettings,
   EventId,
+  type ProviderInteractionMode,
   type ProviderApprovalDecision,
   type ProviderRuntimeEvent,
   type ProviderSession,
@@ -31,6 +32,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
+import { getProviderOptionStringSelectionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -50,13 +52,19 @@ import {
   makeAcpRequestOpenedEvent,
   makeAcpRequestResolvedEvent,
   makeAcpToolCallEvent,
+  makeAcpUsageUpdatedEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
 import { parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import {
   applyGrokAcpModelSelection,
   currentGrokModelIdFromSessionSetup,
+  decodeGrokAcpModelReasoningCapabilities,
+  findGrokAcpReasoningConfigOption,
   makeGrokAcpRuntime,
+  resolveGrokAcpModeIds,
+  resolveGrokAcpModelReasoningValue,
+  resolveGrokAcpReasoningValue,
   resolveGrokAcpBaseModelId,
 } from "../acp/GrokAcpSupport.ts";
 import {
@@ -116,7 +124,9 @@ interface GrokSessionContext {
    * >0 means a turn is actively running, so a new sendTurn is a steer that
    * continues it, and only the last remaining prompt settles the turn. */
   promptsInFlight: number;
+  readonly availableModels: ReadonlyArray<EffectAcpSchema.ModelInfo>;
   currentModelId: string | undefined;
+  currentReasoningEffort: string | undefined;
   stopped: boolean;
 }
 
@@ -746,6 +756,11 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
           });
 
+          const availableModels = started.sessionSetupResult.models?.availableModels ?? [];
+          const initialReasoning = decodeGrokAcpModelReasoningCapabilities(
+            availableModels.find((model) => model.modelId === boundModelId),
+          );
+
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -777,7 +792,9 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
             activeTurnId: undefined,
             interruptedTurnIds: new Set(),
             promptsInFlight: 0,
+            availableModels,
             currentModelId: boundModelId,
+            currentReasoningEffort: initialReasoning?.currentValue,
             stopped: false,
           };
 
@@ -791,12 +808,35 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 if (
                   event._tag === "PlanUpdated" ||
                   event._tag === "ToolCallUpdated" ||
-                  event._tag === "ContentDelta"
+                  event._tag === "ContentDelta" ||
+                  event._tag === "ConfigOptionsChanged" ||
+                  event._tag === "UsageUpdated"
                 ) {
                   yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                 }
 
                 if (event._tag === "ModeChanged") {
+                  return;
+                }
+
+                // Usage is session telemetry. It must not be dropped just
+                // because the root prompt has already settled (or because a
+                // turn was interrupted).
+                if (event._tag === "UsageUpdated") {
+                  yield* offerRuntimeEvent(
+                    makeAcpUsageUpdatedEvent({
+                      stamp: yield* makeEventStamp(),
+                      provider: PROVIDER,
+                      threadId: ctx.threadId,
+                      turnId: resolveNotificationTurnId(ctx),
+                      usage: event.usage,
+                      rawPayload: event.rawPayload,
+                    }),
+                  );
+                  return;
+                }
+
+                if (event._tag === "ConfigOptionsChanged") {
                   return;
                 }
 
@@ -942,13 +982,138 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
               const requestedTurnModelId = turnModelSelection?.model
                 ? resolveGrokAcpBaseModelId(turnModelSelection.model)
                 : undefined;
+              const previousModelId = ctx.currentModelId;
               const currentModelId = yield* applyGrokAcpModelSelection({
                 runtime: ctx.acp,
-                currentModelId: ctx.currentModelId,
+                currentModelId: previousModelId,
                 requestedModelId: requestedTurnModelId,
                 mapError: (cause) =>
                   mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
               });
+              // The agent is already on the new model, so record it before any
+              // later preparation step can fail; otherwise a failed turn leaves
+              // ctx pointing at a model the session no longer runs.
+              ctx.currentModelId = currentModelId;
+
+              // ACP configuration is negotiated per session and may change
+              // after a model selection. Resolve every T3-facing choice from
+              // the latest native state immediately before prompting.
+              let effort: string | undefined;
+              const configOptionsAfterModel = yield* ctx.acp.getConfigOptions;
+              const requestedReasoning = getProviderOptionStringSelectionValue(
+                turnModelSelection?.options,
+                "reasoning",
+              );
+              const reasoningOption = findGrokAcpReasoningConfigOption(configOptionsAfterModel);
+              const modelReasoning = decodeGrokAcpModelReasoningCapabilities(
+                ctx.availableModels.find((model) => model.modelId === currentModelId),
+              );
+              if (currentModelId !== previousModelId) {
+                ctx.currentReasoningEffort = modelReasoning?.currentValue;
+              }
+              if (requestedReasoning !== undefined) {
+                if (reasoningOption) {
+                  const nativeReasoningValue = resolveGrokAcpReasoningValue(
+                    reasoningOption,
+                    requestedReasoning,
+                  );
+                  if (!nativeReasoningValue) {
+                    return yield* new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/set_config_option",
+                      detail: `Grok did not advertise reasoning value '${requestedReasoning}'.`,
+                    });
+                  }
+                  yield* ctx.acp
+                    .setConfigOption(reasoningOption.id, nativeReasoningValue)
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        mapAcpToAdapterError(
+                          PROVIDER,
+                          input.threadId,
+                          "session/set_config_option",
+                          cause,
+                        ),
+                      ),
+                    );
+                  const configOptionsAfterReasoning = yield* ctx.acp.getConfigOptions;
+                  const appliedReasoningOption = findGrokAcpReasoningConfigOption(
+                    configOptionsAfterReasoning,
+                  );
+                  effort =
+                    appliedReasoningOption?.type === "select"
+                      ? appliedReasoningOption.currentValue.trim() || nativeReasoningValue
+                      : nativeReasoningValue;
+                  ctx.currentReasoningEffort = effort;
+                } else if (modelReasoning === undefined) {
+                  // The session advertises no reasoning surface at all: the
+                  // requested value is a stale persisted selection from a CLI
+                  // build that did advertise one. Ignore it instead of
+                  // blocking every prompt on this thread.
+                  effort = undefined;
+                  ctx.currentReasoningEffort = undefined;
+                } else {
+                  const nativeReasoningValue = resolveGrokAcpModelReasoningValue(
+                    ctx.availableModels.find((model) => model.modelId === currentModelId),
+                    requestedReasoning,
+                  );
+                  if (!nativeReasoningValue || !currentModelId) {
+                    return yield* new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "session/set_model",
+                      detail: `Grok did not advertise reasoning value '${requestedReasoning}' for the current model.`,
+                    });
+                  }
+                  yield* ctx.acp
+                    .setSessionModel(currentModelId, {
+                      reasoningEffort: nativeReasoningValue,
+                    })
+                    .pipe(
+                      Effect.mapError((cause) =>
+                        mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", cause),
+                      ),
+                    );
+                  effort = nativeReasoningValue;
+                  ctx.currentReasoningEffort = nativeReasoningValue;
+                }
+              } else if (reasoningOption?.type === "select") {
+                effort = reasoningOption.currentValue.trim() || undefined;
+                ctx.currentReasoningEffort = effort;
+              } else {
+                effort = ctx.currentReasoningEffort ?? modelReasoning?.currentValue;
+              }
+
+              const interactionMode: ProviderInteractionMode = input.interactionMode ?? "default";
+              const modeState = yield* ctx.acp.getModeState;
+              const grokModeIds = resolveGrokAcpModeIds(modeState);
+              // A plan request without a negotiated pair is carried-over UI
+              // state from another provider (the toggle is hidden for these
+              // sessions), so drop it like a stale reasoning selection
+              // instead of blocking every turn on the thread. Default turns
+              // only leave the negotiated plan mode; agents may gate
+              // permissions behind modes T3 does not model (e.g. "ask"), and
+              // forcing the default mode on every turn would silently bypass
+              // them.
+              const modeId =
+                interactionMode === "plan"
+                  ? grokModeIds?.planModeId
+                  : grokModeIds !== undefined && modeState?.currentModeId === grokModeIds.planModeId
+                    ? grokModeIds.defaultModeId
+                    : undefined;
+              if (modeId !== undefined) {
+                yield* ctx.acp
+                  .setMode(modeId)
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      mapAcpToAdapterError(
+                        PROVIDER,
+                        input.threadId,
+                        "session/set_config_option",
+                        cause,
+                      ),
+                    ),
+                  );
+              }
 
               const text = input.input?.trim();
               const imagePromptParts = yield* Effect.forEach(
@@ -997,7 +1162,6 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 });
               }
 
-              ctx.currentModelId = currentModelId;
               const displayModel = currentModelId
                 ? resolveGrokAcpBaseModelId(currentModelId)
                 : undefined;
@@ -1034,7 +1198,10 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                   provider: PROVIDER,
                   threadId: input.threadId,
                   turnId,
-                  payload: displayModel ? { model: displayModel } : {},
+                  payload: {
+                    ...(displayModel ? { model: displayModel } : {}),
+                    ...(effort ? { effort } : {}),
+                  },
                 });
               }
 
@@ -1044,6 +1211,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
                 displayModel,
                 promptParts,
                 turnId,
+                effort,
               };
             }).pipe(
               Effect.tapCause(() =>

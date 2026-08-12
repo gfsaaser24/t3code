@@ -5,10 +5,31 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { GrokSettings } from "@t3tools/contracts";
+import { isHostWindows } from "@t3tools/shared/hostProcess";
 
-import { buildInitialGrokProviderSnapshot, checkGrokProviderStatus } from "./GrokProvider.ts";
+import {
+  buildGrokCapabilitiesFromConfigOptions,
+  buildGrokCapabilitiesFromModelInfo,
+  buildGrokDiscoveredModelsFromSessionModelState,
+  buildGrokPresentation,
+  buildInitialGrokProviderSnapshot,
+  checkGrokProviderStatus,
+} from "./GrokProvider.ts";
 
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);
+
+// These helpers write real executables the spawner runs, so tests read the
+// actual host platform through the HostProcessPlatform reference default.
+function fakeGrokExecutableName(isWindows: boolean): string {
+  return isWindows ? "grok.cmd" : "grok";
+}
+
+function makeFakeGrokScript(isWindows: boolean, lines: ReadonlyArray<string>): string {
+  if (isWindows) {
+    return ["@echo off", ...lines.map((line) => line), ""].join("\r\n");
+  }
+  return ["#!/bin/sh", ...lines, ""].join("\n");
+}
 
 describe("buildInitialGrokProviderSnapshot", () => {
   it.effect("returns a disabled snapshot when settings.enabled is false", () =>
@@ -36,6 +57,161 @@ describe("buildInitialGrokProviderSnapshot", () => {
   );
 });
 
+describe("Grok ACP capability discovery", () => {
+  it("builds a reasoning descriptor from the negotiated native values", () => {
+    const capabilities = buildGrokCapabilitiesFromConfigOptions([
+      {
+        id: "native-thought-level",
+        name: "Reasoning",
+        category: "thought_level",
+        type: "select",
+        currentValue: "balanced",
+        options: [
+          { value: "quick", name: "Quick" },
+          { value: "balanced", name: "Balanced" },
+          { value: "deep-native", name: "Deep Native" },
+        ],
+      },
+    ]);
+
+    expect(capabilities.optionDescriptors).toEqual([
+      {
+        id: "reasoning",
+        label: "Reasoning",
+        type: "select",
+        currentValue: "balanced",
+        options: [
+          { id: "quick", label: "Quick" },
+          { id: "balanced", label: "Balanced", isDefault: true },
+          { id: "deep-native", label: "Deep Native" },
+        ],
+      },
+    ]);
+  });
+
+  it("builds a reasoning descriptor from Grok's verified model metadata", () => {
+    const capabilities = buildGrokCapabilitiesFromModelInfo({
+      modelId: "grok-4.5",
+      name: "Grok 4.5",
+      _meta: {
+        totalContextTokens: 500000,
+        supportsReasoningEffort: true,
+        reasoningEffort: "high",
+        reasoningEfforts: [
+          {
+            id: "high",
+            value: "high",
+            label: "High Effort",
+            description: "Highest implementation quality",
+            default: true,
+          },
+          { id: "medium", value: "medium", label: "Medium Effort", default: false },
+        ],
+      },
+    });
+
+    expect(capabilities.optionDescriptors?.[0]).toMatchObject({
+      id: "reasoning",
+      type: "select",
+      currentValue: "high",
+      options: [
+        { id: "high", label: "High Effort", isDefault: true },
+        { id: "medium", label: "Medium Effort" },
+      ],
+    });
+  });
+
+  it("reports the live reasoning effort when it differs from the declared default", () => {
+    const capabilities = buildGrokCapabilitiesFromModelInfo({
+      modelId: "grok-4.5",
+      name: "Grok 4.5",
+      _meta: {
+        supportsReasoningEffort: true,
+        reasoningEffort: "medium",
+        reasoningEfforts: [
+          { id: "high", value: "high", label: "High Effort", default: true },
+          { id: "medium", value: "medium", label: "Medium Effort", default: false },
+        ],
+      },
+    });
+
+    expect(capabilities.optionDescriptors?.[0]).toMatchObject({
+      id: "reasoning",
+      type: "select",
+      currentValue: "medium",
+      options: [
+        { id: "high", label: "High Effort" },
+        { id: "medium", label: "Medium Effort", isDefault: true },
+      ],
+    });
+  });
+
+  it("applies session config capabilities only to the current model", () => {
+    const sessionCapabilities = buildGrokCapabilitiesFromConfigOptions([
+      {
+        id: "reasoning",
+        name: "Reasoning",
+        type: "select",
+        currentValue: "high",
+        options: [
+          { value: "low", name: "Low" },
+          { value: "high", name: "High" },
+        ],
+      },
+    ]);
+    const models = buildGrokDiscoveredModelsFromSessionModelState(
+      {
+        currentModelId: "grok-build",
+        availableModels: [
+          { modelId: "grok-build", name: "Grok Build" },
+          {
+            modelId: "grok-4.5",
+            name: "Grok 4.5",
+            _meta: {
+              supportsReasoningEffort: true,
+              reasoningEffort: "medium",
+              reasoningEfforts: [
+                { id: "medium", value: "medium", label: "Medium Effort" },
+                { id: "high", value: "high", label: "High Effort" },
+              ],
+            },
+          },
+        ],
+      },
+      sessionCapabilities,
+    );
+
+    expect(models[0]?.capabilities).toEqual(sessionCapabilities);
+    expect(models[1]?.capabilities?.optionDescriptors?.[0]).toMatchObject({
+      id: "reasoning",
+      currentValue: "medium",
+    });
+  });
+
+  it("keeps custom models empty and hides Plan until the pair is negotiated", () => {
+    const capabilities = buildGrokCapabilitiesFromConfigOptions([]);
+    const models = buildGrokDiscoveredModelsFromSessionModelState(
+      {
+        currentModelId: "grok-build",
+        availableModels: [{ modelId: "grok-build", name: "Grok Build" }],
+      },
+      capabilities,
+    );
+
+    expect(models[0]?.capabilities).toEqual({ optionDescriptors: [] });
+    expect(buildGrokPresentation(undefined).showInteractionModeToggle).toBe(false);
+    expect(
+      buildGrokPresentation({
+        currentModeId: "code",
+        availableModes: [
+          { id: "architect", name: "Architect" },
+          { id: "code", name: "Code" },
+        ],
+      }).showInteractionModeToggle,
+    ).toBe(true);
+  });
+});
+
 it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
   it.effect("reports the binary as missing when the binary path does not resolve", () =>
     Effect.gen(function* () {
@@ -59,11 +235,17 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
+          const isWindows = yield* isHostWindows;
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-version-" });
-          const grokPath = path.join(dir, "grok");
+          const grokPath = path.join(dir, fakeGrokExecutableName(isWindows));
           yield* fs.writeFileString(
             grokPath,
-            ["#!/bin/sh", `printf "%s\\n" "${secretStderr}" >&2`, "exit 2", ""].join("\n"),
+            makeFakeGrokScript(
+              isWindows,
+              isWindows
+                ? [`echo ${secretStderr} 1>&2`, "exit /b 2"]
+                : [`printf "%s\\n" "${secretStderr}" >&2`, "exit 2"],
+            ),
           );
           yield* fs.chmod(grokPath, 0o755);
 
@@ -87,11 +269,17 @@ it.layer(NodeServices.layer)("checkGrokProviderStatus", (it) => {
         Effect.gen(function* () {
           const fs = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
+          const isWindows = yield* isHostWindows;
           const dir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-grok-success-" });
-          const grokPath = path.join(dir, "grok");
+          const grokPath = path.join(dir, fakeGrokExecutableName(isWindows));
           yield* fs.writeFileString(
             grokPath,
-            ["#!/bin/sh", 'printf "grok-cli 0.0.99\\n"', "exit 0", ""].join("\n"),
+            makeFakeGrokScript(
+              isWindows,
+              isWindows
+                ? ["echo grok-cli 0.0.99", "exit /b 0"]
+                : ['printf "grok-cli 0.0.99\\n"', "exit 0"],
+            ),
           );
           yield* fs.chmod(grokPath, 0o755);
 

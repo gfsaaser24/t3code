@@ -19,6 +19,7 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import {
   buildServerProvider,
+  buildSelectOptionDescriptor,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -29,7 +30,15 @@ import {
   enrichProviderSnapshotWithVersionAdvisory,
   type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance.ts";
-import { makeGrokAcpRuntime, resolveGrokAcpBaseModelId } from "../acp/GrokAcpSupport.ts";
+import {
+  collectGrokAcpSelectOptions,
+  decodeGrokAcpModelReasoningCapabilities,
+  findGrokAcpReasoningConfigOption,
+  grokAcpHasPlanModePair,
+  makeGrokAcpRuntime,
+  resolveGrokAcpBaseModelId,
+} from "../acp/GrokAcpSupport.ts";
+import type { AcpSessionModeState } from "../acp/AcpRuntimeModel.ts";
 
 const GROK_PRESENTATION = {
   displayName: "Grok",
@@ -37,6 +46,13 @@ const GROK_PRESENTATION = {
   showInteractionModeToggle: false,
   requiresNewThreadForModelChange: true,
 } as const;
+
+export function buildGrokPresentation(modeState: AcpSessionModeState | undefined) {
+  return {
+    ...GROK_PRESENTATION,
+    showInteractionModeToggle: grokAcpHasPlanModePair(modeState),
+  } as const;
+}
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
@@ -99,12 +115,79 @@ function grokModelsFromSettings(
   return providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES);
 }
 
-function buildGrokDiscoveredModelsFromSessionModelState(
+export function buildGrokCapabilitiesFromConfigOptions(
+  configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+): ModelCapabilities {
+  const reasoningOption = findGrokAcpReasoningConfigOption(configOptions);
+  if (!reasoningOption || reasoningOption.type !== "select") {
+    return EMPTY_CAPABILITIES;
+  }
+  // collectGrokAcpSelectOptions trims option values, so trim currentValue too
+  // or a padded value from the agent would drop the current selection.
+  const currentValue = reasoningOption.currentValue.trim();
+  const choices = collectGrokAcpSelectOptions(reasoningOption).map((option) => ({
+    value: option.value,
+    label: option.name,
+    ...(option.value === currentValue ? { isDefault: true } : {}),
+  }));
+  if (choices.length === 0) {
+    return EMPTY_CAPABILITIES;
+  }
+  return createModelCapabilities({
+    optionDescriptors: [
+      buildSelectOptionDescriptor({
+        id: "reasoning",
+        label: reasoningOption.name.trim() || "Reasoning",
+        options: choices,
+      }),
+    ],
+  });
+}
+
+export function buildGrokCapabilitiesFromModelInfo(
+  model: EffectAcpSchema.ModelInfo,
+): ModelCapabilities {
+  const reasoning = decodeGrokAcpModelReasoningCapabilities(model);
+  if (!reasoning) {
+    return EMPTY_CAPABILITIES;
+  }
+  return createModelCapabilities({
+    optionDescriptors: [
+      buildSelectOptionDescriptor({
+        id: "reasoning",
+        label: "Reasoning",
+        // The descriptor's currentValue is derived from the isDefault flag, so
+        // when the model reports a live effort it must win over the declared
+        // default; otherwise a user-lowered effort would render as the default.
+        options: reasoning.options.map((option) => ({
+          value: option.value,
+          label: option.label,
+          ...((
+            reasoning.currentValue !== undefined
+              ? option.value === reasoning.currentValue
+              : option.isDefault === true
+          )
+            ? { isDefault: true }
+            : {}),
+        })),
+        description: "Grok's negotiated reasoning effort",
+      }),
+    ],
+  });
+}
+
+export function buildGrokDiscoveredModelsFromSessionModelState(
   modelState: EffectAcpSchema.SessionModelState | null | undefined,
+  currentModelCapabilities?: ModelCapabilities,
 ): ReadonlyArray<ServerProviderModel> {
   if (!modelState || modelState.availableModels.length === 0) {
     return [];
   }
+  // resolveGrokAcpBaseModelId falls back to "grok-build" for empty input, so
+  // only derive a current slug from a real session model id to avoid
+  // accidentally keying the session capabilities onto the fallback model.
+  const currentModelId = modelState.currentModelId?.trim();
+  const currentSlug = currentModelId ? resolveGrokAcpBaseModelId(currentModelId) : undefined;
   const seen = new Set<string>();
   return modelState.availableModels
     .map((model): ServerProviderModel | undefined => {
@@ -113,17 +196,30 @@ function buildGrokDiscoveredModelsFromSessionModelState(
         return undefined;
       }
       seen.add(slug);
+      // Session config options describe only the selected model, so the
+      // config-derived capabilities apply to that model alone; every other
+      // model reports its own advertised metadata.
+      const modelCapabilities =
+        currentModelCapabilities !== undefined && slug === currentSlug
+          ? currentModelCapabilities
+          : buildGrokCapabilitiesFromModelInfo(model);
       return {
         slug,
         name: model.name.trim() || slug,
         isCustom: false,
-        capabilities: EMPTY_CAPABILITIES,
+        capabilities: modelCapabilities,
       };
     })
     .filter((model): model is ServerProviderModel => model !== undefined);
 }
 
-const discoverGrokModelsViaAcp = (
+export interface GrokAcpDiscoverySnapshot {
+  readonly models: ReadonlyArray<ServerProviderModel>;
+  readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+  readonly modeState: AcpSessionModeState | undefined;
+}
+
+export const discoverGrokModelsViaAcp = (
   grokSettings: GrokSettings,
   environment: NodeJS.ProcessEnv = process.env,
 ) =>
@@ -137,7 +233,19 @@ const discoverGrokModelsViaAcp = (
       clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
     });
     const started = yield* acp.start();
-    return buildGrokDiscoveredModelsFromSessionModelState(started.sessionSetupResult.models);
+    const configOptions = yield* acp.getConfigOptions;
+    const modeState = yield* acp.getModeState;
+    const capabilities = buildGrokCapabilitiesFromConfigOptions(configOptions);
+    return {
+      models: buildGrokDiscoveredModelsFromSessionModelState(
+        started.sessionSetupResult.models,
+        capabilities.optionDescriptors && capabilities.optionDescriptors.length > 0
+          ? capabilities
+          : undefined,
+      ),
+      configOptions,
+      modeState,
+    } satisfies GrokAcpDiscoverySnapshot;
   }).pipe(Effect.scoped);
 
 const runGrokVersionCommand = (
@@ -291,14 +399,15 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       },
     });
   }
-  const discoveredModels = discoveryExit.value.value;
+  const discovery = discoveryExit.value.value;
+  const discoveredModels = discovery.models;
   const models =
     discoveredModels.length > 0
       ? grokModelsFromSettings(grokSettings.customModels, discoveredModels)
       : fallbackModels;
 
   return buildServerProvider({
-    presentation: GROK_PRESENTATION,
+    presentation: buildGrokPresentation(discovery.modeState),
     enabled: grokSettings.enabled,
     checkedAt,
     models,

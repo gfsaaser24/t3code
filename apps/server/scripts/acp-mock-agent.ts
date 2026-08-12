@@ -21,6 +21,8 @@ const emitAskQuestion = process.env.T3_ACP_EMIT_ASK_QUESTION === "1";
 const emitXAiAskUserQuestion = process.env.T3_ACP_EMIT_XAI_ASK_USER_QUESTION === "1";
 const emitXAiPromptCompleteThenHang = process.env.T3_ACP_EMIT_XAI_PROMPT_COMPLETE_THEN_HANG === "1";
 const emitForeignSessionUpdates = process.env.T3_ACP_EMIT_FOREIGN_SESSION_UPDATES === "1";
+const emitConfigOptionUpdates = process.env.T3_ACP_EMIT_CONFIG_OPTION_UPDATES === "1";
+const emitUsageUpdates = process.env.T3_ACP_EMIT_USAGE_UPDATES === "1";
 const hangPromptForever = process.env.T3_ACP_HANG_PROMPT_FOREVER === "1";
 const hangFirstPromptForever = process.env.T3_ACP_HANG_FIRST_PROMPT_FOREVER === "1";
 const emitLateUpdateAfterCancel = process.env.T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL === "1";
@@ -46,9 +48,21 @@ const permissionOptionIds = {
   rejectOnce: process.env.T3_ACP_REJECT_ONCE_OPTION_ID ?? "reject-once",
 };
 const sessionId = "mock-session-1";
+const grokNativeFixture = process.env.T3_ACP_GROK_NATIVE_FIXTURE === "1";
+const omitModes = process.env.T3_ACP_OMIT_MODES === "1";
+const configuredUsageSize = Number(process.env.T3_ACP_USAGE_SIZE ?? "272000");
+const configuredUsageUsed = Number(process.env.T3_ACP_USAGE_USED ?? "42000");
+const usageSize =
+  Number.isSafeInteger(configuredUsageSize) && configuredUsageSize >= 0
+    ? configuredUsageSize
+    : 272000;
+const usageUsed =
+  Number.isSafeInteger(configuredUsageUsed) && configuredUsageUsed >= 0
+    ? configuredUsageUsed
+    : 42000;
 
 let currentModeId = "ask";
-let currentModelId = "default";
+let currentModelId = grokNativeFixture ? "grok-build" : "default";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";
 let currentContext = "272k";
@@ -124,6 +138,23 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
     ];
 
     switch (currentModelId) {
+      case "grok-build":
+      case "grok-mock-alt":
+        return [
+          ...baseOptions,
+          {
+            id: "reasoning",
+            name: "Reasoning",
+            category: "thought_level",
+            type: "select",
+            currentValue: currentReasoning,
+            options: [
+              { value: "low", name: "Low" },
+              { value: "medium", name: "Medium" },
+              { value: "high", name: "High" },
+            ],
+          },
+        ];
       case "gpt-5.4":
         return [
           ...baseOptions,
@@ -278,6 +309,10 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
+function sessionModes(): AcpSchema.SessionModeState | null {
+  return omitModes ? null : modeState();
+}
+
 const grokAcpModels: ReadonlyArray<AcpSchema.ModelInfo> = [
   { modelId: "grok-build", name: "Grok Build" },
   { modelId: "grok-mock-alt", name: "Grok Mock Alt" },
@@ -312,7 +347,7 @@ const program = Effect.gen(function* () {
   yield* agent.handleCreateSession(() =>
     Effect.succeed({
       sessionId,
-      modes: modeState(),
+      modes: sessionModes(),
       models: modelState(),
       configOptions: configOptions(),
     }),
@@ -357,7 +392,7 @@ const program = Effect.gen(function* () {
         });
         yield* Effect.sleep(loadSessionDelayMs);
         return {
-          modes: modeState(),
+          modes: sessionModes(),
           models: modelState(),
           configOptions: configOptions(),
         };
@@ -373,7 +408,7 @@ const program = Effect.gen(function* () {
         },
       });
       return {
-        modes: modeState(),
+        modes: sessionModes(),
         models: modelState(),
         configOptions: configOptions(),
       };
@@ -392,6 +427,15 @@ const program = Effect.gen(function* () {
         );
       }
       currentModelId = request.modelId;
+      if (emitConfigOptionUpdates) {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "config_option_update",
+            configOptions: configOptions(),
+          },
+        });
+      }
       return {};
     }),
   );
@@ -427,9 +471,17 @@ const program = Effect.gen(function* () {
       if (request.configId === "fast") {
         currentFast = request.value === true || request.value === "true";
       }
-      return {
-        configOptions: configOptions(),
-      };
+      const nextConfigOptions = configOptions();
+      if (emitConfigOptionUpdates) {
+        yield* agent.client.sessionUpdate({
+          sessionId,
+          update: {
+            sessionUpdate: "config_option_update",
+            configOptions: nextConfigOptions,
+          },
+        });
+      }
+      return { configOptions: nextConfigOptions };
     }),
   );
 
@@ -463,6 +515,17 @@ const program = Effect.gen(function* () {
 
       if (failPrompt) {
         return yield* AcpError.AcpRequestError.internalError("Mock prompt failure");
+      }
+
+      if (emitUsageUpdates) {
+        yield* agent.client.sessionUpdate({
+          sessionId: requestedSessionId,
+          update: {
+            sessionUpdate: "usage_update",
+            size: usageSize,
+            used: usageUsed,
+          },
+        });
       }
 
       if (emitStaleXAiPromptCompleteBeforeSecondHang && promptCount === 1) {
