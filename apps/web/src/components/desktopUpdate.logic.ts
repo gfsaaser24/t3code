@@ -1,5 +1,5 @@
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 import { isWindowsPlatform } from "../lib/utils";
+import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
 
 export type DesktopUpdateButtonAction = "download" | "install" | "none";
 

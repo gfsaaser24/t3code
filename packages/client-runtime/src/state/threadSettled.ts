@@ -3,6 +3,14 @@ import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
 export type ChangeRequestStateLike = "open" | "closed" | "merged";
 
+/** Returns whether the change request state settles the thread immediately. */
+export function changeRequestAutoSettles(
+  state: ChangeRequestStateLike | null | undefined,
+  autoSettleOnMerge = true,
+): boolean {
+  return state === "closed" || (state === "merged" && autoSettleOnMerge);
+}
+
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 export function threadLastActivityAt(shell: OrchestrationThreadShell): string | null {
@@ -221,9 +229,9 @@ export function threadWokeAt(
  * queued turn) are checked first and hold a thread active regardless of any
  * override. Past the blockers, the explicit user override (thread.settle /
  * thread.unsettle commands, projected into settledOverride + settledAt)
- * wins in both directions; without one, a thread auto-settles on a
- * merged/closed PR immediately or on inactivity past the window — except
- * that an open PR blocks the inactivity path entirely. The server
+ * wins in both directions; without one, a thread can auto-settle on a
+ * merged PR, always settles on a closed PR, or settles on inactivity past
+ * the window. An open PR blocks the inactivity path entirely. The server
  * un-settles on real activity (user message, session start, approval/
  * user-input request), so an override never goes stale silently.
  */
@@ -232,16 +240,8 @@ export function effectiveSettled(
   options: {
     readonly now: string;
     readonly autoSettleAfterDays: number | null;
+    readonly autoSettleOnMerge?: boolean;
     readonly changeRequestState?: ChangeRequestStateLike | null;
-    /**
-     * The change request's last-updated time (ISO). An upper bound on when a
-     * merged/closed PR completed: instant PR auto-settle applies only when
-     * the thread has no activity NEWER than this — work continuing after the
-     * merge falls back to the inactivity rule instead of vanishing mid-burst.
-     * Absent (old callers / no data): every merged/closed PR settles
-     * instantly, the pre-gate behavior.
-     */
-    readonly changeRequestUpdatedAt?: string | null;
   },
 ): boolean {
   // Blocked work must remain visible even when a user explicitly settled it.
@@ -267,30 +267,17 @@ export function effectiveSettled(
   // "active" is the explicit keep-active pin: it suppresses auto-settle
   // until real activity clears it server-side.
   if (shell.settledOverride === "active") return false;
-  const lastActivityAt = threadLastActivityAt(shell);
-  if (options.changeRequestState === "merged" || options.changeRequestState === "closed") {
-    // Instant settle is for threads that went quiet at the merge/close.
-    // Activity newer than the PR's last update is the user still working in
-    // the thread AFTER completion — follow-up fixes, a new task on the same
-    // branch — and insta-settling would hide the thread the moment each
-    // burst ends. Such threads fall through to the inactivity rule (an open
-    // PR no longer blocks it: this one is done). Without a timestamp the
-    // comparison is unknowable and the original instant behavior applies.
-    const completedAtMs = Date.parse(options.changeRequestUpdatedAt ?? "");
-    const activityAfterCompletion =
-      !Number.isNaN(completedAtMs) &&
-      lastActivityAt !== null &&
-      Date.parse(lastActivityAt) > completedAtMs;
-    if (!activityAfterCompletion) return true;
-  } else if (options.changeRequestState === "open") {
-    // An open PR is unfinished business regardless of how long the thread
-    // has been quiet: review can take days, and hiding the thread would
-    // bury the work waiting on it. Only merge/close (above) or an explicit
-    // user settle resolves it.
-    return false;
+  if (changeRequestAutoSettles(options.changeRequestState, options.autoSettleOnMerge !== false)) {
+    return true;
   }
+  // An open PR is unfinished business regardless of how long the thread has
+  // been quiet: review can take days, and hiding the thread would bury the
+  // work waiting on it. A configured merge, a close, or an explicit user
+  // settle resolves it.
+  if (options.changeRequestState === "open") return false;
   if (options.autoSettleAfterDays === null) return false;
 
+  const lastActivityAt = threadLastActivityAt(shell);
   if (lastActivityAt === null) return false;
 
   // threadLastActivityAt only returns candidates whose Date.parse beat
