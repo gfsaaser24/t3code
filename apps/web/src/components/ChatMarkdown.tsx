@@ -93,6 +93,13 @@ import { usePreparedConnection } from "../state/session";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
+import { projectEnvironment } from "../state/projects";
+import {
+  claimWorkspaceBasenameLookup,
+  needsWorkspaceBasenameLookup,
+  pickWorkspaceBasenameMatch,
+  WORKSPACE_BASENAME_LOOKUP_LIMIT,
+} from "../workspaceBasenameLookup";
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
 import { isPreviewSupportedInRuntime } from "../previewStateStore";
@@ -113,6 +120,8 @@ interface ChatMarkdownProps {
   className?: string;
   /** Treat single newlines as hard breaks — chat-style user input. */
   lineBreaks?: boolean;
+  /** Parse sanitized raw HTML instead of displaying its source text. */
+  parseRawHtml?: boolean;
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
@@ -149,6 +158,26 @@ function findTaskListMarkerOffset(markdown: string, listItemStart: number): numb
   if (!match?.[1]) return null;
   return listItemStart + firstLine.indexOf(match[1]);
 }
+
+/**
+ * The default `1.25rem` marker gutter (`.chat-markdown ol`) fits two-digit
+ * decimal markers. Once a list's last item reaches three digits (item 100+),
+ * `list-style-position: outside` paints the marker wider than that gutter and
+ * the leading digit gets clipped by the item's own overflow. Rather than
+ * widening the gutter for every list, only lists whose last marker is 3+
+ * digits get a wider `--list-gutter`, sized to that marker's digit count.
+ */
+export function orderedListGutterStyle(
+  itemCount: number,
+  start: number | undefined,
+): { "--list-gutter": string } | undefined {
+  const firstNumber = typeof start === "number" && Number.isFinite(start) ? start : 1;
+  const lastNumber = firstNumber + Math.max(itemCount - 1, 0);
+  const digits = String(Math.abs(lastNumber)).length;
+  if (digits <= 2) return undefined;
+  return { "--list-gutter": `${digits + 1}ch` };
+}
+
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,
   attributes: {
@@ -452,7 +481,7 @@ function MarkdownTable({ children, ...props }: React.ComponentProps<"table">) {
           {children}
         </table>
       </ScrollArea>
-      <div className="chat-markdown-table-footer select-none">
+      <div className="mt-0.5 flex items-center justify-between select-none">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -645,12 +674,12 @@ function MarkdownCodeBlock({
 
   return (
     <div
-      className="chat-markdown-codeblock border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
+      className="chat-markdown-codeblock my-[0.65rem] overflow-hidden rounded-[var(--radius)] border border-border/70 bg-secondary leading-snug dark:border-transparent dark:bg-input/32"
       data-language={language}
       data-wrap={wrapped ? "true" : "false"}
     >
-      <div className="chat-markdown-codeblock-header select-none">
-        <span className="chat-markdown-codeblock-title">
+      <div className="chat-markdown-codeblock-header flex items-center justify-between gap-2 pt-1.5 pr-1.5 pb-0 pl-3 select-none">
+        <span className="inline-flex min-w-0 items-center gap-[0.4rem] [font-family:var(--font-mono,ui-monospace,SFMono-Regular,monospace)] [font-size:0.6875rem]">
           <MarkdownCodeBlockTitleContent
             fenceTitle={fenceTitle}
             language={language}
@@ -795,6 +824,7 @@ interface MarkdownFileLinkProps {
   threadRef?: ScopedThreadRef | undefined;
   onOpen: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
   onOpenWithSystemDefault: (targetPath: string) => Promise<AtomCommandResult<unknown, unknown>>;
+  onOpenInPanel: (workspaceRelativePath: string, line: number | undefined) => void;
   onOpenInBrowser?: (() => Promise<AtomCommandResult<unknown, unknown>>) | undefined;
   className?: string | undefined;
 }
@@ -901,7 +931,10 @@ const failedFaviconHosts = new Set<string>();
 const MarkdownLinkFavicon = memo(function MarkdownLinkFavicon({ host }: { host: string }) {
   const [failedHost, setFailedHost] = useState<string | null>(null);
   return (
-    <span className="chat-markdown-link-favicon" aria-hidden>
+    <span
+      className="ms-[0.25em] me-[0.2em] inline-flex size-[14px] [vertical-align:-0.125em]"
+      aria-hidden
+    >
       {failedHost === host || failedFaviconHosts.has(host) ? (
         <GlobeIcon className={MARKDOWN_LINK_FAVICON_CLASS_NAME} />
       ) : (
@@ -1048,7 +1081,7 @@ function MarkdownExternalLinkContent({
     const leadingLength = leadingExternalLinkTextLength(plainText);
     return (
       <>
-        <span className="chat-markdown-link-leading">
+        <span className="whitespace-nowrap">
           <MarkdownLinkFavicon host={host} />
           {plainText.slice(0, leadingLength)}
         </span>
@@ -1064,7 +1097,7 @@ function MarkdownExternalLinkContent({
     const leadingLength = leadingExternalLinkTextLength(firstChild);
     return (
       <>
-        <span className="chat-markdown-link-leading">
+        <span className="whitespace-nowrap">
           <MarkdownLinkFavicon host={host} />
           {firstChild.slice(0, leadingLength)}
         </span>
@@ -1076,7 +1109,7 @@ function MarkdownExternalLinkContent({
 
   return (
     <>
-      <span className="chat-markdown-link-leading">
+      <span className="whitespace-nowrap">
         <MarkdownLinkFavicon host={host} />
         {firstChild}
       </span>
@@ -1098,6 +1131,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   threadRef,
   onOpen,
   onOpenWithSystemDefault,
+  onOpenInPanel,
   onOpenInBrowser,
   className,
 }: MarkdownFileLinkProps) {
@@ -1141,8 +1175,8 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       handleOpenInEditor();
       return;
     }
-    useRightPanelStore.getState().openFile(threadRef, workspaceRelativePath, line);
-  }, [handleOpenInEditor, line, threadRef, workspaceRelativePath]);
+    onOpenInPanel(workspaceRelativePath, line);
+  }, [handleOpenInEditor, line, onOpenInPanel, threadRef, workspaceRelativePath]);
 
   const handleOpenWithSystemDefault = useCallback(() => {
     void (async () => {
@@ -1355,7 +1389,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         side="top"
         className="max-w-[min(40rem,calc(100vw-2rem))] font-mono text-[11px] leading-tight"
       >
-        <div className="markdown-file-link-tooltip-scroll overflow-x-auto whitespace-nowrap">
+        <div className="overflow-x-auto whitespace-nowrap [scrollbar-color:color-mix(in_srgb,var(--border)_78%,transparent)_transparent] [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[color-mix(in_srgb,var(--border)_78%,transparent)] [&::-webkit-scrollbar-track]:bg-transparent">
           {displayPath}
         </div>
       </TooltipPopup>
@@ -1380,6 +1414,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.threadRef === next.threadRef &&
     previous.onOpen === next.onOpen &&
     previous.onOpenWithSystemDefault === next.onOpenWithSystemDefault &&
+    previous.onOpenInPanel === next.onOpenInPanel &&
     previous.onOpenInBrowser === next.onOpenInBrowser &&
     previous.className === next.className
   );
@@ -1394,9 +1429,13 @@ function ChatMarkdown({
   skills = EMPTY_MARKDOWN_SKILLS,
   className,
   lineBreaks = false,
+  parseRawHtml = true,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
+    reportFailure: false,
+  });
+  const searchProjectEntries = useAtomQueryRunner(projectEnvironment.searchEntries, {
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, {
@@ -1519,6 +1558,41 @@ function ChatMarkdown({
     },
     [fileEnvironmentId, openPath],
   );
+
+  // A bare filename resolves to the workspace root, which is rarely where the
+  // file is, so ask the index before opening.
+  const openFileInPanel = useCallback(
+    (workspaceRelativePath: string, line: number | undefined) => {
+      if (!threadRef) return;
+      // Claimed on every open so a synchronous one supersedes a lookup already
+      // in flight.
+      const isLatestLookup = claimWorkspaceBasenameLookup();
+      const openAt = (path: string) =>
+        useRightPanelStore.getState().openFile(threadRef, path, line);
+      if (!cwd || !needsWorkspaceBasenameLookup(workspaceRelativePath)) {
+        openAt(workspaceRelativePath);
+        return;
+      }
+      void (async () => {
+        const result = await searchProjectEntries({
+          environmentId: threadRef.environmentId,
+          input: {
+            cwd,
+            query: workspaceRelativePath,
+            limit: WORKSPACE_BASENAME_LOOKUP_LIMIT,
+            kind: "file",
+          },
+        });
+        const match =
+          result._tag === "Success"
+            ? pickWorkspaceBasenameMatch(workspaceRelativePath, result.value.entries)
+            : null;
+        if (!isLatestLookup()) return;
+        openAt(match ?? workspaceRelativePath);
+      })();
+    },
+    [cwd, searchProjectEntries, threadRef],
+  );
   /* eslint-disable react/no-unstable-nested-components -- ReactMarkdown requires component
    * renderers that close over this message's metadata. useMemo keeps them stable until that
    * metadata changes. */
@@ -1553,6 +1627,7 @@ function ChatMarkdown({
           threadRef={threadRef}
           onOpen={openInPreferredEditor}
           onOpenWithSystemDefault={openMarkdownFileWithSystemDefault}
+          onOpenInPanel={openFileInPanel}
           onOpenInBrowser={
             threadRef &&
             isPreviewSupportedInRuntime() &&
@@ -1587,6 +1662,15 @@ function ChatMarkdown({
             </p>
             {children}
           </div>
+        );
+      },
+      ol({ node, start, style, ...props }) {
+        const itemCount =
+          node?.children?.filter((child) => child.type === "element" && child.tagName === "li")
+            .length ?? 0;
+        const gutterStyle = orderedListGutterStyle(itemCount, start);
+        return (
+          <ol {...props} start={start} style={gutterStyle ? { ...style, ...gutterStyle } : style} />
         );
       },
       li({ node, children, ...props }) {
@@ -1628,7 +1712,7 @@ function ChatMarkdown({
           />
         );
       },
-      a({ node, href, children, ...props }) {
+      a({ node, href, children, title: _title, ...props }) {
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
         // The pre-scanned map only sees hrefs the raw-text regex could find;
         // resolving again at render time covers destinations the markdown
@@ -1720,6 +1804,9 @@ function ChatMarkdown({
           props.className,
         );
       },
+      img({ node: _node, title: _title, ...props }) {
+        return <img {...props} />;
+      },
       code({ node, children, className, ...props }) {
         if (node?.properties?.dataInlineCode != null) {
           const codeText = nodeToPlainText(children);
@@ -1785,6 +1872,7 @@ function ChatMarkdown({
     isStreaming,
     markdownFileLinkMetaByHref,
     onTaskListChange,
+    openFileInPanel,
     openInPreferredEditor,
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
@@ -1796,10 +1884,13 @@ function ChatMarkdown({
   ]);
   /* eslint-enable react/no-unstable-nested-components */
 
+  // react-markdown converts unparsed HTML nodes to text when skipHtml is false.
+  // Keep that behavior explicit because literal mode depends on escaping the
+  // complete source token instead of dropping it from the rendered message.
   return (
     <div
       className={cn(
-        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80",
+        "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80 [overflow-wrap:anywhere] [word-break:break-word]",
         className,
       )}
       onCopy={handleCopy}
@@ -1808,7 +1899,8 @@ function ChatMarkdown({
         remarkPlugins={
           lineBreaks ? CHAT_MARKDOWN_REMARK_PLUGINS_WITH_BREAKS : CHAT_MARKDOWN_REMARK_PLUGINS
         }
-        rehypePlugins={CHAT_MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
+        skipHtml={false}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >

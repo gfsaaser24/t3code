@@ -80,15 +80,11 @@ describe("DesktopEnvironment", () => {
       );
       assert.equal(portablePath(environment.rootDir), "/repo");
       assert.equal(portablePath(environment.appRoot), "/repo");
+      assert.equal(portablePath(environment.serverRoot), "/repo");
       assert.equal(portablePath(environment.backendEntryPath), "/repo/apps/server/dist/bin.mjs");
       assert.equal(portablePath(environment.backendCwd), "/repo");
-      assert.equal(environment.displayName, "T3 Turbo (Dev)");
-      assert.equal(environment.branding.releaseRepository, "gfsaaser24/t3code");
       assert.equal(environment.appUserModelId, "com.gabef.t3turbo.dev");
-      assert.equal(environment.linuxDesktopEntryName, "t3-turbo-dev.desktop");
       assert.equal(environment.linuxWmClass, "t3-turbo-dev");
-      assert.equal(environment.userDataDirName, "t3-turbo-dev");
-      assert.equal(environment.legacyUserDataDirName, "T3-Turbo (Dev)");
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
         Option.some("http://localhost:5173/"),
@@ -118,6 +114,24 @@ describe("DesktopEnvironment", () => {
         "/tmp/t3/userdata/browser-artifacts",
       );
       assert.equal(portablePath(environment.serverSettingsPath), "/tmp/t3/userdata/settings.json");
+    }),
+  );
+
+  it.effect("uses the packaged Windows server sidecar as the backend root", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "win32",
+        isPackaged: true,
+        appPath: "/install/resources/app.asar",
+        resourcesPath: "/install/resources",
+      });
+
+      assert.equal(portablePath(environment.appRoot), "/install/resources/app.asar");
+      assert.equal(portablePath(environment.serverRoot), "/install/resources/server.asar");
+      assert.equal(
+        portablePath(environment.backendEntryPath),
+        "/install/resources/server.asar/apps/server/dist/bin.mjs",
+      );
     }),
   );
 

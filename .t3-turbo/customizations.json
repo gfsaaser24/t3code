@@ -16,7 +16,7 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "T3 Turbo — how this branch operates",
+            "T3 Turbo \u2014 how this branch operates",
             "write anything to `pingdotgg/t3code`",
             "Turbo changes always survive ingestion",
             "Turbo state is isolated from the official T3 install"
@@ -743,7 +743,7 @@
     {
       "id": "streaming-flag-cleared-on-turn-settle",
       "status": "implemented",
-      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent — which never arrives when a turn dies — and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
+      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent \u2014 which never arrives when a turn dies \u2014 and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
       "checks": [
         {
           "path": "packages/client-runtime/src/state/threadReducer.ts",
@@ -1278,7 +1278,7 @@
     {
       "id": "settled-lifecycle-sticky-pin",
       "status": "implemented",
-      "summary": "Un-settling a thread is durable and a merged/closed PR only insta-settles a thread that went quiet at completion. The decider no longer spends the keep-active pin on activity (it still wakes explicitly settled threads), and effectiveSettled defers a completed PR to the inactivity rule when thread activity is newer than the PR updatedAt, which now rides the VCS status contract from GitManager into web and mobile classification. Upstream candidate: pingdotgg/t3code#5575 / #5643; drop this seam if upstream merges an equivalent.",
+      "summary": "Un-settling a thread is durable: the decider no longer spends the keep-active pin on activity (it still wakes explicitly settled threads). PARTIALLY RETIRED 2026-08-16: upstream #5880's autoSettleOnMerge toggle superseded the fork's merged-PR updatedAt gate, so threadSettled/contracts/GitManager and the web+mobile updatedAt threading now track upstream. Only the decider pin remains fork-owned. Upstream candidate for the pin: pingdotgg/t3code#5575; drop when upstream lands a sticky un-settle.",
       "checks": [
         {
           "path": "apps/server/src/orchestration/decider.ts",
@@ -1288,30 +1288,6 @@
             "thread.settledOverride !== \"settled\" || !isSessionActivity",
             "thread.settledOverride !== \"settled\" || !wakesSettledThread"
           ]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threadSettled.ts",
-          "markers": ["changeRequestUpdatedAt", "activityAfterCompletion"]
-        },
-        {
-          "path": "packages/contracts/src/git.ts",
-          "markers": ["updatedAt: Schema.optional(Schema.String)"]
-        },
-        {
-          "path": "apps/server/src/git/GitManager.ts",
-          "markers": ["Option.map(pr.updatedAt, DateTime.formatIso)"]
-        },
-        {
-          "path": "apps/web/src/components/Sidebar.tsx",
-          "markers": ["changeRequestUpdatedAt: changeRequest?.updatedAt ?? null"]
-        },
-        {
-          "path": "apps/mobile/src/features/threads/threadListV2.ts",
-          "markers": ["changeRequestUpdatedAt: changeRequest?.updatedAt ?? null"]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["Settled-lifecycle fix (upstream candidate)"]
         }
       ]
     }
