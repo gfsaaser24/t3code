@@ -2158,6 +2158,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       },
     ];
     buildConfig.nsis = {
+      // Keep upstream's blockmap-based differential downloads alongside the
+      // Turbo shortcut registrations.
+      ...buildConfig.nsis,
       // "always" recreates the desktop shortcut on reinstall even when a
       // previous install shipped without one.
       createDesktopShortcut: "always",
