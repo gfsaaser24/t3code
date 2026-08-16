@@ -2613,12 +2613,31 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         ...new Map(
           [...activityRows, ...pinnedActivityRows].map((row) => [row.activityId, row] as const),
         ).values(),
-      ].toSorted(
-        (left, right) =>
-          (left.sequence ?? -1) - (right.sequence ?? -1) ||
-          left.createdAt.localeCompare(right.createdAt) ||
-          left.activityId.localeCompare(right.activityId),
-      );
+      ].toSorted((left, right) => {
+        // Canonical activity order — mirror threadActivityOrder.ts and the
+        // SQL ORDER BY above: null sequences sink, then createdAt, the
+        // lifecycle rank, and byte-order ids (not the ICU collator).
+        const leftSequence = left.sequence ?? Number.MAX_SAFE_INTEGER;
+        const rightSequence = right.sequence ?? Number.MAX_SAFE_INTEGER;
+        if (leftSequence !== rightSequence) {
+          return leftSequence < rightSequence ? -1 : 1;
+        }
+        if (left.createdAt !== right.createdAt) {
+          return left.createdAt < right.createdAt ? -1 : 1;
+        }
+        const lifecycleRank = (kind: string) =>
+          kind.endsWith(".started")
+            ? 0
+            : kind.endsWith(".completed") || kind.endsWith(".resolved")
+              ? 2
+              : 1;
+        const leftRank = lifecycleRank(left.kind);
+        const rightRank = lifecycleRank(right.kind);
+        if (leftRank !== rightRank) {
+          return leftRank - rightRank;
+        }
+        return left.activityId < right.activityId ? -1 : left.activityId > right.activityId ? 1 : 0;
+      });
 
       const thread = {
         id: threadRow.value.threadId,
