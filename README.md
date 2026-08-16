@@ -9,7 +9,6 @@
 | What                                                                           | Where                                                            |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | Master runbook (bring-up order, architecture, threat model, secrets inventory) | [`infra/README.md`](infra/README.md)                             |
-| Headless VPS agent host (Connect + background service; work off the laptop)    | [`infra/headless-vps.md`](infra/headless-vps.md)                 |
 | Rebase seam — upstream files we modify + conflict guidance                     | [`SEAM.md`](SEAM.md)                                             |
 | Supabase: schema, seed, RLS, setup rules                                       | [`infra/supabase/`](infra/supabase/)                             |
 | Cloudflare Tunnel configs + systemd unit                                       | [`infra/cloudflared/`](infra/cloudflared/)                       |
@@ -58,9 +57,6 @@ This will launch T3 Code's backend on your machine as well as the local web app 
 
 Tip: Use `npx t3@latest --help` for the full CLI reference.
 
-To run agents on a remote Linux VPS instead of your laptop (headless server + T3 Connect +
-background service), see [infra/headless-vps.md](./infra/headless-vps.md).
-
 ### Desktop app
 
 Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
@@ -79,9 +75,19 @@ brew install --cask t3-code
 
 #### Arch Linux (AUR)
 
+Stable:
+
 ```bash
 yay -S t3code-bin
 ```
+
+Nightly:
+
+```bash
+yay -S t3code-nightly-bin
+```
+
+The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
 
 ## T3 Turbo downstream
 
@@ -162,7 +168,6 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - [Permission modes](./docs/user/permission-modes.md)
 - [Keyboard shortcuts](./docs/user/keybindings.md)
 - [Customize a project icon](./docs/user/project-settings.md)
-- [Headless VPS environment](./infra/headless-vps.md) (agents on a remote Linux host)
 - [Remote access from a phone or another machine](./docs/user/remote-access.md)
 - [Keeping app and server in sync](./docs/user/updating.md)
 - [Source control integrations](./docs/user/source-control.md)
@@ -170,3 +175,35 @@ Full docs live in [docs/](./docs). There's no docs site yet.
 - Linux: [run T3 Code as a background service](./docs/user/background-service.md)
 
 Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
+
+## If you REALLY want to contribute still.... read this first
+
+### Install `vp`
+
+T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
+
+#### macOS / Linux
+
+```bash
+curl -fsSL https://vite.plus | bash
+```
+
+#### Windows
+
+```bash
+irm https://vite.plus/ps1 | iex
+```
+
+Checkout their getting started guide for more information: https://viteplus.dev/guide/
+
+### Install dependencies
+
+```bash
+vp i
+```
+
+Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
+
+Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
+
+Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).

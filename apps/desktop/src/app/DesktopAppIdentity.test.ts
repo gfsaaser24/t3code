@@ -1,6 +1,3 @@
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodePath from "node:path";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -29,13 +26,6 @@ const defaultEnvironmentInput = {
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
-const legacyUserDataPath = NodePath.join(
-  defaultEnvironmentInput.homeDirectory,
-  "Library",
-  "Application Support",
-  "T3-Turbo",
-);
-
 type TestEnvironmentInput = Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> & {
   readonly env?: Record<string, string | undefined>;
 };
@@ -50,6 +40,7 @@ const makeElectronAppLayer = (calls: ElectronAppCalls) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
     name: Effect.succeed("T3 Turbo"),
+    systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
     quit: Effect.void,
     exit: () => Effect.void,
@@ -150,6 +141,8 @@ const withIdentity = <A, E, R>(
   );
 };
 
+const portablePath = (value: string) => value.replaceAll("\\", "/").replace(/^[A-Z]:\//u, "/");
+
 describe("DesktopAppIdentity", () => {
   it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
@@ -157,14 +150,17 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         const userDataPath = yield* identity.resolveUserDataPath;
 
-        assert.equal(userDataPath, legacyUserDataPath);
+        assert.equal(
+          portablePath(userDataPath),
+          "/Users/alice/Library/Application Support/T3-Turbo",
+        );
       }),
       { legacyPathExists: true },
     ),
   );
 
   it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = legacyUserDataPath;
+    const legacyPath = "/Users/alice/Library/Application Support/T3-Turbo";
     const cause = PlatformError.systemError({
       _tag: "PermissionDenied",
       module: "FileSystem",
@@ -179,10 +175,10 @@ describe("DesktopAppIdentity", () => {
         const error = yield* identity.resolveUserDataPath.pipe(Effect.flip);
 
         assert.instanceOf(error, DesktopAppIdentity.DesktopUserDataPathResolutionError);
-        assert.equal(error.legacyPath, legacyPath);
+        assert.equal(portablePath(error.legacyPath), legacyPath);
         assert.strictEqual(error.cause, cause);
         assert.equal(
-          error.message,
+          portablePath(error.message),
           `Failed to inspect legacy desktop user-data path at "${legacyPath}".`,
         );
       }),
