@@ -152,6 +152,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "multi-chat-pane-workspace",
     "nightly-and-secret-policy",
     "official-data-import",
+    "openrouter-first-party",
     "pooled-subscription-frame",
     "product-identity-and-updater",
     "relay-apns-off-publish-skip",
