@@ -50,12 +50,23 @@ describe("makePendingOpenRouterProvider", () => {
     }),
   );
 
-  it.effect("builds a pending snapshot for enabled OpenRouter", () =>
+  it.effect("builds a pending snapshot for a configured OpenRouter", () =>
     Effect.gen(function* () {
-      const snapshot = yield* makePendingOpenRouterProvider(decodeOpenRouterSettings({}));
+      const snapshot = yield* makePendingOpenRouterProvider(
+        decodeOpenRouterSettings({ apiKey: "sk-or-test" }),
+      );
       expect(snapshot.enabled).toBe(true);
       expect(snapshot.status).toBe("warning");
       expect(snapshot.message).toMatch(/checking openrouter/i);
+    }),
+  );
+
+  it.effect("asks for a key instead of pending when none is configured", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* makePendingOpenRouterProvider(decodeOpenRouterSettings({}));
+      expect(snapshot.enabled).toBe(true);
+      expect(snapshot.status).toBe("error");
+      expect(snapshot.message).toMatch(/Add an OpenRouter API key/i);
     }),
   );
 });
@@ -158,7 +169,10 @@ it.layer(NodeServices.layer.pipe(Layer.provideMerge(ValidModelsHttpClientLive)))
           }),
         );
 
-        expect(snapshot.installed).toBe(true);
+        // No key means no usable provider, so the CLI probe is skipped
+        // entirely and `installed` stays false — startup pays nothing for
+        // an OpenRouter nobody configured.
+        expect(snapshot.installed).toBe(false);
         expect(snapshot.status).toBe("error");
         expect(snapshot.auth.status).toBe("unauthenticated");
         expect(snapshot.message).toMatch(/Add an OpenRouter API key/i);

@@ -158,6 +158,25 @@ export const checkOpenRouterProviderStatus = Effect.fn("checkOpenRouterProviderS
     });
   }
 
+  // OpenRouter ships enabled so it appears in settings, but it cannot do
+  // anything without a key. Short-circuit before the CLI probe so the common
+  // "never configured OpenRouter" install pays no startup spawn for it.
+  if (settings.apiKey.trim().length === 0) {
+    return buildServerProvider({
+      presentation: OPENROUTER_PRESENTATION,
+      enabled: settings.enabled,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: false,
+        version: null,
+        status: "error",
+        auth: { status: "unauthenticated" },
+        message: "Add an OpenRouter API key in provider settings.",
+      },
+    });
+  }
+
   const processEnv = environment ?? buildOpenRouterProcessEnv(settings);
   const cliFields = yield* probeClaudeCliForOpenRouter(settings, processEnv);
   const modelFetch = yield* fetchOpenRouterModels(settings);
@@ -237,6 +256,22 @@ export const makePendingOpenRouterProvider = (
           status: "warning",
           auth: { status: "unknown" },
           message: "OpenRouter is disabled in T3 Turbo settings.",
+        },
+      });
+    }
+
+    if (settings.apiKey.trim().length === 0) {
+      return buildServerProvider({
+        presentation: OPENROUTER_PRESENTATION,
+        enabled: settings.enabled,
+        checkedAt,
+        models,
+        probe: {
+          installed: false,
+          version: null,
+          status: "error",
+          auth: { status: "unauthenticated" },
+          message: "Add an OpenRouter API key in provider settings.",
         },
       });
     }
