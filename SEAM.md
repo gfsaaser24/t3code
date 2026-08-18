@@ -386,6 +386,57 @@ Still carried (upstream has no equivalent yet, see pingdotgg/t3code#5575):
 On a nightly-sync conflict in decider.ts, prefer upstream wholesale if upstream lands a sticky
 un-settle; otherwise reapply only the pin behavior above.
 
+## OpenRouter first-party provider (fork feature)
+
+Adapted from upstream PR pingdotgg/t3code#4125 (closed upstream; archived at
+`archive/upstream-pr-4125-openrouter-provider`). OpenRouter rides the Claude Agent CLI as its
+runtime and ships as a built-in driver with live model-catalog fetching.
+
+Built to survive orchestrator v2 (pingdotgg/t3code#2829):
+
+- **Additive, v2-safe** `apps/server/src/provider/openrouter/` — env ownership
+  (`buildOpenRouterProcessEnv` clears and re-stamps every Anthropic/OpenRouter credential key),
+  base-URL normalization, model catalog fetch with fallbacks, the Claude-settings bridge, and
+  the `withOpenRouterAdapterIdentity` decorator. No V1 adapter imports besides the shape type.
+- **Additive, v2-safe** `Layers/OpenRouterProvider.ts` — status snapshot (CLI probe + API-key
+  validation via the catalog).
+- **Additive, v2-safe** contracts — `OpenRouterSettings` in `packages/contracts/src/settings.ts`
+  and the driver-kind default/display maps in `packages/contracts/src/model.ts`.
+- **Additive, v2-safe** web wiring (six files) — `components/Icons.tsx` (OpenRouterIcon),
+  `components/chat/providerIconUtils.ts`, `components/settings/providerDriverMeta.ts`,
+  `session-logic.ts` (picker option), `composerDraftStore.ts` (provider option keys), and
+  `lib/contextWindow.ts` (display name).
+- **Additive, V1-shim (retires at v2 cutover)** `Drivers/OpenRouterDriver.ts` — the
+  `ProviderDriver` registration. v2's `ClaudeAdapterV2` already imports the same
+  `makeClaudeEnvironment`/`mergeProviderInstanceEnvironment` plumbing and accepts per-instance
+  env, so the rewrite is a small instance flavor feeding `buildOpenRouterProcessEnv` into it.
+- Deliberately NOT modified: `ClaudeAdapter.ts`. The upstream PR parameterized its provider
+  constant across ~50 sites; the fork instead decorates the finished adapter to re-stamp the
+  driver identity on events and sessions, keeping the churn-heavy file merge-clean.
+
+On a nightly-sync conflict: everything here is additive except `builtInDrivers.ts`,
+`settings.ts`/`model.ts` map entries, and the six web wiring files above — re-add the fork lines
+after upstream's. If upstream ships its own OpenRouter or the ACP registry (#6071) covers it,
+prefer upstream and retire the shim first.
+
+## Releases build from `turbo` (fork policy)
+
+Upstream's `release.yml` resolves scheduled and dispatched releases from whatever ref the run was
+started on, which on this fork is the default branch `main`. `main` only tracks upstream, so every
+installer the fork published was upstream code at upstream's version — none of the fork's work
+(chat panes, OpenRouter, relay changes) ever reached a published release, and the fork's own
+version line never advanced there.
+
+- `TURBO_RELEASE_REF` pins non-tag runs to `turbo`; tag pushes still build the pushed tag.
+- `preflight` resolves that ref to a commit sha (`steps.release_ref`) and every build, release, and
+  deploy job checks out that one sha, so a mid-run push to `turbo` cannot split the release.
+- `TURBO_RELEASE_BRANCH` sends the finalize job's version-bump commit to `turbo`, not `main`.
+- Both are guarded by `github.repository == 'gfsaaser24/t3code'`, so upstream behavior is unchanged
+  and the file stays merge-clean.
+
+On a nightly-sync conflict: keep upstream's job graph and re-add the two `env` entries plus the
+five `ref:`/push lines. If upstream ever gains its own release-branch input, prefer it.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the

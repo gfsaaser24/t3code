@@ -1290,6 +1290,74 @@
           ]
         }
       ]
+    },
+    {
+      "id": "openrouter-first-party",
+      "status": "implemented",
+      "summary": "First-class OpenRouter provider, adapted from upstream PR pingdotgg/t3code#4125 (closed upstream in favor of the docs recipe and pending orchestrator v2). Rides the Claude Agent CLI as its runtime. Designed to survive v2: the transport core (env ownership, model catalog, settings bridge) lives in provider/openrouter and touches no V1 adapter contract; the Claude adapter is decorated (withOpenRouterAdapterIdentity), never modified. Only the V1 ProviderDriver shim (Drivers/OpenRouterDriver.ts) retires at the v2 cutover, to be rewritten as a small instance flavor feeding the same env into ClaudeAdapterV2, which already imports the identical env plumbing.",
+      "checks": [
+        {
+          "path": "apps/server/src/provider/openrouter/OpenRouterRuntime.ts",
+          "markers": [
+            "OPENROUTER_OWNED_ENV_KEYS",
+            "buildOpenRouterProcessEnv",
+            "withOpenRouterAdapterIdentity"
+          ]
+        },
+        {
+          "path": "apps/server/src/provider/openrouter/OpenRouterModels.ts",
+          "markers": ["fetchOpenRouterModels", "FALLBACK_OPENROUTER_MODELS"]
+        },
+        {
+          "path": "apps/server/src/provider/Drivers/OpenRouterDriver.ts",
+          "markers": [
+            "withOpenRouterAdapterIdentity(",
+            "buildOpenRouterProcessEnv(effectiveConfig, baseEnv)"
+          ]
+        },
+        {
+          "path": "apps/server/src/provider/Layers/OpenRouterProvider.ts",
+          "markers": ["checkOpenRouterProviderStatus", "makePendingOpenRouterProvider"]
+        },
+        {
+          "path": "apps/server/src/provider/builtInDrivers.ts",
+          "markers": ["OpenRouterDriver"]
+        },
+        {
+          "path": "packages/contracts/src/settings.ts",
+          "markers": ["export const OpenRouterSettings"]
+        },
+        {
+          "path": "packages/contracts/src/model.ts",
+          "markers": ["OPENROUTER_DRIVER_KIND"]
+        },
+        {
+          "path": "apps/web/src/components/settings/providerDriverMeta.ts",
+          "markers": ["label: \"OpenRouter\""]
+        },
+        {
+          "path": "apps/web/src/session-logic.ts",
+          "markers": ["label: \"OpenRouter\""]
+        }
+      ]
+    },
+    {
+      "id": "release-from-turbo-branch",
+      "status": "policy",
+      "summary": "Scheduled and dispatched releases build, tag, and finalize from the fork's turbo mainline instead of the main branch that only tracks upstream, so published installers carry the fork's code and version.",
+      "checks": [
+        {
+          "path": ".github/workflows/release.yml",
+          "markers": [
+            "TURBO_RELEASE_BRANCH: ${{ github.repository == 'gfsaaser24/t3code' && 'turbo' || 'main' }}",
+            "TURBO_RELEASE_REF: ${{ (github.event_name != 'push' && github.repository == 'gfsaaser24/t3code') && 'turbo' || github.sha }}",
+            "ref: ${{ env.TURBO_RELEASE_REF }}",
+            "ref: ${{ steps.release_ref.outputs.sha }}",
+            "ref: ${{ env.TURBO_RELEASE_BRANCH }}",
+            "git push origin \"HEAD:${TURBO_RELEASE_BRANCH}\""
+          ]
+        }
+      ]
     }
   ]
 }
