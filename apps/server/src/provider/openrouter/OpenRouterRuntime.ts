@@ -148,7 +148,16 @@ export function withOpenRouterAdapterIdentity<E>(
       ...event,
       provider: OPENROUTER_DRIVER_KIND,
     })),
-    startSession: (input) => Effect.map(adapter.startSession(input), restampSession),
+    // Orchestration addresses this adapter as `openrouter`, but the wrapped
+    // Claude adapter rejects any `startSession` input whose provider is not
+    // its own kind. Translate on the way in, restamp on the way out.
+    startSession: (input) =>
+      Effect.map(
+        adapter.startSession(
+          input.provider === undefined ? input : { ...input, provider: adapter.provider },
+        ),
+        restampSession,
+      ),
     listSessions: () =>
       Effect.map(adapter.listSessions(), (sessions) => sessions.map(restampSession)),
   };

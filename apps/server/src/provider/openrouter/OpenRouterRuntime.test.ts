@@ -129,4 +129,37 @@ describe("withOpenRouterAdapterIdentity", () => {
       expect(listed.map((entry) => entry.provider)).toEqual([OPENROUTER_DRIVER_KIND]);
     }),
   );
+
+  it.effect("hands the wrapped adapter its own provider on startSession input", () =>
+    Effect.gen(function* () {
+      const claudeKind = ProviderDriverKind.make("claudeAgent");
+      const seen: Array<unknown> = [];
+      const base = {
+        provider: claudeKind,
+        streamEvents: Stream.empty,
+        startSession: (input: { provider?: string }) => {
+          seen.push(input.provider);
+          // Mirrors ClaudeAdapter, which rejects a foreign provider outright.
+          return input.provider !== undefined && input.provider !== claudeKind
+            ? Effect.die(`Expected provider '${claudeKind}' but received '${input.provider}'.`)
+            : Effect.succeed({ provider: claudeKind, threadId: "thread-1" });
+        },
+        listSessions: () => Effect.succeed([]),
+      } as unknown as ProviderAdapterShape<never>;
+
+      const decorated = withOpenRouterAdapterIdentity(base);
+
+      const started = yield* decorated.startSession({
+        provider: OPENROUTER_DRIVER_KIND,
+        threadId: "thread-1",
+      } as never) as Effect.Effect<{ provider: string }>;
+
+      expect(seen).toEqual([claudeKind]);
+      expect(started.provider).toBe(OPENROUTER_DRIVER_KIND);
+
+      // An input with no provider stays untouched.
+      yield* decorated.startSession({ threadId: "thread-2" } as never);
+      expect(seen).toEqual([claudeKind, undefined]);
+    }),
+  );
 });
