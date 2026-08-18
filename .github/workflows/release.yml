@@ -26,6 +26,17 @@ permissions:
   contents: read
   id-token: none
 
+# T3 Turbo: the fork's product mainline is `turbo`; `main` only tracks upstream.
+# Scheduled and dispatched releases resolve from the default branch, so every
+# published fork installer was built from upstream code with none of the fork's
+# work in it (chat panes, OpenRouter, relay changes) and carried upstream's
+# version instead of the fork's. Non-tag releases here build and finalize from
+# `turbo`. Tag pushes still build exactly the pushed tag, and the repository
+# condition keeps upstream's behavior unchanged.
+env:
+  TURBO_RELEASE_BRANCH: ${{ github.repository == 'gfsaaser24/t3code' && 'turbo' || 'main' }}
+  TURBO_RELEASE_REF: ${{ (github.event_name != 'push' && github.repository == 'gfsaaser24/t3code') && 'turbo' || github.sha }}
+
 jobs:
   check_changes:
     name: Check for changes since last nightly
@@ -37,6 +48,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ env.TURBO_RELEASE_REF }}
           fetch-depth: 0
           sparse-checkout: |
             /*
@@ -57,10 +69,10 @@ jobs:
           head_sha=$(git rev-parse HEAD)
 
           if [[ "$last_nightly_sha" == "$head_sha" ]]; then
-            echo "No changes on main since last nightly release ($last_nightly_tag). Skipping."
+            echo "No changes on ${TURBO_RELEASE_REF} since last nightly release ($last_nightly_tag). Skipping."
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Changes detected on main since $last_nightly_tag ($last_nightly_sha → $head_sha). Proceeding."
+            echo "Changes detected on ${TURBO_RELEASE_REF} since $last_nightly_tag ($last_nightly_sha → $head_sha). Proceeding."
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -82,17 +94,24 @@ jobs:
       cli_dist_tag: ${{ steps.release_meta.outputs.cli_dist_tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
-      ref: ${{ github.sha }}
+      ref: ${{ steps.release_ref.outputs.sha }}
       connect_enabled: ${{ steps.connect_config.outputs.enabled }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ env.TURBO_RELEASE_REF }}
           fetch-depth: 0
           sparse-checkout: |
             /*
             !/.repos/
           sparse-checkout-cone-mode: false
+
+      # Every build/release job checks out this exact commit, so the whole run
+      # is pinned to one tree even if `turbo` moves mid-release.
+      - id: release_ref
+        name: Resolve release commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
@@ -964,7 +983,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: main
+          ref: ${{ env.TURBO_RELEASE_BRANCH }}
           fetch-depth: 0
           token: ${{ steps.app_token.outputs.token }}
           persist-credentials: true
@@ -1023,7 +1042,7 @@ jobs:
 
           git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml
           git commit -m "chore(release): prepare $RELEASE_TAG"
-          git push origin HEAD:main
+          git push origin "HEAD:${TURBO_RELEASE_BRANCH}"
 
   announce_discord:
     name: Announce release on Discord

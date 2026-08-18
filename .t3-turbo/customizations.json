@@ -16,7 +16,7 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "T3 Turbo \u2014 how this branch operates",
+            "T3 Turbo — how this branch operates",
             "write anything to `pingdotgg/t3code`",
             "Turbo changes always survive ingestion",
             "Turbo state is isolated from the official T3 install"
@@ -29,60 +29,6 @@
         {
           "path": "SEAM.md",
           "markers": ["**Prepended** `AGENTS.md`", "**Replaced** `CLAUDE.md`"]
-        }
-      ]
-    },
-    {
-      "id": "changelog-and-runbook",
-      "status": "implemented",
-      "summary": "The fork keeps its own changelog and operator runbook under docs/operations.",
-      "checks": [
-        {
-          "path": "docs/operations/turbo-changelog.md",
-          "markers": ["# T3 Turbo changelog", "entry here in the same PR"]
-        },
-        {
-          "path": "docs/operations/turbo-runbook.md",
-          "markers": [
-            "# T3 Turbo operator runbook",
-            "Registering a new customization (checklist)",
-            "turbo:customizations:verify"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "product-identity-and-updater",
-      "status": "implemented",
-      "summary": "T3 Turbo has an isolated desktop identity, state home, and fork-owned update feed.",
-      "checks": [
-        {
-          "path": "apps/desktop/src/app/DesktopEnvironment.ts",
-          "markers": [
-            "const APP_BASE_NAME = \"T3 Turbo\";",
-            "const APP_RELEASE_REPOSITORY = \"gfsaaser24/t3code\";",
-            "\"com.gabef.t3turbo\""
-          ]
-        },
-        {
-          "path": "apps/desktop/src/app/DesktopStatePaths.ts",
-          "markers": ["input.joinPath(input.homeDirectory, \".t3-turbo\")"]
-        },
-        {
-          "path": "apps/desktop/package.json",
-          "markers": ["\"productName\": \"T3 Turbo\""]
-        },
-        {
-          "path": "scripts/build-desktop-artifact.ts",
-          "markers": ["T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code", "--publish never"]
-        },
-        {
-          "path": "apps/desktop/src/app/DesktopEnvironment.test.ts",
-          "markers": ["T3 Turbo", "gfsaaser24/t3code"]
-        },
-        {
-          "path": ".github/workflows/release.yml",
-          "markers": ["name=T3 Turbo v$version"]
         }
       ]
     },
@@ -165,6 +111,166 @@
       ]
     },
     {
+      "id": "changelog-and-runbook",
+      "status": "implemented",
+      "summary": "The fork keeps its own changelog and operator runbook under docs/operations.",
+      "checks": [
+        {
+          "path": "docs/operations/turbo-changelog.md",
+          "markers": ["# T3 Turbo changelog", "entry here in the same PR"]
+        },
+        {
+          "path": "docs/operations/turbo-runbook.md",
+          "markers": [
+            "# T3 Turbo operator runbook",
+            "Registering a new customization (checklist)",
+            "turbo:customizations:verify"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cheap-message-unpacking",
+      "status": "implemented",
+      "summary": "TrimmedString trims through the pure both-directions transform instead of allocating an Effect per value, and ForwardCompatibleArray decodes each element once instead of twice while keeping per-element drop-on-failure and a debug log.",
+      "checks": [
+        {
+          "path": "packages/contracts/src/baseSchemas.ts",
+          "markers": [
+            "SchemaTransformation.transform<string, string>({",
+            "decode: (value) => value.trim(),",
+            "encode: (value) => value.trim(),",
+            "Schema.toType(Schema.Array(element))",
+            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
+            "new SchemaIssue.Pointer([index], error.issue)"
+          ]
+        },
+        {
+          "path": "packages/contracts/src/turbo/baseSchemas.test.ts",
+          "markers": [
+            "trims on the encode-without-decode path too",
+            "drops elements this build cannot decode and keeps the rest",
+            "names the failing element's index when encoding fails",
+            "decodes each element exactly once"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/contracts/src/baseSchemas.ts`"]
+        }
+      ]
+    },
+    {
+      "id": "cheap-timestamp-and-sort-keys",
+      "status": "implemented",
+      "summary": "Product timestamps compare as plain fixed-width ISO strings instead of through the ICU collator, and the sidebar bucket sorts plus the keyless pinned block resolve each row's sort key once instead of per comparison.",
+      "checks": [
+        {
+          "path": "apps/web/src/session-logic.ts",
+          "markers": [
+            "import { compareIsoTimestamps } from \"@t3tools/client-runtime/state/thread-activity-order\"",
+            "compareIsoTimestamps(left.createdAt, right.createdAt)",
+            "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
+            "compareIsoTimestamps(a.createdAt, b.createdAt)",
+            "compareIsoTimestamps(a.completedAt, b.completedAt)"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.logic.ts",
+          "markers": [
+            "createdAtMs: parseTimestampMs(thread.createdAt)",
+            "right.createdAtMs - left.createdAtMs",
+            "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
+            "right.settledAtMs - left.settledAtMs",
+            "export function sortSnoozedThreadsForSidebar",
+            "wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null)"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/Sidebar.tsx",
+          "markers": ["snoozedThreads: sortSnoozedThreadsForSidebar(snoozed)"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSort.ts",
+          "markers": [
+            "const leftCreatedAt = left.createdAt;",
+            "leftCreatedAt > rightCreatedAt",
+            "function isCanonicalIsoTimestamp(value: string): boolean",
+            "isCanonicalIsoTimestamp(leftCreatedAt) && isCanonicalIsoTimestamp(rightCreatedAt)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts",
+          "markers": [
+            "legacySortPinnedThreadsByOrderKey",
+            "emits the pre-swap order for product-minted timestamps, ties included",
+            "emits the pre-swap order for non-canonical and malformed stamps too"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/sortOrderEquivalence.test.ts",
+          "markers": [
+            "orders every pair of product-minted timestamps exactly as localeCompare did",
+            "emits the pre-decorate order, ties included",
+            "sortSnoozedThreadsForSidebar (snoozed shelf)"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `apps/web/src/session-logic.ts`",
+            "**Tuned** `apps/web/src/components/Sidebar.logic.ts`",
+            "**Tuned** `packages/client-runtime/src/state/threadSort.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deferred-streaming-code-blocks",
+      "status": "implemented",
+      "summary": "Streaming code fences render as a row-capped, height-reserving placeholder inside the chat code-block frame and are highlighted exactly once when the message completes; the line count is incremental across deltas, the animation is the repo's duty-cycled skeleton sweep, and a fence that never grows is treated as history whose persisted streaming flag predates the reducer fix.",
+      "checks": [
+        {
+          "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
+          "markers": [
+            "export const STREAMING_CODE_FIRST_DELTA_MS = 500;",
+            "export const STREAMING_CODE_MAX_PLACEHOLDER_ROWS = 24;",
+            "if (input.stall === \"never-started\") return \"highlighted\";",
+            "export function countStreamingCodeLines(code: string): number",
+            "export function advanceStreamingCodeLineCount(",
+            "export function resolveStreamingCodeBlockView(input: {",
+            "export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall",
+            "export function StreamingCodeBlockFrame({",
+            "data-streaming-code-placeholder",
+            "data-streaming-code-spacer",
+            "import { Skeleton } from \"~/components/ui/skeleton\";"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/ChatMarkdown.tsx",
+          "markers": [
+            "import { StreamingCodeBlockFrame } from \"../turbo/streamingCodeBlock\";",
+            "<StreamingCodeBlockFrame",
+            "highlighted={"
+          ]
+        },
+        {
+          "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
+          "markers": [
+            "grows one placeholder line per accumulated code line",
+            "caps the rendered rows and reserves the rest with one spacer",
+            "uses the duty-cycled skeleton sweep, not a per-frame pulse",
+            "agrees with the full scan at every prefix of a streamed fence",
+            "colours a fence that never grew, even though the message still claims to stream"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `apps/web/src/components/ChatMarkdown.tsx`"]
+        }
+      ]
+    },
+    {
       "id": "file-explorer",
       "status": "implemented",
       "summary": "Explorer navigation keeps file actions, reveal behavior, and Alt-click bulk folder expansion.",
@@ -196,37 +302,6 @@
         {
           "path": "apps/web/src/components/files/fileTreeBulkExpansion.test.ts",
           "markers": ["getAltChevronExpansion", "setAllDirectoriesExpanded"]
-        }
-      ]
-    },
-    {
-      "id": "workspace-image-preview",
-      "status": "implemented",
-      "summary": "Workspace image types open in editor tabs and render through the shared image-preview classifier.",
-      "checks": [
-        {
-          "path": "packages/shared/src/filePreview.ts",
-          "markers": [
-            "WORKSPACE_IMAGE_PREVIEW_EXTENSIONS",
-            "\".ico\"",
-            "export function isWorkspaceImagePreviewPath"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
-          "markers": ["function WorkspaceImagePreview", "isWorkspaceImagePreviewPath(relativePath)"]
-        },
-        {
-          "path": "apps/web/src/rightPanelStore.ts",
-          "markers": ["const fileSurface =", "openFile: (ref, relativePath, line) =>"]
-        },
-        {
-          "path": "packages/shared/src/filePreview.test.ts",
-          "markers": ["isWorkspaceImagePreviewPath"]
-        },
-        {
-          "path": "apps/web/src/rightPanelStore.test.ts",
-          "markers": ["opens image files as reusable peer tabs"]
         }
       ]
     },
@@ -307,103 +382,6 @@
         {
           "path": "apps/web/src/components/settings/settingsSearch.test.ts",
           "markers": ["exposes T3 Turbo Settings and its Markdown preference"]
-        }
-      ]
-    },
-    {
-      "id": "official-data-import",
-      "status": "implemented",
-      "summary": "Dependency-light import planning, identity remapping, staged storage, restore, and projection replay modules remain recoverable.",
-      "checks": [
-        {
-          "path": "apps/server/src/turbo/officialImport/plan.ts",
-          "markers": [
-            "Schema.Literals([\"skip\", \"replace\", \"clone\"])",
-            "export const OfficialImportIdMap",
-            "export const planOfficialImport",
-            "export const validateOfficialImportPlan"
-          ]
-        },
-        {
-          "path": "apps/server/src/turbo/officialImport/replay.ts",
-          "markers": [
-            "OfficialImportProjectionVerificationError",
-            "rebuildOfficialImportProjections"
-          ]
-        },
-        {
-          "path": "apps/server/src/turbo/officialImport/storage.ts",
-          "markers": ["prepareImportWorkspace", "cutoverImport", "restoreImportBackup"]
-        },
-        {
-          "path": "apps/server/src/cli/officialImport.ts",
-          "markers": [
-            "export const officialImportCommand",
-            "prepareOfficialImport",
-            "applyPreparedOfficialImport"
-          ]
-        },
-        {
-          "path": "apps/server/src/bin.ts",
-          "markers": ["import { officialImportCommand }", "officialImportCommand,"]
-        },
-        {
-          "path": "packages/contracts/src/ipc.ts",
-          "markers": [
-            "DesktopOfficialT3ImportInputSchema",
-            "DesktopOfficialT3ImportResultSchema",
-            "discoverOfficialT3Import?:",
-            "runOfficialT3Import?:"
-          ]
-        },
-        {
-          "path": "apps/desktop/src/ipc/channels.ts",
-          "markers": ["DISCOVER_OFFICIAL_T3_IMPORT_CHANNEL", "RUN_OFFICIAL_T3_IMPORT_CHANNEL"]
-        },
-        {
-          "path": "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
-          "markers": [
-            "yield* ipc.handle(discoverOfficialT3Import)",
-            "yield* ipc.handle(runOfficialT3Import)"
-          ]
-        },
-        {
-          "path": "apps/desktop/src/preload.ts",
-          "markers": ["discoverOfficialT3Import: () =>", "runOfficialT3Import: (input) =>"]
-        },
-        {
-          "path": "apps/server/src/turbo/officialImport/plan.test.ts",
-          "markers": ["official import clone identity graph", "validateOfficialImportPlan"]
-        },
-        {
-          "path": "apps/server/src/turbo/officialImport/storage.test.ts",
-          "markers": ["appendCanonicalEvents", "restoreImportBackup"]
-        },
-        {
-          "path": "apps/desktop/src/ipc/methods/officialT3Environment.ts",
-          "markers": [
-            "const executeImport = Effect.fn",
-            "export const runOfficialT3Import",
-            "yield* primary.stop();",
-            "snapshot.desiredRunning ? primary.start : Effect.void",
-            "Official T3 Code still has an active chat, turn, or approval"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/desktop/DesktopEnvironmentSwitcher.tsx",
-          "markers": ["bridge?.runOfficialT3Import", "Import official T3 Code"]
-        },
-        {
-          "path": "docs/user/official-t3-import.md",
-          "markers": ["t3 import official", "Keep both", "Relay and remote clients"]
-        },
-        {
-          "path": ".plans/22-t3-turbo-official-data-import.md",
-          "markers": [
-            "# T3 Turbo One-Way Official Data Import",
-            "Keep Turbo and skip official",
-            "Keep both; import official with a new UUID"
-          ]
         }
       ]
     },
@@ -525,51 +503,554 @@
       ]
     },
     {
-      "id": "terminal-scrollback-batching",
-      "status": "implemented",
-      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the debounce runs on a per-session fiber (never inside the shared worker, which would serialize every session's batch interval and every drain behind one another) and is enqueued once per burst rather than once per chunk, the batch is a keyed coalescing worker that flushPersist enqueues into and drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
+      "id": "nightly-and-secret-policy",
+      "status": "policy",
+      "summary": "Daily 11 PM Eastern ingestion preserves the last known-good Turbo stack, publishes only to the fork, and excludes the local secrets note.",
       "checks": [
         {
-          "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
+          "path": ".gitignore",
+          "markers": ["/SECRETS DO NOT COMMIT.md"]
+        },
+        {
+          "path": ".t3-turbo/OPENCLAW_RULES.md",
           "markers": [
-            "export function queueTerminalHistoryChunk",
-            "export function flushTerminalHistoryBuffer",
-            "export function endTerminalHistoryStream",
-            "export function readTerminalHistoryBuffer",
-            "export function takeTerminalHistoryToPersist",
-            "dirtySincePersist"
+            "ingestion starts with the last known-good T3 Turbo branch",
+            "Never resolve a collision with a blanket `ours`, `theirs`, force push, clean checkout",
+            "Never bake credentials, tokens, secrets",
+            "Do not publish T3 Turbo to NPM"
           ]
         },
         {
-          "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
+          "path": ".github/workflows/turbo-nightly-sync.yml",
           "markers": [
-            "matches upstream across the cap-trim boundary",
-            "matches upstream's graceful degradation for a non-positive cap",
-            "is byte-identical however the recorded stream is chunked and batched",
-            "is byte-identical however the real stream is chunked and batched",
-            "still owes the persist when a read flushed the batch before the batch tick",
-            "import { capHistory, sanitizeTerminalHistoryChunk } from \"../terminal/Manager.ts\";"
+            "cron: \"0 23 * * *\"",
+            "timezone: \"America/New_York\"",
+            "Resolve the completed Eastern cutoff",
+            "-f until=\"$CUTOFF_INSTANT\"",
+            "Rebase in an isolated worktree",
+            "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
+            "scripts/turbo-product-branding.test.ts",
+            "Record registered relay and portal branch state",
+            "Measure registered relay and portal branch state",
+            "report_repair:",
+            "Record the reviewed repair and PR path",
+            "Create nightly completion report",
+            "T3CODE_DESKTOP_UPDATE_REPOSITORY",
+            "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",
+            "--force-with-lease",
+            "TURBO_CUTOFF_INSTANT: ${{ inputs.cutoff_instant }}"
           ]
         },
         {
-          "path": "apps/server/src/terminal/Manager.ts",
+          "path": "scripts/turbo-nightly-sync.ts",
           "markers": [
-            "const DEFAULT_HISTORY_BATCH_MS = 16;",
-            "historyBuffer: TerminalHistoryBuffer;",
-            "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
-            "historyBatchWorker.drainKey(sessionKey);",
-            "readTerminalHistoryBuffer(session.historyBuffer)",
-            "takeTerminalHistoryToPersist(session.historyBuffer)",
-            "export function sanitizeTerminalHistoryChunk",
-            "export function capHistory",
-            "historyBatchScheduled: boolean;",
-            "if (session.historyBatchScheduled) {",
-            "session.historyBatchScheduled = false;"
+            "nextTurboVersion",
+            "selectTurboVersionBase",
+            "resolveTurboCutoffOverride",
+            "Refusing to move the recorded official Nightly release backward."
+          ]
+        },
+        {
+          "path": "docs/internals/t3-turbo-nightly-inbound.md",
+          "markers": [
+            "replays our Turbo commit",
+            "Every day at 11:00 PM",
+            "installer only in `gfsaaser24/t3code`",
+            "last known-good release"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "official-data-import",
+      "status": "implemented",
+      "summary": "Dependency-light import planning, identity remapping, staged storage, restore, and projection replay modules remain recoverable.",
+      "checks": [
+        {
+          "path": "apps/server/src/turbo/officialImport/plan.ts",
+          "markers": [
+            "Schema.Literals([\"skip\", \"replace\", \"clone\"])",
+            "export const OfficialImportIdMap",
+            "export const planOfficialImport",
+            "export const validateOfficialImportPlan"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/replay.ts",
+          "markers": [
+            "OfficialImportProjectionVerificationError",
+            "rebuildOfficialImportProjections"
+          ]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/storage.ts",
+          "markers": ["prepareImportWorkspace", "cutoverImport", "restoreImportBackup"]
+        },
+        {
+          "path": "apps/server/src/cli/officialImport.ts",
+          "markers": [
+            "export const officialImportCommand",
+            "prepareOfficialImport",
+            "applyPreparedOfficialImport"
+          ]
+        },
+        {
+          "path": "apps/server/src/bin.ts",
+          "markers": ["import { officialImportCommand }", "officialImportCommand,"]
+        },
+        {
+          "path": "packages/contracts/src/ipc.ts",
+          "markers": [
+            "DesktopOfficialT3ImportInputSchema",
+            "DesktopOfficialT3ImportResultSchema",
+            "discoverOfficialT3Import?:",
+            "runOfficialT3Import?:"
+          ]
+        },
+        {
+          "path": "apps/desktop/src/ipc/channels.ts",
+          "markers": ["DISCOVER_OFFICIAL_T3_IMPORT_CHANNEL", "RUN_OFFICIAL_T3_IMPORT_CHANNEL"]
+        },
+        {
+          "path": "apps/desktop/src/ipc/DesktopIpcHandlers.ts",
+          "markers": [
+            "yield* ipc.handle(discoverOfficialT3Import)",
+            "yield* ipc.handle(runOfficialT3Import)"
+          ]
+        },
+        {
+          "path": "apps/desktop/src/preload.ts",
+          "markers": ["discoverOfficialT3Import: () =>", "runOfficialT3Import: (input) =>"]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/plan.test.ts",
+          "markers": ["official import clone identity graph", "validateOfficialImportPlan"]
+        },
+        {
+          "path": "apps/server/src/turbo/officialImport/storage.test.ts",
+          "markers": ["appendCanonicalEvents", "restoreImportBackup"]
+        },
+        {
+          "path": "apps/desktop/src/ipc/methods/officialT3Environment.ts",
+          "markers": [
+            "const executeImport = Effect.fn",
+            "export const runOfficialT3Import",
+            "yield* primary.stop();",
+            "snapshot.desiredRunning ? primary.start : Effect.void",
+            "Official T3 Code still has an active chat, turn, or approval"
+          ]
+        },
+        {
+          "path": "apps/web/src/components/desktop/DesktopEnvironmentSwitcher.tsx",
+          "markers": ["bridge?.runOfficialT3Import", "Import official T3 Code"]
+        },
+        {
+          "path": "docs/user/official-t3-import.md",
+          "markers": ["t3 import official", "Keep both", "Relay and remote clients"]
+        },
+        {
+          "path": ".plans/22-t3-turbo-official-data-import.md",
+          "markers": [
+            "# T3 Turbo One-Way Official Data Import",
+            "Keep Turbo and skip official",
+            "Keep both; import official with a new UUID"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "openrouter-first-party",
+      "status": "implemented",
+      "summary": "First-class OpenRouter provider, adapted from upstream PR pingdotgg/t3code#4125 (closed upstream in favor of the docs recipe and pending orchestrator v2). Rides the Claude Agent CLI as its runtime. Designed to survive v2: the transport core (env ownership, model catalog, settings bridge) lives in provider/openrouter and touches no V1 adapter contract; the Claude adapter is decorated (withOpenRouterAdapterIdentity), never modified. Only the V1 ProviderDriver shim (Drivers/OpenRouterDriver.ts) retires at the v2 cutover, to be rewritten as a small instance flavor feeding the same env into ClaudeAdapterV2, which already imports the identical env plumbing.",
+      "checks": [
+        {
+          "path": "apps/server/src/provider/openrouter/OpenRouterRuntime.ts",
+          "markers": [
+            "OPENROUTER_OWNED_ENV_KEYS",
+            "buildOpenRouterProcessEnv",
+            "withOpenRouterAdapterIdentity"
+          ]
+        },
+        {
+          "path": "apps/server/src/provider/openrouter/OpenRouterModels.ts",
+          "markers": ["fetchOpenRouterModels", "FALLBACK_OPENROUTER_MODELS"]
+        },
+        {
+          "path": "apps/server/src/provider/Drivers/OpenRouterDriver.ts",
+          "markers": [
+            "withOpenRouterAdapterIdentity(",
+            "buildOpenRouterProcessEnv(effectiveConfig, baseEnv)"
+          ]
+        },
+        {
+          "path": "apps/server/src/provider/Layers/OpenRouterProvider.ts",
+          "markers": ["checkOpenRouterProviderStatus", "makePendingOpenRouterProvider"]
+        },
+        {
+          "path": "apps/server/src/provider/builtInDrivers.ts",
+          "markers": ["OpenRouterDriver"]
+        },
+        {
+          "path": "packages/contracts/src/settings.ts",
+          "markers": ["export const OpenRouterSettings"]
+        },
+        {
+          "path": "packages/contracts/src/model.ts",
+          "markers": ["OPENROUTER_DRIVER_KIND"]
+        },
+        {
+          "path": "apps/web/src/components/settings/providerDriverMeta.ts",
+          "markers": ["label: \"OpenRouter\""]
+        },
+        {
+          "path": "apps/web/src/session-logic.ts",
+          "markers": ["label: \"OpenRouter\""]
+        }
+      ]
+    },
+    {
+      "id": "pooled-subscription-frame",
+      "status": "implemented",
+      "summary": "Durable RPC subscriptions pool one frame (16 ms) of already-arrived stream items inside the per-session stream and release them as a single chunk, so a burst costs the screen one blip per frame instead of one per item; the pool is created and shut down with the session, and the \"synchronized\" connection marker is never held back by the window; subscriptions whose items are distinct facts rather than cumulative state (preview events, automation requests) bypass the pool entirely, because a chunk-collapsing atom consumer would otherwise drop all but the last item of a window.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/rpc/client.ts",
+          "markers": [
+            "export const POOL_WINDOW: Duration.Input = \"16 millis\";",
+            "export const flushesImmediately = (item: unknown): boolean =>",
+            "Effect.uninterruptibleMask((restore) =>",
+            "(item as { readonly kind: unknown }).kind === \"synchronized\";",
+            "function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {",
+            "const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([",
+            "WS_METHODS.subscribePreviewEvents,",
+            "WS_METHODS.previewAutomationConnect,",
+            "NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
+          "markers": [
+            "import { POOL_WINDOW } from \"../rpc/client.ts\";",
+            "const MAX_POOL_WINDOWS = 12;",
+            "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/turbo/streamPool.test.ts",
+          "markers": [
+            "drops pooled leftovers when the session dies",
+            "releases the synchronized marker without waiting out the window",
+            "releases one window's items as a single ordered chunk",
+            "never drops an item at a window boundary",
+            "never pools a subscription whose items are distinct facts",
+            "keeps the immediate-release bypass tied to the contracts literal"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads-sync.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/threads-pagination.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/shell-sync.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "packages/client-runtime/src/state/server.test.ts",
+          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["**Tuned** `packages/client-runtime/src/rpc/client.ts`"]
+        }
+      ]
+    },
+    {
+      "id": "product-identity-and-updater",
+      "status": "implemented",
+      "summary": "T3 Turbo has an isolated desktop identity, state home, and fork-owned update feed.",
+      "checks": [
+        {
+          "path": "apps/desktop/src/app/DesktopEnvironment.ts",
+          "markers": [
+            "const APP_BASE_NAME = \"T3 Turbo\";",
+            "const APP_RELEASE_REPOSITORY = \"gfsaaser24/t3code\";",
+            "\"com.gabef.t3turbo\""
+          ]
+        },
+        {
+          "path": "apps/desktop/src/app/DesktopStatePaths.ts",
+          "markers": ["input.joinPath(input.homeDirectory, \".t3-turbo\")"]
+        },
+        {
+          "path": "apps/desktop/package.json",
+          "markers": ["\"productName\": \"T3 Turbo\""]
+        },
+        {
+          "path": "scripts/build-desktop-artifact.ts",
+          "markers": ["T3CODE_DESKTOP_UPDATE_REPOSITORY", "pingdotgg/t3code", "--publish never"]
+        },
+        {
+          "path": "apps/desktop/src/app/DesktopEnvironment.test.ts",
+          "markers": ["T3 Turbo", "gfsaaser24/t3code"]
+        },
+        {
+          "path": ".github/workflows/release.yml",
+          "markers": ["name=T3 Turbo v$version"]
+        }
+      ]
+    },
+    {
+      "id": "relay-apns-off-publish-skip",
+      "status": "implemented",
+      "summary": "With APNs off the relay's agent-activity publish keeps its row write verbatim and skips the delivery-user, active-row and Live Activity target queries whose results the disabled delivery layer discards; the APNs-on wiring is untouched.",
+      "checks": [
+        {
+          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts",
+          "markers": [
+            "export const layer = Layer.effect(AgentActivityPublisher, make);",
+            "return { ok: true, deliveries: [] } satisfies RelayPublishResponse;",
+            "yield* rows.upsert({"
+          ]
+        },
+        {
+          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.test.ts",
+          "markers": [
+            "stores the same row as the upstream publisher and returns the same response",
+            "skips the delivery prep the disabled delivery layer throws away"
+          ]
+        },
+        {
+          "path": "infra/relay/src/worker.ts",
+          "markers": [
+            "const agentActivityPublisherLayer =",
+            "? AgentActivityPublisherApnsDisabled.layer",
+            ": AgentActivityPublisher.layer;",
+            "Layer.provideMerge(agentActivityPublisherLayer),"
           ]
         },
         {
           "path": "SEAM.md",
-          "markers": ["**Tuned** `apps/server/src/terminal/Manager.ts`"]
+          "markers": [
+            "**Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts`",
+            "**Optional** `infra/relay/src/worker.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "relay-auth-and-link-memos",
+      "status": "implemented",
+      "summary": "Successful Clerk verifications are remembered per isolate for at most 30 seconds, keyed by token digest and never past the token's own expiry, the user-link lookups answer from a 5 second memo while the allocation compare-and-swap record and the credential revocation check are never cached, every write-deciding link read bypasses that memo, an invalidated key stays unrememberable for one TTL so an in-transaction read cannot outlive the commit, and both memos share one TTL store whose eviction is insertion-order rather than a full clear.",
+      "checks": [
+        {
+          "path": "infra/relay/src/http/Api.ts",
+          "markers": [
+            "const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;",
+            "export function verifiedRelayClientTokenKey(token: string): string {",
+            "return sha256Base64Url(token);",
+            "function bearerTokenExpiryEpochMs(token: string): number | null {",
+            "bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,",
+            "const verified = yield* verifyRelayClientBearerTokenUncached(config, token);",
+            "\"relay.auth.memo_hit\": remembered !== null",
+            "Effect.withSpan(\"relay.auth.verify_client_bearer_token\")",
+            "bypassMemo: true,"
+          ]
+        },
+        {
+          "path": "infra/relay/src/environments/EnvironmentLinks.ts",
+          "markers": [
+            "const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;",
+            "readonly bypassMemo?: boolean;",
+            "input.bypassMemo === true ? null : readTtlMemo(linkRecordMemo, memoKey, nowMs);",
+            "if (link !== null && input.bypassMemo !== true) {",
+            "blockLinkLookup(linkLookupBarriers, linkRecordMemoKey(input), nowMs);",
+            "if (isLinkLookupBlocked(barriers, key, nowMs)) {"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/clientTokenVerificationMemo.test.ts",
+          "markers": [
+            "never trusts the memo past the token's own expiry",
+            "caps an unreadable expiry at thirty seconds and keeps the OAuth fallback chain",
+            "never remembers a failed verification",
+            "keys the memo by the token's SHA-256 digest, never by the token itself",
+            "drops the oldest entry when the memo is full of live ones, never the whole memo"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/environmentLinkLookupMemo.test.ts",
+          "markers": [
+            "serves a repeat link lookup from the memo until the five second window closes",
+            "never caches the allocation record that carries the compare-and-swap token",
+            "never caches the credential check that enforces instant revocation"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/ttlMemo.ts",
+          "markers": [
+            "export function makeTtlMemo<A>(limit: number): TtlMemo<A> {",
+            "export function readTtlMemo<A>(memo: TtlMemo<A>, key: string, nowMs: number): A | null {",
+            "while (memo.entries.size >= memo.limit) {",
+            "memo.entries.delete(oldest.value);"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/environmentLinkWritePath.test.ts",
+          "markers": [
+            "revokes the CURRENT credential when an unlink runs through a warm memo",
+            "does not let a read inside the open transaction re-cache the pre-revoke row"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `infra/relay/src/environments/EnvironmentLinks.ts`",
+            "**Additive** `infra/relay/src/turbo/ttlMemo.ts`",
+            "**Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts`",
+            "**Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts`",
+            "**Additive** `infra/relay/src/turbo/environmentLinkWritePath.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "relay-policy",
+      "status": "policy",
+      "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",
+      "checks": [
+        {
+          "path": ".t3-turbo/OPENCLAW_RULES.md",
+          "markers": [
+            "`infra/t3turbo-relay`",
+            "A product ingestion must not replace the relay branch",
+            "relay, online portal, tunnel, and self-host infrastructure seams"
+          ]
+        },
+        {
+          "path": "infra/relay/README.md",
+          "markers": [
+            "not in the hot path for normal T3 Turbo traffic",
+            "The environment server and relay have separate credentials and trust boundaries.",
+            "RELAY_TUNNEL_ZONE_NAME"
+          ]
+        },
+        {
+          "path": ".github/workflows/deploy-relay.yml",
+          "markers": [
+            "name: Detect Cloudflare configuration",
+            "if: steps.cloudflare_config.outputs.enabled == 'true'",
+            "RELAY_TUNNEL_ZONE_NAME",
+            "      - turbo",
+            "      - \"infra/relay/**\""
+          ]
+        }
+      ]
+    },
+    {
+      "id": "relay-request-budget-and-clerk-client",
+      "status": "implemented",
+      "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",
+      "checks": [
+        {
+          "path": "infra/relay/src/http/Api.ts",
+          "markers": [
+            "const clerkOAuthClients = new WeakMap<",
+            "function clerkOAuthClient(config: RelayConfiguration.RelayConfiguration[\"Service\"])",
+            "const client = clerkOAuthClient(config);",
+            "export const RELAY_REQUEST_DEADLINE_MS = 9_000;"
+          ]
+        },
+        {
+          "path": "infra/relay/src/environments/EnvironmentConnector.ts",
+          "markers": ["export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;"]
+        },
+        {
+          "path": "infra/relay/src/turbo/relayRequestBudget.test.ts",
+          "markers": ["expires the environment mint inside the relay request deadline"]
+        },
+        {
+          "path": "infra/relay/src/http/Api.test.ts",
+          "markers": ["module-level WeakMap keyed on this very object"]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Tuned** `infra/relay/src/http/Api.ts`",
+            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`",
+            "**Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts`",
+            "**Tuned** `infra/relay/src/http/Api.test.ts`"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "release-from-turbo-branch",
+      "status": "policy",
+      "summary": "Scheduled and dispatched releases build, tag, and finalize from the fork's turbo mainline instead of the main branch that only tracks upstream, so published installers carry the fork's code and version.",
+      "checks": [
+        {
+          "path": ".github/workflows/release.yml",
+          "markers": [
+            "TURBO_RELEASE_BRANCH: ${{ github.repository == 'gfsaaser24/t3code' && 'turbo' || 'main' }}",
+            "TURBO_RELEASE_REF: ${{ (github.event_name != 'push' && github.repository == 'gfsaaser24/t3code') && 'turbo' || github.sha }}",
+            "ref: ${{ env.TURBO_RELEASE_REF }}",
+            "ref: ${{ steps.release_ref.outputs.sha }}",
+            "ref: ${{ env.TURBO_RELEASE_BRANCH }}",
+            "git push origin \"HEAD:${TURBO_RELEASE_BRANCH}\""
+          ]
+        }
+      ]
+    },
+    {
+      "id": "settled-lifecycle-sticky-pin",
+      "status": "implemented",
+      "summary": "Un-settling a thread is durable: the decider no longer spends the keep-active pin on activity (it still wakes explicitly settled threads). PARTIALLY RETIRED 2026-08-16: upstream #5880's autoSettleOnMerge toggle superseded the fork's merged-PR updatedAt gate, so threadSettled/contracts/GitManager and the web+mobile updatedAt threading now track upstream. Only the decider pin remains fork-owned. Upstream candidate for the pin: pingdotgg/t3code#5575; drop when upstream lands a sticky un-settle.",
+      "checks": [
+        {
+          "path": "apps/server/src/orchestration/decider.ts",
+          "markers": [
+            "deliberately sticky",
+            "if (targetThread.settledOverride === \"settled\") {",
+            "thread.settledOverride !== \"settled\" || !isSessionActivity",
+            "thread.settledOverride !== \"settled\" || !wakesSettledThread"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "shared-sha256-base64url",
+      "status": "implemented",
+      "summary": "The base64url SHA-256 expression lives once in packages/shared with a module-scope TextEncoder, and the DPoP thumbprint, the DPoP access-token hash, and the relay token-memo key all call it.",
+      "checks": [
+        {
+          "path": "packages/shared/src/turbo/sha256.ts",
+          "markers": [
+            "export function sha256Base64Url(text: string): string {",
+            "const encoder = new TextEncoder();"
+          ]
+        },
+        {
+          "path": "packages/shared/package.json",
+          "markers": ["\"./turbo/sha256\"", "\"./src/turbo/sha256.ts\""]
+        },
+        {
+          "path": "packages/shared/src/dpop.ts",
+          "markers": [
+            "import { sha256Base64Url } from \"./turbo/sha256.ts\";",
+            "return sha256Base64Url(dpopThumbprintInput(jwk));",
+            "return sha256Base64Url(accessToken);"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Additive** `packages/shared/src/turbo/sha256.ts`",
+            "**Tuned** `packages/shared/src/dpop.ts`"
+          ]
         }
       ]
     },
@@ -600,150 +1081,9 @@
       ]
     },
     {
-      "id": "cheap-timestamp-and-sort-keys",
-      "status": "implemented",
-      "summary": "Product timestamps compare as plain fixed-width ISO strings instead of through the ICU collator, and the sidebar bucket sorts plus the keyless pinned block resolve each row's sort key once instead of per comparison.",
-      "checks": [
-        {
-          "path": "apps/web/src/session-logic.ts",
-          "markers": [
-            "import { compareIsoTimestamps } from \"@t3tools/client-runtime/state/thread-activity-order\"",
-            "compareIsoTimestamps(left.createdAt, right.createdAt)",
-            "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
-            "compareIsoTimestamps(a.createdAt, b.createdAt)",
-            "compareIsoTimestamps(a.completedAt, b.completedAt)"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/Sidebar.logic.ts",
-          "markers": [
-            "createdAtMs: parseTimestampMs(thread.createdAt)",
-            "right.createdAtMs - left.createdAtMs",
-            "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
-            "right.settledAtMs - left.settledAtMs",
-            "export function sortSnoozedThreadsForSidebar",
-            "wakeAtMs: firstValidTimestampMs(thread.snoozedUntil ?? null)"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/Sidebar.tsx",
-          "markers": ["snoozedThreads: sortSnoozedThreadsForSidebar(snoozed)"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threadSort.ts",
-          "markers": [
-            "const leftCreatedAt = left.createdAt;",
-            "leftCreatedAt > rightCreatedAt",
-            "function isCanonicalIsoTimestamp(value: string): boolean",
-            "isCanonicalIsoTimestamp(leftCreatedAt) && isCanonicalIsoTimestamp(rightCreatedAt)"
-          ]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threadSortPinnedKeyless.test.ts",
-          "markers": [
-            "legacySortPinnedThreadsByOrderKey",
-            "emits the pre-swap order for product-minted timestamps, ties included",
-            "emits the pre-swap order for non-canonical and malformed stamps too"
-          ]
-        },
-        {
-          "path": "apps/web/src/turbo/sortOrderEquivalence.test.ts",
-          "markers": [
-            "orders every pair of product-minted timestamps exactly as localeCompare did",
-            "emits the pre-decorate order, ties included",
-            "sortSnoozedThreadsForSidebar (snoozed shelf)"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `apps/web/src/session-logic.ts`",
-            "**Tuned** `apps/web/src/components/Sidebar.logic.ts`",
-            "**Tuned** `packages/client-runtime/src/state/threadSort.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "cheap-message-unpacking",
-      "status": "implemented",
-      "summary": "TrimmedString trims through the pure both-directions transform instead of allocating an Effect per value, and ForwardCompatibleArray decodes each element once instead of twice while keeping per-element drop-on-failure and a debug log.",
-      "checks": [
-        {
-          "path": "packages/contracts/src/baseSchemas.ts",
-          "markers": [
-            "SchemaTransformation.transform<string, string>({",
-            "decode: (value) => value.trim(),",
-            "encode: (value) => value.trim(),",
-            "Schema.toType(Schema.Array(element))",
-            "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
-            "new SchemaIssue.Pointer([index], error.issue)"
-          ]
-        },
-        {
-          "path": "packages/contracts/src/turbo/baseSchemas.test.ts",
-          "markers": [
-            "trims on the encode-without-decode path too",
-            "drops elements this build cannot decode and keeps the rest",
-            "names the failing element's index when encoding fails",
-            "decodes each element exactly once"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `packages/contracts/src/baseSchemas.ts`"]
-        }
-      ]
-    },
-    {
-      "id": "deferred-streaming-code-blocks",
-      "status": "implemented",
-      "summary": "Streaming code fences render as a row-capped, height-reserving placeholder inside the chat code-block frame and are highlighted exactly once when the message completes; the line count is incremental across deltas, the animation is the repo's duty-cycled skeleton sweep, and a fence that never grows is treated as history whose persisted streaming flag predates the reducer fix.",
-      "checks": [
-        {
-          "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
-          "markers": [
-            "export const STREAMING_CODE_FIRST_DELTA_MS = 500;",
-            "export const STREAMING_CODE_MAX_PLACEHOLDER_ROWS = 24;",
-            "if (input.stall === \"never-started\") return \"highlighted\";",
-            "export function countStreamingCodeLines(code: string): number",
-            "export function advanceStreamingCodeLineCount(",
-            "export function resolveStreamingCodeBlockView(input: {",
-            "export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall",
-            "export function StreamingCodeBlockFrame({",
-            "data-streaming-code-placeholder",
-            "data-streaming-code-spacer",
-            "import { Skeleton } from \"~/components/ui/skeleton\";"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/ChatMarkdown.tsx",
-          "markers": [
-            "import { StreamingCodeBlockFrame } from \"../turbo/streamingCodeBlock\";",
-            "<StreamingCodeBlockFrame",
-            "highlighted={"
-          ]
-        },
-        {
-          "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
-          "markers": [
-            "grows one placeholder line per accumulated code line",
-            "caps the rendered rows and reserves the rest with one spacer",
-            "uses the duty-cycled skeleton sweep, not a per-frame pulse",
-            "agrees with the full scan at every prefix of a streamed fence",
-            "colours a fence that never grew, even though the message still claims to stream"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `apps/web/src/components/ChatMarkdown.tsx`"]
-        }
-      ]
-    },
-    {
       "id": "streaming-flag-cleared-on-turn-settle",
       "status": "implemented",
-      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent \u2014 which never arrives when a turn dies \u2014 and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
+      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent — which never arrives when a turn dies — and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
       "checks": [
         {
           "path": "packages/client-runtime/src/state/threadReducer.ts",
@@ -831,278 +1171,51 @@
       ]
     },
     {
-      "id": "relay-apns-off-publish-skip",
+      "id": "terminal-scrollback-batching",
       "status": "implemented",
-      "summary": "With APNs off the relay's agent-activity publish keeps its row write verbatim and skips the delivery-user, active-row and Live Activity target queries whose results the disabled delivery layer discards; the APNs-on wiring is untouched.",
+      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the debounce runs on a per-session fiber (never inside the shared worker, which would serialize every session's batch interval and every drain behind one another) and is enqueued once per burst rather than once per chunk, the batch is a keyed coalescing worker that flushPersist enqueues into and drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
       "checks": [
         {
-          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts",
+          "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
           "markers": [
-            "export const layer = Layer.effect(AgentActivityPublisher, make);",
-            "return { ok: true, deliveries: [] } satisfies RelayPublishResponse;",
-            "yield* rows.upsert({"
+            "export function queueTerminalHistoryChunk",
+            "export function flushTerminalHistoryBuffer",
+            "export function endTerminalHistoryStream",
+            "export function readTerminalHistoryBuffer",
+            "export function takeTerminalHistoryToPersist",
+            "dirtySincePersist"
           ]
         },
         {
-          "path": "infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.test.ts",
+          "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
           "markers": [
-            "stores the same row as the upstream publisher and returns the same response",
-            "skips the delivery prep the disabled delivery layer throws away"
+            "matches upstream across the cap-trim boundary",
+            "matches upstream's graceful degradation for a non-positive cap",
+            "is byte-identical however the recorded stream is chunked and batched",
+            "is byte-identical however the real stream is chunked and batched",
+            "still owes the persist when a read flushed the batch before the batch tick",
+            "import { capHistory, sanitizeTerminalHistoryChunk } from \"../terminal/Manager.ts\";"
           ]
         },
         {
-          "path": "infra/relay/src/worker.ts",
+          "path": "apps/server/src/terminal/Manager.ts",
           "markers": [
-            "const agentActivityPublisherLayer =",
-            "? AgentActivityPublisherApnsDisabled.layer",
-            ": AgentActivityPublisher.layer;",
-            "Layer.provideMerge(agentActivityPublisherLayer),"
+            "const DEFAULT_HISTORY_BATCH_MS = 16;",
+            "historyBuffer: TerminalHistoryBuffer;",
+            "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
+            "historyBatchWorker.drainKey(sessionKey);",
+            "readTerminalHistoryBuffer(session.historyBuffer)",
+            "takeTerminalHistoryToPersist(session.historyBuffer)",
+            "export function sanitizeTerminalHistoryChunk",
+            "export function capHistory",
+            "historyBatchScheduled: boolean;",
+            "if (session.historyBatchScheduled) {",
+            "session.historyBatchScheduled = false;"
           ]
         },
         {
           "path": "SEAM.md",
-          "markers": [
-            "**Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts`",
-            "**Optional** `infra/relay/src/worker.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "relay-request-budget-and-clerk-client",
-      "status": "implemented",
-      "summary": "The relay builds one Clerk backend client per configuration instead of one per OAuth fallback request, and the environment mint budget expires inside the relay's 9s request deadline instead of after it.",
-      "checks": [
-        {
-          "path": "infra/relay/src/http/Api.ts",
-          "markers": [
-            "const clerkOAuthClients = new WeakMap<",
-            "function clerkOAuthClient(config: RelayConfiguration.RelayConfiguration[\"Service\"])",
-            "const client = clerkOAuthClient(config);",
-            "export const RELAY_REQUEST_DEADLINE_MS = 9_000;"
-          ]
-        },
-        {
-          "path": "infra/relay/src/environments/EnvironmentConnector.ts",
-          "markers": ["export const ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS = 7_000;"]
-        },
-        {
-          "path": "infra/relay/src/turbo/relayRequestBudget.test.ts",
-          "markers": ["expires the environment mint inside the relay request deadline"]
-        },
-        {
-          "path": "infra/relay/src/http/Api.test.ts",
-          "markers": ["module-level WeakMap keyed on this very object"]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `infra/relay/src/http/Api.ts`",
-            "**Tuned** `infra/relay/src/environments/EnvironmentConnector.ts`",
-            "**Additive** `infra/relay/src/turbo/relayRequestBudget.test.ts`",
-            "**Tuned** `infra/relay/src/http/Api.test.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "relay-auth-and-link-memos",
-      "status": "implemented",
-      "summary": "Successful Clerk verifications are remembered per isolate for at most 30 seconds, keyed by token digest and never past the token's own expiry, the user-link lookups answer from a 5 second memo while the allocation compare-and-swap record and the credential revocation check are never cached, every write-deciding link read bypasses that memo, an invalidated key stays unrememberable for one TTL so an in-transaction read cannot outlive the commit, and both memos share one TTL store whose eviction is insertion-order rather than a full clear.",
-      "checks": [
-        {
-          "path": "infra/relay/src/http/Api.ts",
-          "markers": [
-            "const VERIFIED_CLIENT_TOKEN_TTL_MS = 30_000;",
-            "export function verifiedRelayClientTokenKey(token: string): string {",
-            "return sha256Base64Url(token);",
-            "function bearerTokenExpiryEpochMs(token: string): number | null {",
-            "bearerTokenExpiryEpochMs(token) ?? Number.POSITIVE_INFINITY,",
-            "const verified = yield* verifyRelayClientBearerTokenUncached(config, token);",
-            "\"relay.auth.memo_hit\": remembered !== null",
-            "Effect.withSpan(\"relay.auth.verify_client_bearer_token\")",
-            "bypassMemo: true,"
-          ]
-        },
-        {
-          "path": "infra/relay/src/environments/EnvironmentLinks.ts",
-          "markers": [
-            "const ENVIRONMENT_LINK_LOOKUP_TTL_MS = 5_000;",
-            "readonly bypassMemo?: boolean;",
-            "input.bypassMemo === true ? null : readTtlMemo(linkRecordMemo, memoKey, nowMs);",
-            "if (link !== null && input.bypassMemo !== true) {",
-            "blockLinkLookup(linkLookupBarriers, linkRecordMemoKey(input), nowMs);",
-            "if (isLinkLookupBlocked(barriers, key, nowMs)) {"
-          ]
-        },
-        {
-          "path": "infra/relay/src/turbo/clientTokenVerificationMemo.test.ts",
-          "markers": [
-            "never trusts the memo past the token's own expiry",
-            "caps an unreadable expiry at thirty seconds and keeps the OAuth fallback chain",
-            "never remembers a failed verification",
-            "keys the memo by the token's SHA-256 digest, never by the token itself",
-            "drops the oldest entry when the memo is full of live ones, never the whole memo"
-          ]
-        },
-        {
-          "path": "infra/relay/src/turbo/environmentLinkLookupMemo.test.ts",
-          "markers": [
-            "serves a repeat link lookup from the memo until the five second window closes",
-            "never caches the allocation record that carries the compare-and-swap token",
-            "never caches the credential check that enforces instant revocation"
-          ]
-        },
-        {
-          "path": "infra/relay/src/turbo/ttlMemo.ts",
-          "markers": [
-            "export function makeTtlMemo<A>(limit: number): TtlMemo<A> {",
-            "export function readTtlMemo<A>(memo: TtlMemo<A>, key: string, nowMs: number): A | null {",
-            "while (memo.entries.size >= memo.limit) {",
-            "memo.entries.delete(oldest.value);"
-          ]
-        },
-        {
-          "path": "infra/relay/src/turbo/environmentLinkWritePath.test.ts",
-          "markers": [
-            "revokes the CURRENT credential when an unlink runs through a warm memo",
-            "does not let a read inside the open transaction re-cache the pre-revoke row"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `infra/relay/src/environments/EnvironmentLinks.ts`",
-            "**Additive** `infra/relay/src/turbo/ttlMemo.ts`",
-            "**Additive** `infra/relay/src/turbo/clientTokenVerificationMemo.test.ts`",
-            "**Additive** `infra/relay/src/turbo/environmentLinkLookupMemo.test.ts`",
-            "**Additive** `infra/relay/src/turbo/environmentLinkWritePath.test.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "shared-sha256-base64url",
-      "status": "implemented",
-      "summary": "The base64url SHA-256 expression lives once in packages/shared with a module-scope TextEncoder, and the DPoP thumbprint, the DPoP access-token hash, and the relay token-memo key all call it.",
-      "checks": [
-        {
-          "path": "packages/shared/src/turbo/sha256.ts",
-          "markers": [
-            "export function sha256Base64Url(text: string): string {",
-            "const encoder = new TextEncoder();"
-          ]
-        },
-        {
-          "path": "packages/shared/package.json",
-          "markers": ["\"./turbo/sha256\"", "\"./src/turbo/sha256.ts\""]
-        },
-        {
-          "path": "packages/shared/src/dpop.ts",
-          "markers": [
-            "import { sha256Base64Url } from \"./turbo/sha256.ts\";",
-            "return sha256Base64Url(dpopThumbprintInput(jwk));",
-            "return sha256Base64Url(accessToken);"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Additive** `packages/shared/src/turbo/sha256.ts`",
-            "**Tuned** `packages/shared/src/dpop.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "relay-policy",
-      "status": "policy",
-      "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",
-      "checks": [
-        {
-          "path": ".t3-turbo/OPENCLAW_RULES.md",
-          "markers": [
-            "`infra/t3turbo-relay`",
-            "A product ingestion must not replace the relay branch",
-            "relay, online portal, tunnel, and self-host infrastructure seams"
-          ]
-        },
-        {
-          "path": "infra/relay/README.md",
-          "markers": [
-            "not in the hot path for normal T3 Turbo traffic",
-            "The environment server and relay have separate credentials and trust boundaries.",
-            "RELAY_TUNNEL_ZONE_NAME"
-          ]
-        },
-        {
-          "path": ".github/workflows/deploy-relay.yml",
-          "markers": [
-            "name: Detect Cloudflare configuration",
-            "if: steps.cloudflare_config.outputs.enabled == 'true'",
-            "RELAY_TUNNEL_ZONE_NAME",
-            "      - turbo",
-            "      - \"infra/relay/**\""
-          ]
-        }
-      ]
-    },
-    {
-      "id": "nightly-and-secret-policy",
-      "status": "policy",
-      "summary": "Daily 11 PM Eastern ingestion preserves the last known-good Turbo stack, publishes only to the fork, and excludes the local secrets note.",
-      "checks": [
-        {
-          "path": ".gitignore",
-          "markers": ["/SECRETS DO NOT COMMIT.md"]
-        },
-        {
-          "path": ".t3-turbo/OPENCLAW_RULES.md",
-          "markers": [
-            "ingestion starts with the last known-good T3 Turbo branch",
-            "Never resolve a collision with a blanket `ours`, `theirs`, force push, clean checkout",
-            "Never bake credentials, tokens, secrets",
-            "Do not publish T3 Turbo to NPM"
-          ]
-        },
-        {
-          "path": ".github/workflows/turbo-nightly-sync.yml",
-          "markers": [
-            "cron: \"0 23 * * *\"",
-            "timezone: \"America/New_York\"",
-            "Resolve the completed Eastern cutoff",
-            "-f until=\"$CUTOFF_INSTANT\"",
-            "Rebase in an isolated worktree",
-            "apps/web/src/turbo/chatPanes/chatPaneResourcePolicy.test.ts",
-            "scripts/turbo-product-branding.test.ts",
-            "Record registered relay and portal branch state",
-            "Measure registered relay and portal branch state",
-            "report_repair:",
-            "Record the reviewed repair and PR path",
-            "Create nightly completion report",
-            "T3CODE_DESKTOP_UPDATE_REPOSITORY",
-            "--title \"T3 Turbo $CUTOFF_LABEL.exe\"",
-            "--force-with-lease",
-            "TURBO_CUTOFF_INSTANT: ${{ inputs.cutoff_instant }}"
-          ]
-        },
-        {
-          "path": "scripts/turbo-nightly-sync.ts",
-          "markers": [
-            "nextTurboVersion",
-            "selectTurboVersionBase",
-            "resolveTurboCutoffOverride",
-            "Refusing to move the recorded official Nightly release backward."
-          ]
-        },
-        {
-          "path": "docs/internals/t3-turbo-nightly-inbound.md",
-          "markers": [
-            "replays our Turbo commit",
-            "Every day at 11:00 PM",
-            "installer only in `gfsaaser24/t3code`",
-            "last known-good release"
-          ]
+          "markers": ["**Tuned** `apps/server/src/terminal/Manager.ts`"]
         }
       ]
     },
@@ -1216,128 +1329,33 @@
       ]
     },
     {
-      "id": "pooled-subscription-frame",
+      "id": "workspace-image-preview",
       "status": "implemented",
-      "summary": "Durable RPC subscriptions pool one frame (16 ms) of already-arrived stream items inside the per-session stream and release them as a single chunk, so a burst costs the screen one blip per frame instead of one per item; the pool is created and shut down with the session, and the \"synchronized\" connection marker is never held back by the window; subscriptions whose items are distinct facts rather than cumulative state (preview events, automation requests) bypass the pool entirely, because a chunk-collapsing atom consumer would otherwise drop all but the last item of a window.",
+      "summary": "Workspace image types open in editor tabs and render through the shared image-preview classifier.",
       "checks": [
         {
-          "path": "packages/client-runtime/src/rpc/client.ts",
+          "path": "packages/shared/src/filePreview.ts",
           "markers": [
-            "export const POOL_WINDOW: Duration.Input = \"16 millis\";",
-            "export const flushesImmediately = (item: unknown): boolean =>",
-            "Effect.uninterruptibleMask((restore) =>",
-            "(item as { readonly kind: unknown }).kind === \"synchronized\";",
-            "function poolWithinFrame<A, E>(stream: Stream.Stream<A, E>): Stream.Stream<A, E> {",
-            "const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([",
-            "WS_METHODS.subscribePreviewEvents,",
-            "WS_METHODS.previewAutomationConnect,",
-            "NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)"
+            "WORKSPACE_IMAGE_PREVIEW_EXTENSIONS",
+            "\".ico\"",
+            "export function isWorkspaceImagePreviewPath"
           ]
         },
         {
-          "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
-          "markers": [
-            "import { POOL_WINDOW } from \"../rpc/client.ts\";",
-            "const MAX_POOL_WINDOWS = 12;",
-            "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
-          ]
+          "path": "apps/web/src/components/files/FilePreviewPanel.tsx",
+          "markers": ["function WorkspaceImagePreview", "isWorkspaceImagePreviewPath(relativePath)"]
         },
         {
-          "path": "packages/client-runtime/src/turbo/streamPool.test.ts",
-          "markers": [
-            "drops pooled leftovers when the session dies",
-            "releases the synchronized marker without waiting out the window",
-            "releases one window's items as a single ordered chunk",
-            "never drops an item at a window boundary",
-            "never pools a subscription whose items are distinct facts",
-            "keeps the immediate-release bypass tied to the contracts literal"
-          ]
+          "path": "apps/web/src/rightPanelStore.ts",
+          "markers": ["const fileSurface =", "openFile: (ref, relativePath, line) =>"]
         },
         {
-          "path": "packages/client-runtime/src/state/threads-sync.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
+          "path": "packages/shared/src/filePreview.test.ts",
+          "markers": ["isWorkspaceImagePreviewPath"]
         },
         {
-          "path": "packages/client-runtime/src/state/threads-pagination.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/shell-sync.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/server.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `packages/client-runtime/src/rpc/client.ts`"]
-        }
-      ]
-    },
-    {
-      "id": "settled-lifecycle-sticky-pin",
-      "status": "implemented",
-      "summary": "Un-settling a thread is durable: the decider no longer spends the keep-active pin on activity (it still wakes explicitly settled threads). PARTIALLY RETIRED 2026-08-16: upstream #5880's autoSettleOnMerge toggle superseded the fork's merged-PR updatedAt gate, so threadSettled/contracts/GitManager and the web+mobile updatedAt threading now track upstream. Only the decider pin remains fork-owned. Upstream candidate for the pin: pingdotgg/t3code#5575; drop when upstream lands a sticky un-settle.",
-      "checks": [
-        {
-          "path": "apps/server/src/orchestration/decider.ts",
-          "markers": [
-            "deliberately sticky",
-            "if (targetThread.settledOverride === \"settled\") {",
-            "thread.settledOverride !== \"settled\" || !isSessionActivity",
-            "thread.settledOverride !== \"settled\" || !wakesSettledThread"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "openrouter-first-party",
-      "status": "implemented",
-      "summary": "First-class OpenRouter provider, adapted from upstream PR pingdotgg/t3code#4125 (closed upstream in favor of the docs recipe and pending orchestrator v2). Rides the Claude Agent CLI as its runtime. Designed to survive v2: the transport core (env ownership, model catalog, settings bridge) lives in provider/openrouter and touches no V1 adapter contract; the Claude adapter is decorated (withOpenRouterAdapterIdentity), never modified. Only the V1 ProviderDriver shim (Drivers/OpenRouterDriver.ts) retires at the v2 cutover, to be rewritten as a small instance flavor feeding the same env into ClaudeAdapterV2, which already imports the identical env plumbing.",
-      "checks": [
-        {
-          "path": "apps/server/src/provider/openrouter/OpenRouterRuntime.ts",
-          "markers": [
-            "OPENROUTER_OWNED_ENV_KEYS",
-            "buildOpenRouterProcessEnv",
-            "withOpenRouterAdapterIdentity"
-          ]
-        },
-        {
-          "path": "apps/server/src/provider/openrouter/OpenRouterModels.ts",
-          "markers": ["fetchOpenRouterModels", "FALLBACK_OPENROUTER_MODELS"]
-        },
-        {
-          "path": "apps/server/src/provider/Drivers/OpenRouterDriver.ts",
-          "markers": [
-            "withOpenRouterAdapterIdentity(",
-            "buildOpenRouterProcessEnv(effectiveConfig, baseEnv)"
-          ]
-        },
-        {
-          "path": "apps/server/src/provider/Layers/OpenRouterProvider.ts",
-          "markers": ["checkOpenRouterProviderStatus", "makePendingOpenRouterProvider"]
-        },
-        {
-          "path": "apps/server/src/provider/builtInDrivers.ts",
-          "markers": ["OpenRouterDriver"]
-        },
-        {
-          "path": "packages/contracts/src/settings.ts",
-          "markers": ["export const OpenRouterSettings"]
-        },
-        {
-          "path": "packages/contracts/src/model.ts",
-          "markers": ["OPENROUTER_DRIVER_KIND"]
-        },
-        {
-          "path": "apps/web/src/components/settings/providerDriverMeta.ts",
-          "markers": ["label: \"OpenRouter\""]
-        },
-        {
-          "path": "apps/web/src/session-logic.ts",
-          "markers": ["label: \"OpenRouter\""]
+          "path": "apps/web/src/rightPanelStore.test.ts",
+          "markers": ["opens image files as reusable peer tabs"]
         }
       ]
     }

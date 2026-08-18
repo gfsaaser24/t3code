@@ -159,6 +159,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "relay-auth-and-link-memos",
     "relay-policy",
     "relay-request-budget-and-clerk-client",
+    "release-from-turbo-branch",
     "settled-lifecycle-sticky-pin",
     "shared-sha256-base64url",
     "sqlite-fast-mode-pragma",

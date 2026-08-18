@@ -419,6 +419,24 @@ On a nightly-sync conflict: everything here is additive except `builtInDrivers.t
 after upstream's. If upstream ships its own OpenRouter or the ACP registry (#6071) covers it,
 prefer upstream and retire the shim first.
 
+## Releases build from `turbo` (fork policy)
+
+Upstream's `release.yml` resolves scheduled and dispatched releases from whatever ref the run was
+started on, which on this fork is the default branch `main`. `main` only tracks upstream, so every
+installer the fork published was upstream code at upstream's version — none of the fork's work
+(chat panes, OpenRouter, relay changes) ever reached a published release, and the fork's own
+version line never advanced there.
+
+- `TURBO_RELEASE_REF` pins non-tag runs to `turbo`; tag pushes still build the pushed tag.
+- `preflight` resolves that ref to a commit sha (`steps.release_ref`) and every build, release, and
+  deploy job checks out that one sha, so a mid-run push to `turbo` cannot split the release.
+- `TURBO_RELEASE_BRANCH` sends the finalize job's version-bump commit to `turbo`, not `main`.
+- Both are guarded by `github.repository == 'gfsaaser24/t3code'`, so upstream behavior is unchanged
+  and the file stays merge-clean.
+
+On a nightly-sync conflict: keep upstream's job graph and re-add the two `env` entries plus the
+five `ref:`/push lines. If upstream ever gains its own release-branch input, prefer it.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the
