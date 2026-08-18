@@ -2,7 +2,9 @@ import {
   ClaudeSettings,
   type OpenRouterSettings,
   ProviderDriverKind,
+  type ProviderInstanceId,
   type ProviderSession,
+  type ServerSettings,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -32,6 +34,24 @@ const OPENROUTER_OWNED_ENV_KEYS = [
   "OR_SITE_URL",
   "OR_APP_NAME",
 ] as const;
+
+/**
+ * Pick the raw OpenRouter config blob the server should treat as current.
+ *
+ * Mirrors `ProviderInstanceRegistryHydration`: an explicit `providerInstances`
+ * entry wins over the legacy `providers.openrouter` block. Returns `undefined`
+ * when neither is present so callers can keep their existing config.
+ */
+export function selectLiveOpenRouterConfig(
+  settings: Pick<ServerSettings, "providerInstances" | "providers">,
+  instanceId: ProviderInstanceId,
+): unknown {
+  const explicit = settings.providerInstances[instanceId]?.config;
+  if (explicit !== undefined && explicit !== null) {
+    return explicit;
+  }
+  return settings.providers.openrouter;
+}
 
 export function normalizeOpenRouterBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim();

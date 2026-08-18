@@ -49,6 +49,7 @@ import {
 import {
   buildOpenRouterProcessEnv,
   OPENROUTER_DRIVER_KIND,
+  selectLiveOpenRouterConfig,
   toClaudeSettings,
   withOpenRouterAdapterIdentity,
 } from "../openrouter/OpenRouterRuntime.ts";
@@ -133,7 +134,35 @@ export const OpenRouterDriver: ProviderDriver<OpenRouterSettings, OpenRouterDriv
       );
       const textGeneration = yield* makeClaudeTextGeneration(claudeSettings, processEnv);
 
-      const checkProvider = checkOpenRouterProviderStatus(effectiveConfig, processEnv).pipe(
+      // Snapshot settings sources capture the driver config at create time, so
+      // every later status check would re-probe with the config this instance
+      // was born with. For OpenRouter the API key lives in that config, so a
+      // key saved after boot never reached the probe: the provider sat on
+      // "add an API key" and the model catalog never refreshed. Re-read the
+      // live config on each check instead, and rebuild the OpenRouter-owned
+      // env from it.
+      const readLiveConfig = Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        );
+        if (settings === undefined) {
+          return effectiveConfig;
+        }
+        const raw = selectLiveOpenRouterConfig(settings, instanceId);
+        if (raw === undefined) {
+          return effectiveConfig;
+        }
+        const decoded = yield* Schema.decodeUnknownEffect(OpenRouterSettings)(raw).pipe(
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        );
+        // `enabled` stays owned by the registry envelope, not the config blob.
+        return decoded === undefined ? effectiveConfig : { ...decoded, enabled };
+      });
+
+      const checkProvider = readLiveConfig.pipe(
+        Effect.flatMap((liveConfig) =>
+          checkOpenRouterProviderStatus(liveConfig, buildOpenRouterProcessEnv(liveConfig, baseEnv)),
+        ),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Path.Path, path),
