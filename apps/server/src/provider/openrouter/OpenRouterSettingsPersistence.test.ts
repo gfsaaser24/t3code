@@ -10,7 +10,11 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { selectLiveOpenRouterConfig } from "./OpenRouterRuntime.ts";
+import {
+  openRouterApiKeySecretName,
+  resolveOpenRouterApiKey,
+  selectLiveOpenRouterConfig,
+} from "./OpenRouterRuntime.ts";
 
 const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodePatch = Schema.decodeUnknownSync(ServerSettingsPatch);
@@ -104,6 +108,32 @@ describe("OpenRouter settings persistence", () => {
     // Legacy defaults decode to an empty key, which is what the status check
     // reports as "add an API key" rather than silently probing.
     expect(decodeOpenRouter(live).apiKey).toBe("");
+  });
+
+  it("prefers a key typed into settings, else the stored secret", () => {
+    expect(resolveOpenRouterApiKey({ settingsApiKey: "sk-typed", storedApiKey: "sk-stored" })).toBe(
+      "sk-typed",
+    );
+    expect(resolveOpenRouterApiKey({ settingsApiKey: "", storedApiKey: "sk-stored" })).toBe(
+      "sk-stored",
+    );
+    expect(resolveOpenRouterApiKey({ settingsApiKey: "   ", storedApiKey: "sk-stored" })).toBe(
+      "sk-stored",
+    );
+    // Trailing newline is easy to introduce when writing the secret file.
+    expect(resolveOpenRouterApiKey({ settingsApiKey: "", storedApiKey: "sk-stored\n" })).toBe(
+      "sk-stored",
+    );
+    expect(resolveOpenRouterApiKey({ settingsApiKey: "", storedApiKey: undefined })).toBe("");
+  });
+
+  it("names the secret per instance so multiple accounts do not collide", () => {
+    expect(openRouterApiKeySecretName(defaultInstanceIdForDriver(KIND))).toBe(
+      "provider-openrouter-api-key",
+    );
+    expect(openRouterApiKeySecretName(ProviderInstanceId.make("openrouter_work"))).toBe(
+      "provider-openrouter_work-api-key",
+    );
   });
 
   it.effect("reports the key as configured to the status check", () =>
