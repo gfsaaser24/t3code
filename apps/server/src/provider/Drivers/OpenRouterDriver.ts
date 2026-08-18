@@ -12,11 +12,13 @@ import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
@@ -49,6 +51,9 @@ import {
 import {
   buildOpenRouterProcessEnv,
   OPENROUTER_DRIVER_KIND,
+  openRouterApiKeySecretName,
+  resolveOpenRouterApiKey,
+  selectLiveOpenRouterConfig,
   toClaudeSettings,
   withOpenRouterAdapterIdentity,
 } from "../openrouter/OpenRouterRuntime.ts";
@@ -103,9 +108,51 @@ export const OpenRouterDriver: ProviderDriver<OpenRouterSettings, OpenRouterDriv
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
       const serverSettings = yield* ServerSettingsService;
+      // Optional so the driver still builds in contexts that do not wire a
+      // secret store (tests, minimal embeddings); those simply fall back to
+      // whatever key settings carry.
+      const secretStore = yield* Effect.serviceOption(ServerSecretStore);
       const eventLoggers = yield* ProviderEventLoggers;
       const baseEnv = mergeProviderInstanceEnvironment(environment);
-      const effectiveConfig = { ...config, enabled } satisfies OpenRouterSettings;
+
+      // The API key is a credential: prefer the secret store over settings.json.
+      // A key typed into settings still wins so an explicit edit applies at once.
+      const secretName = openRouterApiKeySecretName(instanceId);
+      const withStoredApiKey = (candidate: OpenRouterSettings) =>
+        Effect.gen(function* () {
+          const stored = Option.isNone(secretStore)
+            ? Option.none<Uint8Array>()
+            : yield* secretStore.value
+                .get(secretName)
+                .pipe(Effect.catchCause(() => Effect.succeed(Option.none<Uint8Array>())));
+          const storedApiKey = Option.isSome(stored)
+            ? new TextDecoder().decode(stored.value)
+            : undefined;
+          const apiKey = resolveOpenRouterApiKey({
+            settingsApiKey: candidate.apiKey,
+            storedApiKey,
+          });
+
+          // A key typed into settings lands in settings.json as plain text.
+          // Copy it into the secret store so the credential has a home that
+          // is not part of the settings blob; settings keep working either way.
+          if (
+            Option.isSome(secretStore) &&
+            apiKey.length > 0 &&
+            apiKey !== (storedApiKey ?? "").trim()
+          ) {
+            yield* secretStore.value
+              .set(secretName, new TextEncoder().encode(apiKey))
+              .pipe(Effect.ignore);
+          }
+
+          return { ...candidate, apiKey } satisfies OpenRouterSettings;
+        });
+
+      const effectiveConfig = yield* withStoredApiKey({
+        ...config,
+        enabled,
+      } satisfies OpenRouterSettings);
       // Build OpenRouter-owned process env once; pass through to adapter + probes.
       const processEnv = buildOpenRouterProcessEnv(effectiveConfig, baseEnv);
       const claudeSettings = toClaudeSettings(effectiveConfig);
@@ -133,7 +180,38 @@ export const OpenRouterDriver: ProviderDriver<OpenRouterSettings, OpenRouterDriv
       );
       const textGeneration = yield* makeClaudeTextGeneration(claudeSettings, processEnv);
 
-      const checkProvider = checkOpenRouterProviderStatus(effectiveConfig, processEnv).pipe(
+      // Snapshot settings sources capture the driver config at create time, so
+      // every later status check would re-probe with the config this instance
+      // was born with. For OpenRouter the API key lives in that config, so a
+      // key saved after boot never reached the probe: the provider sat on
+      // "add an API key" and the model catalog never refreshed. Re-read the
+      // live config on each check instead, and rebuild the OpenRouter-owned
+      // env from it.
+      const readLiveConfig = Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        );
+        if (settings === undefined) {
+          return effectiveConfig;
+        }
+        const raw = selectLiveOpenRouterConfig(settings, instanceId);
+        if (raw === undefined) {
+          return effectiveConfig;
+        }
+        const decoded = yield* Schema.decodeUnknownEffect(OpenRouterSettings)(raw).pipe(
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        );
+        if (decoded === undefined) {
+          return effectiveConfig;
+        }
+        // `enabled` stays owned by the registry envelope, not the config blob.
+        return yield* withStoredApiKey({ ...decoded, enabled });
+      });
+
+      const checkProvider = readLiveConfig.pipe(
+        Effect.flatMap((liveConfig) =>
+          checkOpenRouterProviderStatus(liveConfig, buildOpenRouterProcessEnv(liveConfig, baseEnv)),
+        ),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(Path.Path, path),
