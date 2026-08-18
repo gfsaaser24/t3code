@@ -386,6 +386,34 @@ Still carried (upstream has no equivalent yet, see pingdotgg/t3code#5575):
 On a nightly-sync conflict in decider.ts, prefer upstream wholesale if upstream lands a sticky
 un-settle; otherwise reapply only the pin behavior above.
 
+## OpenRouter first-party provider (fork feature)
+
+Adapted from upstream PR pingdotgg/t3code#4125 (closed upstream; archived at
+`archive/upstream-pr-4125-openrouter-provider`). OpenRouter rides the Claude Agent CLI as its
+runtime and ships as a built-in driver with live model-catalog fetching.
+
+Built to survive orchestrator v2 (pingdotgg/t3code#2829):
+
+- **Additive, v2-safe** `apps/server/src/provider/openrouter/` — env ownership
+  (`buildOpenRouterProcessEnv` clears and re-stamps every Anthropic/OpenRouter credential key),
+  base-URL normalization, model catalog fetch with fallbacks, the Claude-settings bridge, and
+  the `withOpenRouterAdapterIdentity` decorator. No V1 adapter imports besides the shape type.
+- **Additive, v2-safe** `Layers/OpenRouterProvider.ts` — status snapshot (CLI probe + API-key
+  validation via the catalog), contracts (`OpenRouterSettings`, driver-kind maps in `model.ts`),
+  and the web wiring (icon, driver meta, picker option, composer keys, context-window name).
+- **Additive, V1-shim (retires at v2 cutover)** `Drivers/OpenRouterDriver.ts` — the
+  `ProviderDriver` registration. v2's `ClaudeAdapterV2` already imports the same
+  `makeClaudeEnvironment`/`mergeProviderInstanceEnvironment` plumbing and accepts per-instance
+  env, so the rewrite is a small instance flavor feeding `buildOpenRouterProcessEnv` into it.
+- Deliberately NOT modified: `ClaudeAdapter.ts`. The upstream PR parameterized its provider
+  constant across ~50 sites; the fork instead decorates the finished adapter to re-stamp the
+  driver identity on events and sessions, keeping the churn-heavy file merge-clean.
+
+On a nightly-sync conflict: everything here is additive except `builtInDrivers.ts`,
+`settings.ts`/`model.ts` map entries, and the four web wiring points — re-add the fork lines
+after upstream's. If upstream ships its own OpenRouter or the ACP registry (#6071) covers it,
+prefer upstream and retire the shim first.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the
