@@ -120,6 +120,17 @@ export function buildOpenRouterProcessEnv(
     next.ANTHROPIC_CUSTOM_HEADERS = customHeaders.join("\n");
   }
 
+  // Claude Code defaults to tool search, which omits tools from `tools[]` and
+  // refers to them with tool_reference blocks. OpenRouter's Anthropic-compatible
+  // endpoint rejects that for every non-Anthropic model ("Deferred custom tools
+  // are only supported on Anthropic models"), which kills the turn outright.
+  // "false" is Claude Code's own off switch (ENABLE_TOOL_SEARCH => "standard"
+  // mode). An explicit host value still wins, for proxies that do forward
+  // tool_reference blocks.
+  if (next.ENABLE_TOOL_SEARCH === undefined || next.ENABLE_TOOL_SEARCH.trim().length === 0) {
+    next.ENABLE_TOOL_SEARCH = "false";
+  }
+
   return next;
 }
 
