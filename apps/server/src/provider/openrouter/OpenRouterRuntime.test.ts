@@ -63,9 +63,21 @@ describe("OpenRouterRuntime", () => {
     expect(env.X_TITLE).toBe("T3 Code");
     // Claude Code only forwards headers through ANTHROPIC_CUSTOM_HEADERS.
     expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe("HTTP-Referer: https://t3.chat\nX-Title: T3 Code");
+    // OpenRouter rejects deferred tools for non-Anthropic models.
+    expect(env.ENABLE_TOOL_SEARCH).toBe("false");
     expect(env.OR_SITE_URL).toBeUndefined();
     expect(env.OR_APP_NAME).toBeUndefined();
     expect(env.PATH).toBe("/usr/bin");
+  });
+
+  it("keeps an explicit host tool-search choice", () => {
+    const settings = decodeOpenRouterSettings({ apiKey: "sk-or-test" });
+    const env = buildOpenRouterProcessEnv(settings, { ENABLE_TOOL_SEARCH: "true" });
+    expect(env.ENABLE_TOOL_SEARCH).toBe("true");
+
+    // A blank host value is not a choice, so the OpenRouter default applies.
+    const blank = buildOpenRouterProcessEnv(settings, { ENABLE_TOOL_SEARCH: "  " });
+    expect(blank.ENABLE_TOOL_SEARCH).toBe("false");
   });
 
   it("clears inherited Anthropic credentials when settings apiKey is empty", () => {
