@@ -2,7 +2,6 @@ import {
   ClaudeSettings,
   type OpenRouterSettings,
   ProviderDriverKind,
-  type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -25,6 +24,7 @@ const OPENROUTER_OWNED_ENV_KEYS = [
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
   "OPENROUTER_API_KEY",
   "HTTP_REFERER",
   "X_TITLE",
@@ -103,6 +103,21 @@ export function buildOpenRouterProcessEnv(
   const appTitle = settings.appTitle.trim();
   if (appTitle.length > 0) {
     next.X_TITLE = appTitle;
+  }
+
+  // Claude Code does not read HTTP_REFERER/X_TITLE — it only forwards extra
+  // request headers through ANTHROPIC_CUSTOM_HEADERS (newline-separated
+  // "Name: value" pairs). The plain vars above stay for other OpenRouter
+  // tooling that does read them.
+  const customHeaders: Array<string> = [];
+  if (httpReferer.length > 0) {
+    customHeaders.push(`HTTP-Referer: ${httpReferer}`);
+  }
+  if (appTitle.length > 0) {
+    customHeaders.push(`X-Title: ${appTitle}`);
+  }
+  if (customHeaders.length > 0) {
+    next.ANTHROPIC_CUSTOM_HEADERS = customHeaders.join("\n");
   }
 
   return next;

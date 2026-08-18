@@ -119,17 +119,35 @@ export const fetchOpenRouterModels = Effect.fn("fetchOpenRouterModels")(function
       } satisfies OpenRouterModelFetchResult;
     }
 
-    const models = decoded.success.data
-      .filter((model) => model.id.trim().length > 0)
-      .slice(0, MAX_DISCOVERED_MODELS)
-      .map(
-        (model): ServerProviderModel => ({
-          slug: model.id,
-          name: model.name?.trim() || model.id,
-          isCustom: false,
-          capabilities: EMPTY_OPENROUTER_CAPABILITIES,
-        }),
-      );
+    // Trim ids before they become slugs (the contract is TrimmedNonEmptyString)
+    // and dedupe — OpenRouter has repeated ids across routing variants.
+    const seenSlugs = new Set<string>();
+    const catalog: Array<ServerProviderModel> = [];
+    for (const model of decoded.success.data) {
+      const slug = model.id.trim();
+      if (slug.length === 0 || seenSlugs.has(slug)) {
+        continue;
+      }
+      seenSlugs.add(slug);
+      catalog.push({
+        slug,
+        name: model.name?.trim() || slug,
+        isCustom: false,
+        capabilities: EMPTY_OPENROUTER_CAPABILITIES,
+      });
+    }
+    // Truncate for the picker, but never truncate away the configured
+    // default: DEFAULT_MODEL_BY_PROVIDER points at it regardless of where
+    // the API ordered it.
+    const models = catalog.slice(0, MAX_DISCOVERED_MODELS);
+    if (!models.some((model) => model.slug === DEFAULT_OPENROUTER_MODEL)) {
+      const defaultEntry =
+        catalog.find((model) => model.slug === DEFAULT_OPENROUTER_MODEL) ??
+        FALLBACK_OPENROUTER_MODELS.find((model) => model.slug === DEFAULT_OPENROUTER_MODEL);
+      if (defaultEntry) {
+        models.unshift(defaultEntry);
+      }
+    }
 
     if (models.length === 0) {
       return {

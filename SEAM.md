@@ -399,8 +399,13 @@ Built to survive orchestrator v2 (pingdotgg/t3code#2829):
   base-URL normalization, model catalog fetch with fallbacks, the Claude-settings bridge, and
   the `withOpenRouterAdapterIdentity` decorator. No V1 adapter imports besides the shape type.
 - **Additive, v2-safe** `Layers/OpenRouterProvider.ts` — status snapshot (CLI probe + API-key
-  validation via the catalog), contracts (`OpenRouterSettings`, driver-kind maps in `model.ts`),
-  and the web wiring (icon, driver meta, picker option, composer keys, context-window name).
+  validation via the catalog).
+- **Additive, v2-safe** contracts — `OpenRouterSettings` in `packages/contracts/src/settings.ts`
+  and the driver-kind default/display maps in `packages/contracts/src/model.ts`.
+- **Additive, v2-safe** web wiring (six files) — `components/Icons.tsx` (OpenRouterIcon),
+  `components/chat/providerIconUtils.ts`, `components/settings/providerDriverMeta.ts`,
+  `session-logic.ts` (picker option), `composerDraftStore.ts` (provider option keys), and
+  `lib/contextWindow.ts` (display name).
 - **Additive, V1-shim (retires at v2 cutover)** `Drivers/OpenRouterDriver.ts` — the
   `ProviderDriver` registration. v2's `ClaudeAdapterV2` already imports the same
   `makeClaudeEnvironment`/`mergeProviderInstanceEnvironment` plumbing and accepts per-instance
@@ -410,7 +415,7 @@ Built to survive orchestrator v2 (pingdotgg/t3code#2829):
   driver identity on events and sessions, keeping the churn-heavy file merge-clean.
 
 On a nightly-sync conflict: everything here is additive except `builtInDrivers.ts`,
-`settings.ts`/`model.ts` map entries, and the four web wiring points — re-add the fork lines
+`settings.ts`/`model.ts` map entries, and the six web wiring files above — re-add the fork lines
 after upstream's. If upstream ships its own OpenRouter or the ACP registry (#6071) covers it,
 prefer upstream and retire the shim first.
 
