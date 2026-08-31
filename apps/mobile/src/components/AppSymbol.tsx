@@ -45,6 +45,7 @@ import IconFolderPlus from "@tabler/icons-react-native/IconFolderPlus";
 import IconGitBranch from "@tabler/icons-react-native/IconGitBranch";
 import IconGitMerge from "@tabler/icons-react-native/IconGitMerge";
 import IconGitPullRequest from "@tabler/icons-react-native/IconGitPullRequest";
+import IconGauge from "@tabler/icons-react-native/IconGauge";
 import IconHammer from "@tabler/icons-react-native/IconHammer";
 import IconInfoCircle from "@tabler/icons-react-native/IconInfoCircle";
 import IconKeyboard from "@tabler/icons-react-native/IconKeyboard";
