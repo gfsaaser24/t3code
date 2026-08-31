@@ -465,7 +465,9 @@ it("uses public fork runners and gates the self-host relay on configuration", ()
   const relayWorkflow = readWorkflow("deploy-relay.yml");
 
   assert.notMatch(ciWorkflow, /runs-on: blacksmith-/gu);
-  assert.strictEqual(ciWorkflow.match(/\|\| 'ubuntu-24\.04'/gu)?.length, 3);
+  // 2026-08-31 ingest: upstream split CI into more jobs (mobile gate, extra
+  // test shards), all pinned to the repo-conditional public runner.
+  assert.strictEqual(ciWorkflow.match(/\|\| 'ubuntu-24\.04'/gu)?.length, 6);
   assert.include(ciWorkflow, "|| 'macos-26'");
   assert.include(ciWorkflow, "group: ci-${{ github.event.pull_request.number || github.ref }}");
   assert.include(ciWorkflow, "cancel-in-progress: true");

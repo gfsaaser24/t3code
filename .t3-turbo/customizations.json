@@ -264,8 +264,8 @@
             "resolveMarkdownFileLinkGesture",
             "open-file-with-system-default",
             "useAtomCommand(shellEnvironment.openPath",
-            "usePreparedConnection(threadRef?.environmentId ?? null)",
-            "environmentId: fileEnvironmentId"
+            "onOpenWithSystemDefault: openWithSystemDefault",
+            "openWithSystemDefault = useCallback"
           ]
         },
         {
@@ -617,8 +617,8 @@
         {
           "path": "apps/web/src/components/Sidebar.logic.ts",
           "markers": [
-            "createdAtMs: parseTimestampMs(thread.createdAt)",
-            "right.createdAtMs - left.createdAtMs",
+            "anchorMs: activeThreadAnchorTimestampMs(thread)",
+            "right.anchorMs - left.anchorMs",
             "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
             "right.settledAtMs - left.settledAtMs",
             "export function sortSnoozedThreadsForSidebar",

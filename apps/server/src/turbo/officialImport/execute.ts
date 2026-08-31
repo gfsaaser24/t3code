@@ -309,6 +309,7 @@ const collectAttachmentPairs = (input: {
       if (!sourceAttachment || !transformedAttachment) continue;
       const sourceRelativePath = attachmentRelativePath(sourceAttachment);
       const targetRelativePath = attachmentRelativePath(transformedAttachment);
+      if (!sourceRelativePath || !targetRelativePath) continue;
       pairs.set(targetRelativePath, {
         sourcePath: NodePath.join(sourceAttachmentsDir, sourceRelativePath),
         stagedPath: NodePath.join(stagingAttachmentsDir, targetRelativePath),
