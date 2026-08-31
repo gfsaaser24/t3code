@@ -42,7 +42,6 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { MOBILE_PRODUCT_NAME } from "../../lib/mobileBranding";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";

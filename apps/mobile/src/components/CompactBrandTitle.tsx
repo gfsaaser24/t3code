@@ -6,7 +6,6 @@ import { AppText as Text } from "./AppText";
 import { T3Wordmark } from "./T3Wordmark";
 import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { MOBILE_PRODUCT_NAME, resolveMobileStageLabel } from "../lib/mobileBranding";
-import { useThemeColor } from "../lib/useThemeColor";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../native/native-glass";
 
 // Native leading items inherit different UIKit margins than title views.

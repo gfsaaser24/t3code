@@ -913,24 +913,27 @@ export default function FilePreviewPanel({
                   {index > 0 ? (
                     <ChevronRight className="mx-1 size-3.5 shrink-0 text-muted-foreground/60" />
                   ) : null}
-                  {crumb.kind === "file" ? (
-                    <span
-                      className="max-w-40 truncate font-medium text-foreground"
-                      title={crumb.path}
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        crumb.kind === "file" ? (
+                          <span className="max-w-40 truncate font-medium text-foreground" />
+                        ) : (
+                          <button
+                            type="button"
+                            className="max-w-40 truncate rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            aria-label={`Show ${crumb.label} in file explorer`}
+                            onClick={() => revealBreadcrumbInFiles(crumb.path)}
+                          />
+                        )
+                      }
                     >
                       {crumb.label}
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      className="max-w-40 truncate rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      title={crumb.path || projectName}
-                      aria-label={`Show ${crumb.label} in file explorer`}
-                      onClick={() => revealBreadcrumbInFiles(crumb.path)}
-                    >
-                      {crumb.label}
-                    </button>
-                  )}
+                    </TooltipTrigger>
+                    <TooltipPopup side="top" className="max-w-80">
+                      {crumb.path || projectName}
+                    </TooltipPopup>
+                  </Tooltip>
                 </div>
               ))}
             </div>
