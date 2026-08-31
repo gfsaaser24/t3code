@@ -197,11 +197,14 @@ const VcsStatusChangeRequest = Schema.Struct({
   baseRef: TrimmedNonEmptyStringSchema,
   headRef: TrimmedNonEmptyStringSchema,
   state: VcsStatusChangeRequestState,
-  // ISO timestamp of the provider's last update to the PR. For merged/closed
-  // PRs this is an upper bound on the completion time; clients use it to
-  // keep a thread active when work continued after the merge (see
-  // effectiveSettled). Optional for version skew: older servers omit it.
-  updatedAt: Schema.optional(Schema.String),
+  /**
+   * Last provider-side activity (ISO). For a merged/closed change request
+   * this bounds when it reached that state, so clients can tell a PR that
+   * terminated during a thread's life from one that was already history
+   * when the thread was created. Optional for old servers and providers
+   * whose lookups do not report it.
+   */
+  updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const VcsStatusLocalShape = {
