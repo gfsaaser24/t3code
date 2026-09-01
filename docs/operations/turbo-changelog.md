@@ -8,6 +8,22 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **0.0.50: connecting to a busy server is fast again.** On a large install (28 projects, 125
+  threads, 72 live worktrees) the server was spending its event loop on background repository work
+  while a client was still connecting: trivial local HTTP GETs took 3–8.5s and the client's 15s
+  connection-setup budget failed over and over. Four places now shed that load. VCS remote status
+  refreshes are capped at three at a time and stay quiet for the first 90 seconds after the server
+  starts — local status, the badge you see immediately, and any refresh you trigger yourself are
+  untouched. The automatic thread-settlement sweep (one `gh pr list` per unsettled thread) drops
+  from eight at a time to two, waits five minutes after boot, and then runs at most every ten
+  minutes; changing an auto-settle setting still sweeps right away. Command lookup caches
+  explicit-path results and memoizes the Windows spawn resolver, so repeatedly spawning `git` or
+  `gh` no longer re-walks the filesystem thousands of times. And the server config snapshot no
+  longer waits on the editor scan: it answers from cache, or answers empty and scans in the
+  background, so available editors can be one snapshot late on a cold start. New seam
+  `startup-load-shedding`; related to pingdotgg/t3code#7231 and #7233. Not done: switching the
+  desktop LAN bind to dual-stack `::`, which is unrelated to the measured problem and hard-fails on
+  hosts with IPv6 disabled.
 - **0.0.49: T3 Turbo no longer hosts the legacy `~/.t3` (T3 Code personal) database as a second
   backend; import it once via the official-data-import path if needed.** The desktop bootstrap no
   longer probes for `~/.t3/userdata/state.sqlite` and no longer registers a `local:t3` instance in

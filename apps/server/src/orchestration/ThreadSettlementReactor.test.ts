@@ -37,6 +37,8 @@ import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import * as ThreadSettlementReactor from "./ThreadSettlementReactor.ts";
 
 const NOW = "2026-08-28T12:00:00.000Z";
+/** Mirrors `SETTLEMENT_SWEEP_BOOT_DELAY`: automatic sweeps stay quiet this long. */
+const SWEEP_BOOT_DELAY = "5 minutes";
 const PROJECT_ID = ProjectId.make("settlement-project");
 const LINKED_PROJECT_ID = ProjectId.make("linked-settlement-project");
 
@@ -273,6 +275,9 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
   activation: Deferred.Deferred<void>,
   snapshotReads: Queue.Queue<number>,
 ) {
+  // Automatic sweeps are muted for the boot delay. Step past it before starting
+  // so the periodic tick fired by `start()` is allowed to sweep straight away.
+  yield* TestClock.adjust(SWEEP_BOOT_DELAY);
   yield* reactor.start();
   yield* Deferred.succeed(activation, undefined);
   yield* Queue.take(snapshotReads);
@@ -316,6 +321,7 @@ describe("ThreadSettlementReactor", () => {
 
         yield* Effect.gen(function* () {
           const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* TestClock.adjust(SWEEP_BOOT_DELAY);
           yield* reactor.start();
           assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 0);
 
@@ -350,15 +356,17 @@ describe("ThreadSettlementReactor", () => {
     ),
   );
 
-  it.effect("reevaluates inactivity and pull request state once per minute", () =>
+  it.effect("reevaluates inactivity and pull request state on the next automatic sweep", () =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
         const pullRequest = yield* Ref.make<"open" | "merged">("open");
         const fixture = yield* makeHarness({
           snapshot: makeSnapshot([
+            // Exactly the inactivity threshold at the first sweep, so it must not
+            // settle then, and past it by the time the next sweep runs.
             makeThread("at-boundary", {
-              latestUserMessageAt: "2026-08-25T12:00:00.000Z",
+              latestUserMessageAt: "2026-08-25T12:05:00.000Z",
             }),
             makeThread("open-pr", {
               branch: "saved-feature",
@@ -375,6 +383,12 @@ describe("ThreadSettlementReactor", () => {
           assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
 
           yield* Ref.set(pullRequest, "merged");
+          // One periodic tick fires per clock adjustment, so cross the minimum
+          // interval in two steps: the ticks before it must not sweep.
+          yield* TestClock.adjust("9 minutes");
+          yield* reactor.drain;
+          assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 1);
+
           yield* TestClock.adjust("1 minute");
           yield* Queue.take(fixture.snapshotReads);
           yield* reactor.drain;
@@ -431,6 +445,7 @@ describe("ThreadSettlementReactor", () => {
 
         yield* Effect.gen(function* () {
           const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* TestClock.adjust(SWEEP_BOOT_DELAY);
           yield* reactor.start();
           yield* Deferred.succeed(fixture.activation, undefined);
           yield* Queue.take(fixture.snapshotReads);
@@ -633,6 +648,92 @@ describe("ThreadSettlementReactor", () => {
           yield* Queue.take(fixture.snapshotReads);
           yield* reactor.drain;
           assert.strictEqual((yield* Ref.get(fixture.commands)).length, 4);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("holds automatic sweeps until the boot delay elapses", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("inactive")]),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* reactor.start();
+          yield* Deferred.succeed(fixture.activation, undefined);
+
+          // Five periodic ticks land inside the boot window and none may sweep.
+          yield* TestClock.adjust("4 minutes");
+          yield* reactor.drain;
+          assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 0);
+          assert.deepStrictEqual(yield* Ref.get(fixture.commands), []);
+
+          yield* TestClock.adjust("1 minute");
+          assert.strictEqual(yield* Queue.take(fixture.snapshotReads), 1);
+          yield* reactor.drain;
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [ThreadId.make("inactive")],
+          );
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("throttles automatic sweeps to the minimum interval", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("inactive")]),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+          assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 1);
+
+          // Nine more periodic ticks, all inside the minimum interval.
+          yield* TestClock.adjust("9 minutes");
+          yield* reactor.drain;
+          assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 1);
+
+          yield* TestClock.adjust("1 minute");
+          assert.strictEqual(yield* Queue.take(fixture.snapshotReads), 2);
+          yield* reactor.drain;
+          assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 2);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("sweeps on a settings change without waiting out the boot delay", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([makeThread("inactive")]),
+        });
+
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* reactor.start();
+          yield* Deferred.succeed(fixture.activation, undefined);
+          yield* TestClock.adjust("4 minutes");
+          yield* reactor.drain;
+          assert.strictEqual(yield* Ref.get(fixture.snapshotReadCount), 0);
+
+          yield* fixture.updateSettings({ sidebarAutoSettleAfterDays: 4 });
+          assert.strictEqual(yield* Queue.take(fixture.snapshotReads), 1);
+          yield* reactor.drain;
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [ThreadId.make("inactive")],
+          );
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),
