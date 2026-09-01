@@ -500,6 +500,63 @@ On a nightly-sync conflict: take upstream's file, then re-add `ProjectionApplyCo
 `shouldRefreshThreadShellSummary` gate), `runProjectorBatch`, and the paging `bootstrapProjector`.
 Both test files must pass.
 
+## Startup load shedding (`startup-load-shedding`)
+
+Background repository work used to run flat out while a client was still connecting, and on a large
+install it starved the event loop the connection setup itself needs. Measured live on 0.0.49, one
+backend, 28 projects / 125 threads / 72 live worktrees:
+
+| Symptom                                              | Measurement (90s trace)                                                                                                                   |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Trivial local HTTP GET                               | 3-8.5s, so the client's 15s `CONNECTION_ESTABLISHMENT_TIMEOUT` (`packages/client-runtime/src/connection/supervisor.ts`) failed repeatedly |
+| `VcsStatusBroadcaster.refreshRemoteStatus`           | ~25 concurrent spans, 24-30s each, from `concurrency: "unbounded"` and one poller per worktree                                            |
+| `ThreadSettlementReactor.sweep`                      | 33s, `concurrency: 8`, one `gh pr list` per unsettled thread, re-run every minute                                                         |
+| `checkClaudeProviderStatus` / `discoverClaudeSkills` | 30s / 25s                                                                                                                                 |
+| `shell` command resolution                           | 572 `runGitCommand` + 173 `shell.resolveSpawnCommand`, ~15k synchronous `shell.isExecutableFile` stats per trace rotation                 |
+| `loadServerConfig` (`apps/server/src/ws.ts`)         | `resolveAvailableEditors` on every `subscribeServerConfig` snapshot: 21 editors x PATHEXT x PATH, up to the 5s `CONFIG_DISCOVERY_TIMEOUT` |
+
+The fix sheds load at four points and changes no product behavior:
+
+- **`apps/server/src/vcs/VcsStatusBroadcaster.ts`** - automatic remote refreshes take a permit from a
+  `Semaphore.make(REMOTE_STATUS_REFRESH_CONCURRENCY)` (3), and `remainingStartupGrace` holds them for
+  `REMOTE_STATUS_STARTUP_GRACE` (90s) after the broadcaster is built, returning the remaining grace as
+  the poller's next delay so nothing is dropped. Local status, `getStatus`, and `refreshStatus` are
+  untouched, as is the exponential failure backoff. `RemoteStatusStartupGrace` is a
+  `Context.Reference` so tests can zero the grace.
+- **`apps/server/src/orchestration/ThreadSettlementReactor.ts`** - `SETTLEMENT_SWEEP_CONCURRENCY` (2)
+  replaces the fan-out of 8, and `claimAutomaticSweep` gates the periodic sweep behind
+  `SETTLEMENT_SWEEP_BOOT_DELAY` (5 min) and `SETTLEMENT_SWEEP_MIN_INTERVAL` (10 min). The worker
+  payload is a `SweepTrigger`; only `"periodic"` is throttled, so a settings change still sweeps
+  immediately. Settlement semantics (`ThreadSettlementPolicy`) are unchanged.
+- **`packages/shared/src/shell.ts`** - the explicit-path branch of `resolveCommandPathForPlatform`
+  now reads and writes the shared `CommandResolutionCache` under
+  `COMMAND_RESOLUTION_EXPLICIT_PATH_KEY`, storing hits only so a just-written binary is never masked
+  by a stale negative; `resolveSpawnExecutableWithNode` memoizes its synchronous scan
+  (`spawnExecutableCache`, `scanSpawnExecutableWithNode`, hits only, 30s, keyed on
+  platform + PATH + PATHEXT + command); and `isExecutableFile` is no longer an `Effect.fn`, so one
+  span per resolution replaces tens of thousands per connect.
+- **`apps/server/src/process/externalLauncher.ts` + `apps/server/src/ws.ts`** -
+  `availableEditorsSnapshot` answers from the existing 60s `editorDiscoveryCache` when it is fresh and
+  otherwise returns `[]` at once while `warmAvailableEditors` (semaphore-deduped) fills the cache on a
+  detached fiber. Because the warm is detached it cannot be interrupted by a client timeout, which is
+  what previously left the cache cold on every connect. Accepted trade-off: on a genuinely cold cache
+  the first snapshot advertises no editors and they appear on the next one - there is no full-config
+  re-emit hook on `subscribeServerConfig` (only per-field deltas), and adding one would need a
+  contract change across web, desktop, and mobile.
+
+Related upstream work: pingdotgg/t3code#7231 and #7233.
+
+Deliberately **not** done: switching the desktop LAN bind from `0.0.0.0` to a dual-stack `::`
+(`apps/desktop/src/backend/DesktopServerExposure.ts`). It is unrelated to the measured CPU
+starvation, `listen("::")` hard-fails on hosts with IPv6 disabled where `0.0.0.0` always works, and
+the WSL backend's wildcard bind carries its own documented forwarding rationale.
+
+On a nightly-sync conflict: take upstream's file, then re-add the named constants above and their
+call sites. The two easy regressions are upstream reverting a `concurrency` back to `"unbounded"`/`8`
+and `loadServerConfig` going back to `resolveAvailableEditorsForConfig(resolveAvailableEditors())` -
+`resolveAvailableEditorsForConfig` is still used for `remoteOpenTargets`, so its presence is not
+evidence the seam survived.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the

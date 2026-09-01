@@ -1,4 +1,5 @@
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -10,6 +11,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 import type {
@@ -26,6 +28,30 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 
 const DEFAULT_VCS_STATUS_REFRESH_INTERVAL = Duration.seconds(30);
+/**
+ * Ceiling on how many automatic remote refreshes may run at once, and on the
+ * fan-out inside a single status read. One refresh is a `git fetch`-shaped
+ * subprocess tree plus a `gh` PR lookup; with a worktree per thread the
+ * previously unbounded fan-out put dozens of them on the CPU at the same time
+ * and starved the HTTP/WebSocket loop that the client's connection setup
+ * budget depends on. User-triggered refreshes never take a permit.
+ */
+export const REMOTE_STATUS_REFRESH_CONCURRENCY = 3;
+/**
+ * Automatic remote refresh stays quiet for this long after the broadcaster is
+ * built. Boot is when every surface subscribes at once, so this is exactly the
+ * window where remote work competes with connection setup. Local status is
+ * unaffected, and so is an explicit user refresh.
+ */
+export const REMOTE_STATUS_STARTUP_GRACE = Duration.seconds(90);
+/**
+ * Overrides {@link REMOTE_STATUS_STARTUP_GRACE}. Tests that assert refresh
+ * behavior set it to zero so they do not have to burn the grace window first.
+ */
+export const RemoteStatusStartupGrace = Context.Reference<Duration.Duration>(
+  "t3/vcs/VcsStatusBroadcaster/RemoteStatusStartupGrace",
+  { defaultValue: () => REMOTE_STATUS_STARTUP_GRACE },
+);
 const VCS_STATUS_REFRESH_FAILURE_BASE_DELAY = Duration.seconds(30);
 const VCS_STATUS_REFRESH_FAILURE_MAX_DELAY = Duration.minutes(15);
 const MAX_FAILURE_DIAGNOSTIC_VALUES = 8;
@@ -193,6 +219,11 @@ export const make = Effect.gen(function* () {
   );
   const cacheRef = yield* Ref.make(new Map<string, CachedVcsStatus>());
   const pollersRef = yield* SynchronizedRef.make(new Map<string, ActiveRemotePoller>());
+  // Automatic refreshes share these two: a permit pool that caps how many run
+  // at once, and the build timestamp that the startup grace measures from.
+  const remoteRefreshPermits = yield* Semaphore.make(REMOTE_STATUS_REFRESH_CONCURRENCY);
+  const startupGrace = yield* RemoteStatusStartupGrace;
+  const builtAtNanos = yield* Clock.currentTimeNanos;
 
   const getCachedStatus = Effect.fn("VcsStatusBroadcaster.getCachedStatus")(function* (
     cwd: string,
@@ -334,7 +365,7 @@ export const make = Effect.gen(function* () {
         cached?.local ? Effect.succeed(cached.local.value) : workflow.localStatus({ cwd }),
         cached?.remote ? Effect.succeed(cached.remote.value) : workflow.remoteStatus({ cwd }),
       ],
-      { concurrency: "unbounded" },
+      { concurrency: REMOTE_STATUS_REFRESH_CONCURRENCY },
     );
     return yield* updateCachedStatus(cwd, local, remote);
   });
@@ -374,9 +405,22 @@ export const make = Effect.gen(function* () {
     yield* workflow.invalidateStatus(cwd);
     const [local, remote] = yield* Effect.all(
       [workflow.localStatus({ cwd }), workflow.remoteStatus({ cwd })],
-      { concurrency: "unbounded" },
+      { concurrency: REMOTE_STATUS_REFRESH_CONCURRENCY },
     );
     return yield* updateCachedStatus(cwd, local, remote, { publish: true });
+  });
+
+  /**
+   * `null` once the startup grace has elapsed, otherwise how much of it is
+   * left - which doubles as the delay before the poller tries again.
+   */
+  const remainingStartupGrace = Effect.gen(function* () {
+    const graceMillis = Duration.toMillis(startupGrace);
+    if (graceMillis <= 0) return null;
+    const nowNanos = yield* Clock.currentTimeNanos;
+    const elapsedMillis = Number((nowNanos - builtAtNanos) / 1_000_000n);
+    const remainingMillis = graceMillis - elapsedMillis;
+    return remainingMillis > 0 ? Duration.millis(remainingMillis) : null;
   });
 
   const makeRemoteRefreshLoop = (
@@ -398,6 +442,14 @@ export const make = Effect.gen(function* () {
           return activeInterval;
         }
 
+        // Startup grace: every surface subscribes at once during connection
+        // setup, so hold automatic remote work back and retry once the window
+        // closes. Nothing is dropped, only deferred.
+        const graceRemaining = yield* remainingStartupGrace;
+        if (graceRemaining !== null) {
+          return graceRemaining;
+        }
+
         const demandCwds = yield* Ref.get(demandCwdsRef);
         const shouldRun =
           needsInitialRefresh ||
@@ -408,15 +460,19 @@ export const make = Effect.gen(function* () {
                 cwd: demandCwd,
               }),
             ),
-            { concurrency: "unbounded" },
+            { concurrency: REMOTE_STATUS_REFRESH_CONCURRENCY },
           )).some(Boolean);
         if (!shouldRun) {
           return activeInterval;
         }
 
-        const exit = yield* refreshRemoteStatus(cwd, {
-          refreshUpstream: !Duration.isZero(configuredInterval),
-        }).pipe(Effect.exit);
+        const exit = yield* remoteRefreshPermits
+          .withPermits(1)(
+            refreshRemoteStatus(cwd, {
+              refreshUpstream: !Duration.isZero(configuredInterval),
+            }),
+          )
+          .pipe(Effect.exit);
         if (Exit.isSuccess(exit)) {
           yield* Ref.set(needsInitialRefreshRef, false);
           yield* Ref.set(consecutiveFailuresRef, 0);

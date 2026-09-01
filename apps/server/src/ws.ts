@@ -1173,9 +1173,11 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
-        const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
-          externalLauncher.resolveAvailableEditors(),
-        );
+        // Never waits on a cold editor scan: a warm cache answers instantly and
+        // a cold one warms in the background, so the config snapshot cannot eat
+        // into the client's connection-setup budget.
+        const availableEditors: ReadonlyArray<EditorId> =
+          yield* externalLauncher.availableEditorsSnapshot();
         const fileManagerRevealKind = availableEditors.includes("file-manager")
           ? yield* resolveFileManagerRevealKindForConfig(
               externalLauncher.resolveFileManagerRevealKind(),

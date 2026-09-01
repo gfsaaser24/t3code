@@ -24,6 +24,7 @@ import type {
 import { GitManagerError } from "@t3tools/contracts";
 
 import * as VcsStatusBroadcaster from "./VcsStatusBroadcaster.ts";
+import { REMOTE_STATUS_REFRESH_CONCURRENCY } from "./VcsStatusBroadcaster.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 
@@ -67,16 +68,20 @@ const baseStatus: VcsStatusResult = {
   ...baseRemoteStatus,
 };
 
-function makeTestLayer(state: {
-  currentLocalStatus: VcsStatusLocalResult;
-  currentRemoteStatus: VcsStatusRemoteResult | null;
-  localStatusCalls: number;
-  remoteStatusCalls: number;
-  localInvalidationCalls: number;
-  remoteInvalidationCalls: number;
-  remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
-}) {
+function makeTestLayer(
+  state: {
+    currentLocalStatus: VcsStatusLocalResult;
+    currentRemoteStatus: VcsStatusRemoteResult | null;
+    localStatusCalls: number;
+    remoteStatusCalls: number;
+    localInvalidationCalls: number;
+    remoteInvalidationCalls: number;
+    remoteStatusRefreshUpstreamValues?: Array<boolean | undefined>;
+  },
+  startupGrace: Duration.Duration = Duration.millis(0),
+) {
   return VcsStatusBroadcaster.layer.pipe(
+    Layer.provide(Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, startupGrace)),
     Layer.provideMerge(NodeServices.layer),
     Layer.provide(makeBackgroundPolicyLayer(() => true)),
     Layer.provide(
@@ -219,6 +224,9 @@ describe("VcsStatusBroadcaster", () => {
       failRemoteStatus: false,
     };
     const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, Duration.millis(0)),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -327,6 +335,9 @@ describe("VcsStatusBroadcaster", () => {
       remoteInvalidationCalls: 0,
     };
     const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, Duration.millis(0)),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -491,6 +502,9 @@ describe("VcsStatusBroadcaster", () => {
     });
     let firstRemoteAttemptDeferred: Deferred.Deferred<void> | null = null;
     const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, Duration.millis(0)),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -691,6 +705,9 @@ describe("VcsStatusBroadcaster", () => {
       remoteInvalidationCalls: 0,
     };
     const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, Duration.millis(0)),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => false)),
       Layer.provide(
@@ -744,6 +761,9 @@ describe("VcsStatusBroadcaster", () => {
     let remoteInterruptedDeferred: Deferred.Deferred<void, never> | null = null;
     let remoteStartedDeferred: Deferred.Deferred<void, never> | null = null;
     const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, Duration.millis(0)),
+      ),
       Layer.provideMerge(NodeServices.layer),
       Layer.provide(makeBackgroundPolicyLayer(() => true)),
       Layer.provide(
@@ -815,6 +835,103 @@ describe("VcsStatusBroadcaster", () => {
       yield* Scope.close(secondScope, Exit.void).pipe(Effect.forkScoped);
       yield* Deferred.await(remoteInterrupted);
       assert.isTrue(Option.isSome(yield* Deferred.poll(remoteInterrupted)));
+    }).pipe(Effect.provide(testLayer));
+  });
+
+  it.effect("holds automatic remote refresh for the startup grace", () => {
+    const state = {
+      currentLocalStatus: baseLocalStatus,
+      currentRemoteStatus: baseRemoteStatus,
+      localStatusCalls: 0,
+      remoteStatusCalls: 0,
+      localInvalidationCalls: 0,
+      remoteInvalidationCalls: 0,
+    };
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const scope = yield* Scope.make();
+      const snapshotDeferred = yield* Deferred.make<VcsStatusStreamEvent>();
+      yield* Stream.runForEach(
+        broadcaster.streamStatus(
+          { cwd: "/repo" },
+          { automaticRemoteRefreshInterval: Effect.succeed(Duration.seconds(30)) },
+        ),
+        (event) =>
+          event._tag === "snapshot"
+            ? Deferred.succeed(snapshotDeferred, event).pipe(Effect.ignore)
+            : Effect.void,
+      ).pipe(Effect.forkIn(scope));
+
+      // Local status is never held back - only the remote half is.
+      yield* Deferred.await(snapshotDeferred);
+      assert.equal(state.localStatusCalls, 1);
+      assert.equal(state.remoteStatusCalls, 0);
+
+      yield* TestClock.adjust(Duration.seconds(89));
+      yield* Effect.yieldNow;
+      assert.equal(state.remoteStatusCalls, 0);
+
+      yield* TestClock.adjust(Duration.seconds(1));
+      yield* Effect.yieldNow;
+      assert.equal(state.remoteStatusCalls, 1);
+
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer(state, VcsStatusBroadcaster.REMOTE_STATUS_STARTUP_GRACE).pipe(
+          Layer.provideMerge(TestClock.layer()),
+        ),
+      ),
+    );
+  });
+
+  it.effect("caps how many automatic remote refreshes run at once", () => {
+    const state = { inFlight: 0, maxInFlight: 0 };
+    const subscriberCount = REMOTE_STATUS_REFRESH_CONCURRENCY * 4;
+    const testLayer = VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(
+        Layer.succeed(VcsStatusBroadcaster.RemoteStatusStartupGrace, Duration.millis(0)),
+      ),
+      Layer.provideMerge(NodeServices.layer),
+      Layer.provide(makeBackgroundPolicyLayer(() => true)),
+      Layer.provide(
+        Layer.mock(GitWorkflowService.GitWorkflowService)({
+          localStatus: () => Effect.succeed(baseLocalStatus),
+          // Never completes, so every refresh that got a permit stays in
+          // flight and the peak is the permit count itself.
+          remoteStatus: () =>
+            Effect.gen(function* () {
+              state.inFlight += 1;
+              state.maxInFlight = Math.max(state.maxInFlight, state.inFlight);
+              return yield* Effect.never;
+            }),
+          invalidateLocalStatus: () => Effect.void,
+          invalidateRemoteStatus: () => Effect.void,
+          invalidateStatus: () => Effect.void,
+        } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const broadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+      const scope = yield* Scope.make();
+      for (let index = 0; index < subscriberCount; index += 1) {
+        yield* Stream.runDrain(
+          broadcaster.streamStatus(
+            { cwd: `/repo-${index}` },
+            { automaticRemoteRefreshInterval: Effect.succeed(Duration.seconds(30)) },
+          ),
+        ).pipe(Effect.forkIn(scope));
+      }
+
+      for (let tick = 0; tick < subscriberCount * 4; tick += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      assert.equal(state.maxInFlight, REMOTE_STATUS_REFRESH_CONCURRENCY);
+
+      yield* Scope.close(scope, Exit.void);
     }).pipe(Effect.provide(testLayer));
   });
 });

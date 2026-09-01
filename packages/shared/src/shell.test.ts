@@ -2,12 +2,18 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it as effectIt } from "@effect/vitest";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import { TestClock } from "effect/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   extractPathFromShellOutput,
   CommandAvailability,
   type CommandAvailabilityChecker,
+  CommandResolutionCache,
   isCommandAvailable,
   listLoginShellCandidates,
   mergePathEntries,
@@ -33,6 +39,73 @@ const withWindowsEnvironmentMocks = <A, E, R>(
   effect.pipe(
     Effect.provideService(WindowsShellEnvironment, readEnvironment),
     Effect.provideService(CommandAvailability, commandAvailable),
+  );
+
+const WINDOWS_PROBE_ENV = { PATH: "", PATHEXT: ".COM;.EXE;.BAT;.CMD" } as const;
+
+interface StatProbe {
+  /** Paths the fake filesystem reports as existing executables. */
+  readonly files: Set<string>;
+  /** Every path handed to `stat`, in call order. */
+  readonly statPaths: Array<string>;
+}
+
+const makeStatProbe = (files: ReadonlyArray<string> = []): StatProbe => ({
+  files: new Set(files),
+  statPaths: [],
+});
+
+const executableFileInfo: FileSystem.File.Info = {
+  type: "File",
+  mtime: Option.none(),
+  atime: Option.none(),
+  birthtime: Option.none(),
+  dev: 0,
+  ino: Option.none(),
+  mode: 0o755,
+  nlink: Option.none(),
+  uid: Option.none(),
+  gid: Option.none(),
+  rdev: Option.none(),
+  size: FileSystem.Size(0),
+  blksize: Option.none(),
+  blocks: Option.none(),
+};
+
+const noopFileSystem = FileSystem.makeNoop({});
+
+/**
+ * Filesystem that records every `stat`, so a cache hit is provable: a resolution
+ * served from the cache must not add a single probe.
+ */
+const statProbeLayer = (probe: StatProbe) =>
+  Layer.merge(
+    FileSystem.layerNoop({
+      stat: (path: string) =>
+        Effect.suspend(() => {
+          probe.statPaths.push(path);
+          return probe.files.has(path)
+            ? Effect.succeed(executableFileInfo)
+            : noopFileSystem.stat(path);
+        }),
+    }),
+    Path.layer,
+  );
+
+/**
+ * Runs against the probing filesystem with a fresh, test-local
+ * `CommandResolutionCache` so cached entries never leak between tests. Uses
+ * `win32` because POSIX executability is decided by a real `access` syscall the
+ * fake filesystem cannot answer.
+ */
+const withStatProbe = <A, E>(
+  effect: Effect.Effect<A, E, FileSystem.FileSystem | Path.Path>,
+  probe: StatProbe,
+) =>
+  effect.pipe(
+    Effect.provideService(HostProcessPlatform, "win32"),
+    Effect.provideService(CommandResolutionCache, new Map()),
+    Effect.provide(statProbeLayer(probe)),
   );
 
 describe("extractPathFromShellOutput", () => {
@@ -375,6 +448,96 @@ effectIt.layer(NodeServices.layer)("resolveCommandPath", (it) => {
       expect(result._tag).toBe("Failure");
     }),
   );
+});
+
+describe("resolveCommandPath explicit-path cache", () => {
+  effectIt.effect("serves a repeat explicit-path resolve without stating again", () => {
+    const probe = makeStatProbe(["/opt/tools/alpha.exe"]);
+    return withStatProbe(
+      Effect.gen(function* () {
+        const first = yield* resolveCommandPath("/opt/tools/alpha.exe", {
+          env: WINDOWS_PROBE_ENV,
+        });
+        expect(first).toBe("/opt/tools/alpha.exe");
+
+        const statsAfterFirst = probe.statPaths.length;
+        expect(statsAfterFirst).toBeGreaterThan(0);
+
+        const second = yield* resolveCommandPath("/opt/tools/alpha.exe", {
+          env: WINDOWS_PROBE_ENV,
+        });
+        expect(second).toBe(first);
+        expect(probe.statPaths.length).toBe(statsAfterFirst);
+      }),
+      probe,
+    );
+  });
+
+  effectIt.effect("does not cache an explicit path that is missing", () => {
+    const probe = makeStatProbe();
+    return withStatProbe(
+      Effect.gen(function* () {
+        const missing = yield* resolveCommandPath("/opt/tools/beta.exe", {
+          env: WINDOWS_PROBE_ENV,
+        }).pipe(Effect.result);
+        expect(missing._tag).toBe("Failure");
+        expect(probe.statPaths.length).toBeGreaterThan(0);
+
+        // A caller that just wrote the binary must see it on the next probe.
+        probe.files.add("/opt/tools/beta.exe");
+
+        expect(yield* resolveCommandPath("/opt/tools/beta.exe", { env: WINDOWS_PROBE_ENV })).toBe(
+          "/opt/tools/beta.exe",
+        );
+      }),
+      probe,
+    );
+  });
+
+  effectIt.effect("keys cached explicit paths per command", () => {
+    const probe = makeStatProbe(["/opt/tools/alpha.exe", "/opt/tools/gamma.exe"]);
+    return withStatProbe(
+      Effect.gen(function* () {
+        expect(yield* resolveCommandPath("/opt/tools/alpha.exe", { env: WINDOWS_PROBE_ENV })).toBe(
+          "/opt/tools/alpha.exe",
+        );
+
+        const statsAfterAlpha = probe.statPaths.length;
+
+        expect(yield* resolveCommandPath("/opt/tools/gamma.exe", { env: WINDOWS_PROBE_ENV })).toBe(
+          "/opt/tools/gamma.exe",
+        );
+        expect(probe.statPaths.length).toBeGreaterThan(statsAfterAlpha);
+
+        // Alpha is still cached, so the second command did not evict or shadow it.
+        expect(yield* resolveCommandPath("/opt/tools/alpha.exe", { env: WINDOWS_PROBE_ENV })).toBe(
+          "/opt/tools/alpha.exe",
+        );
+      }),
+      probe,
+    );
+  });
+
+  effectIt.effect("re-probes an explicit path once the 30s TTL expires", () => {
+    const probe = makeStatProbe(["/opt/tools/alpha.exe"]);
+    return withStatProbe(
+      Effect.gen(function* () {
+        yield* resolveCommandPath("/opt/tools/alpha.exe", { env: WINDOWS_PROBE_ENV });
+        const statsAfterFirst = probe.statPaths.length;
+
+        yield* TestClock.adjust(29_000);
+        yield* resolveCommandPath("/opt/tools/alpha.exe", { env: WINDOWS_PROBE_ENV });
+        expect(probe.statPaths.length).toBe(statsAfterFirst);
+
+        yield* TestClock.adjust(1_000);
+        expect(yield* resolveCommandPath("/opt/tools/alpha.exe", { env: WINDOWS_PROBE_ENV })).toBe(
+          "/opt/tools/alpha.exe",
+        );
+        expect(probe.statPaths.length).toBeGreaterThan(statsAfterFirst);
+      }),
+      probe,
+    ).pipe(Effect.provide(TestClock.layer()));
+  });
 });
 
 effectIt.layer(NodeServices.layer)("resolveSpawnCommand", (it) => {

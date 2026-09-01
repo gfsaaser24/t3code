@@ -32,6 +32,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
@@ -494,6 +495,8 @@ interface EditorDiscoveryCacheEntry {
   readonly expiresAtNanos: bigint;
 }
 
+const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
+
 /**
  * ExternalLauncher - Service tag for browser/editor launch operations.
  */
@@ -501,6 +504,14 @@ export class ExternalLauncher extends Context.Service<
   ExternalLauncher,
   {
     readonly resolveAvailableEditors: () => Effect.Effect<ReadonlyArray<EditorId>>;
+    /**
+     * Non-blocking view of {@link resolveAvailableEditors} for the server-config
+     * snapshot. Returns the memoized set when it is fresh; when the cache is
+     * cold it returns an empty set immediately and warms the cache on a
+     * detached fiber, so connection setup never pays for a PATH walk across
+     * every known editor. Editors then appear on the next snapshot.
+     */
+    readonly availableEditorsSnapshot: () => Effect.Effect<ReadonlyArray<EditorId>>;
     /**
      * Reveal kind for the host, or undefined when the executable a reveal
      * actually spawns is unavailable. Only meaningful when
@@ -815,8 +826,37 @@ export const make = Effect.gen(function* () {
     return editors;
   });
 
+  const freshCachedEditors = Effect.gen(function* () {
+    const nowNanos = yield* Clock.currentTimeNanos;
+    const entry = yield* Ref.get(editorDiscoveryCache);
+    return Option.isSome(entry) && entry.value.expiresAtNanos > nowNanos
+      ? Option.some(entry.value.editors)
+      : Option.none<ReadonlyArray<EditorId>>();
+  });
+
+  // One warm at a time: a burst of connects on a cold cache would otherwise
+  // each fork a full scan. The permit holder re-checks the cache so the
+  // queued warms become no-ops instead of repeat scans.
+  const warmPermit = yield* Semaphore.make(1);
+  const warmAvailableEditors = warmPermit.withPermits(1)(
+    Effect.gen(function* () {
+      if (Option.isSome(yield* freshCachedEditors)) return;
+      yield* cachedAvailableEditors;
+    }),
+  );
+
+  const availableEditorsSnapshot = Effect.gen(function* () {
+    const cached = yield* freshCachedEditors;
+    if (Option.isSome(cached)) return cached.value;
+    // Detached, so the caller's timeout or disconnect cannot interrupt the
+    // scan halfway and leave the cache cold for the next connect too.
+    yield* warmAvailableEditors.pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach);
+    return EMPTY_AVAILABLE_EDITORS;
+  });
+
   return ExternalLauncher.of({
     resolveAvailableEditors: () => cachedAvailableEditors,
+    availableEditorsSnapshot: () => availableEditorsSnapshot,
     resolveFileManagerRevealKind: () =>
       provideCommandResolutionServices(resolveFileManagerRevealKind()).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

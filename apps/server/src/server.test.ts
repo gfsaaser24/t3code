@@ -738,6 +738,7 @@ const buildAppUnderTest = (options?: {
         Layer.mergeAll(
           Layer.mock(ExternalLauncher.ExternalLauncher)({
             resolveAvailableEditors: () => Effect.succeed([]),
+            availableEditorsSnapshot: () => Effect.succeed([]),
             resolveFileManagerRevealKind: () => Effect.sync((): undefined => undefined),
             ...options?.layers?.externalLauncher,
           }),
@@ -4236,6 +4237,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           externalLauncher: {
             resolveAvailableEditors: () => Effect.succeed(["file-manager"]),
+            availableEditorsSnapshot: () => Effect.succeed(["file-manager"]),
             resolveFileManagerRevealKind: () => Effect.succeed("file-explorer"),
           },
         },
@@ -4253,6 +4255,37 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(response.availableEditors, ["file-manager"]);
       assert.equal(response.shellRevealInFileManager, true);
       assert.equal(response.shellRevealInFileManagerKind, "file-explorer");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The config snapshot must read the launcher's non-blocking view. If it ever
+  // falls back to the blocking scan this test hangs: the mock's blocking scan
+  // never resolves and nothing here advances the clock past the 5s discovery
+  // timeout that would otherwise rescue it.
+  it.effect("returns server config without waiting on a cold editor scan", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          externalLauncher: {
+            resolveAvailableEditors: () => Effect.never,
+            availableEditorsSnapshot: () => Effect.succeed([]),
+            resolveFileManagerRevealKind: () => Effect.never,
+          },
+        },
+      });
+
+      const { cookie } = yield* bootstrapBrowserSession();
+      const wsUrl = appendSessionCookieToWsUrl(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        cookie?.split(";")[0] ?? "",
+      );
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetConfig]({})),
+      );
+
+      assert.deepEqual(response.availableEditors, []);
+      assert.isUndefined(response.shellRevealInFileManager);
+      assert.isUndefined(response.shellRevealInFileManagerKind);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

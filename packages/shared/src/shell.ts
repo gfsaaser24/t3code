@@ -94,7 +94,54 @@ export type SpawnExecutableResolver = (
   env: NodeJS.ProcessEnv,
 ) => string | undefined;
 
+// `resolveSpawnCommand` runs on every Windows spawn and this scan is its whole
+// cost: PATH entries x PATHEXT candidates synchronous `statSync` calls, hundreds
+// per miss. Sessions spawn the same handful of commands (git, gh, the provider
+// CLI) over and over, so memoize the *hits* for a short window, keyed on the
+// full search environment so any PATH or PATHEXT change invalidates at once.
+// Misses are never cached: a command that was not on PATH a moment ago may have
+// just been installed, and a miss simply falls back to spawning `command` bare.
+const SPAWN_EXECUTABLE_CACHE_TTL_NANOS = 30_000_000_000n;
+const SPAWN_EXECUTABLE_CACHE_MAX_ENTRIES = 256;
+
+interface SpawnExecutableCacheEntry {
+  readonly resolvedPath: string;
+  readonly expiresAtNanos: bigint;
+}
+
+const spawnExecutableCache = new Map<string, SpawnExecutableCacheEntry>();
+
 function resolveSpawnExecutableWithNode(
+  command: string,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const cacheKey = [platform, readEnvPath(env) ?? "", env.PATHEXT ?? "", command].join(
+    COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR,
+  );
+  const nowNanos = process.hrtime.bigint();
+  const cached = spawnExecutableCache.get(cacheKey);
+  if (cached !== undefined && cached.expiresAtNanos > nowNanos) {
+    return cached.resolvedPath;
+  }
+
+  const resolved = scanSpawnExecutableWithNode(command, platform, env);
+  if (resolved !== undefined) {
+    if (spawnExecutableCache.size >= SPAWN_EXECUTABLE_CACHE_MAX_ENTRIES) {
+      const oldestKey = spawnExecutableCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        spawnExecutableCache.delete(oldestKey);
+      }
+    }
+    spawnExecutableCache.set(cacheKey, {
+      resolvedPath: resolved,
+      expiresAtNanos: nowNanos + SPAWN_EXECUTABLE_CACHE_TTL_NANOS,
+    });
+  }
+  return resolved;
+}
+
+function scanSpawnExecutableWithNode(
   command: string,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
@@ -501,15 +548,22 @@ function resolveCommandCandidates(
 // thousands per connect). Memoize the scan outcome per
 // (platform, PATH, PATHEXT, command) for a short window: repeat scans hit the
 // cache while any change to the search environment invalidates immediately.
-// Explicit-path resolution is never cached - callers probe paths they have
-// just written (e.g. managed binary installs). A "not-found" outcome is also
-// cached for the TTL, so a just-installed binary can stay invisible for up to
-// 30s unless resolved by explicit path.
+// Explicit-path resolution shares the same map under
+// COMMAND_RESOLUTION_EXPLICIT_PATH_KEY, but stores *hits only*: callers probe
+// paths they have just written (e.g. managed binary installs), so a cached
+// "not-found" there could hide a binary that now exists. Caching the hit is
+// safe and is what the repeated-spawn case actually needs.
+// The PATH branch, by contrast, does cache "not-found" for the TTL, so a
+// just-installed binary can stay invisible there for up to 30s unless it is
+// resolved by explicit path.
 // TTL expiry uses the monotonic clock (Clock.currentTimeNanos) so backward
 // wall-clock adjustments cannot keep expired entries alive.
 const COMMAND_RESOLUTION_CACHE_TTL_NANOS = 30_000_000_000n;
 const COMMAND_RESOLUTION_CACHE_MAX_ENTRIES = 512;
 const COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR = String.fromCharCode(0);
+// Stands in for PATH in the cache key when the command is an explicit path, so
+// explicit-path entries can never collide with PATH-scan entries.
+const COMMAND_RESOLUTION_EXPLICIT_PATH_KEY = "explicit-path";
 
 interface CommandResolutionCacheEntry {
   readonly resolvedPath: string | null;
@@ -544,24 +598,29 @@ function cacheCommandResolution(
   });
 }
 
-const isExecutableFile = Effect.fn("shell.isExecutableFile")(function* (
+// Deliberately span-free. A single PATH scan probes hundreds of candidates, so
+// a span per probe buried the one span that matters
+// ('shell.resolveCommandPathForPlatform') under tens of thousands of children
+// per connect and cost real time in the tracer itself.
+const isExecutableFile = (
   filePath: string,
   platform: NodeJS.Platform,
   windowsPathExtensions: ReadonlyArray<string>,
-): Effect.fn.Return<boolean, never, FileSystem.FileSystem | Path.Path> {
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const stat = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
-  if (stat === null || stat.type !== "File") return false;
+): Effect.Effect<boolean, never, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const stat = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
+    if (stat === null || stat.type !== "File") return false;
 
-  if (platform === "win32") {
-    const extension = path.extname(filePath);
-    if (extension.length === 0) return false;
-    return windowsPathExtensions.includes(extension.toUpperCase());
-  }
+    if (platform === "win32") {
+      const extension = path.extname(filePath);
+      if (extension.length === 0) return false;
+      return windowsPathExtensions.includes(extension.toUpperCase());
+    }
 
-  return canExecuteFile(filePath);
-});
+    return canExecuteFile(filePath);
+  });
 
 const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlatform")(function* (
   command: string,
@@ -578,9 +637,29 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
     path.extname,
   );
 
+  const cache = yield* CommandResolutionCache;
+
   if (command.includes("/") || command.includes("\\")) {
+    const explicitCacheKey = [
+      platform,
+      COMMAND_RESOLUTION_EXPLICIT_PATH_KEY,
+      windowsPathExtensions.join(";"),
+      command,
+    ].join(COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR);
+    const nowNanos = yield* Clock.currentTimeNanos;
+    // `resolvedPath !== null` restates the hits-only invariant rather than
+    // asserting it away.
+    const cachedExplicit = cache.get(explicitCacheKey);
+    if (
+      cachedExplicit !== undefined &&
+      cachedExplicit.resolvedPath !== null &&
+      cachedExplicit.expiresAtNanos > nowNanos
+    ) {
+      return cachedExplicit.resolvedPath;
+    }
     for (const candidate of commandCandidates) {
       if (yield* isExecutableFile(candidate, platform, windowsPathExtensions)) {
+        cacheCommandResolution(cache, explicitCacheKey, candidate, nowNanos);
         return candidate;
       }
     }
@@ -595,7 +674,6 @@ const resolveCommandPathForPlatform = Effect.fn("shell.resolveCommandPathForPlat
   const cacheKey = [platform, pathValue, windowsPathExtensions.join(";"), command].join(
     COMMAND_RESOLUTION_CACHE_KEY_SEPARATOR,
   );
-  const cache = yield* CommandResolutionCache;
   const nowNanos = yield* Clock.currentTimeNanos;
   const cached = cache.get(cacheKey);
   if (cached !== undefined && cached.expiresAtNanos > nowNanos) {

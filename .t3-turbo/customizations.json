@@ -1407,6 +1407,91 @@
           ]
         }
       ]
+    },
+    {
+      "id": "startup-load-shedding",
+      "status": "implemented",
+      "summary": "Connection setup no longer competes with background repository work. Measured on 0.0.49 with 28 projects / 125 threads / 72 worktrees, trivial local HTTP GETs took 3-8.5s and the client's 15s CONNECTION_ESTABLISHMENT_TIMEOUT failed repeatedly. Four fork-owned changes: VcsStatusBroadcaster bounds automatic remote refreshes with a REMOTE_STATUS_REFRESH_CONCURRENCY=3 semaphore and holds them for a REMOTE_STATUS_STARTUP_GRACE of 90s after build (local status and user-triggered refresh unaffected, failure backoff unchanged); ThreadSettlementReactor drops its sweep fan-out from 8 to SETTLEMENT_SWEEP_CONCURRENCY=2 and gates the periodic sweep behind a 5-minute boot delay plus a 10-minute floor, while a settings change still sweeps at once; @t3tools/shared/shell caches explicit-path resolutions (hits only) in the shared CommandResolutionCache, memoizes the synchronous Windows spawn resolver, and drops the per-probe shell.isExecutableFile span; and ws.loadServerConfig reads editors through ExternalLauncher.availableEditorsSnapshot, which answers from the 60s cache or returns [] and warms on a detached fiber instead of blocking the snapshot on a PATH walk over every known editor.",
+      "checks": [
+        {
+          "path": "apps/server/src/vcs/VcsStatusBroadcaster.ts",
+          "markers": [
+            "REMOTE_STATUS_REFRESH_CONCURRENCY",
+            "REMOTE_STATUS_STARTUP_GRACE",
+            "RemoteStatusStartupGrace",
+            "remoteRefreshPermits",
+            "remainingStartupGrace"
+          ]
+        },
+        {
+          "path": "apps/server/src/vcs/VcsStatusBroadcaster.test.ts",
+          "markers": [
+            "holds automatic remote refresh for the startup grace",
+            "caps how many automatic remote refreshes run at once"
+          ]
+        },
+        {
+          "path": "apps/server/src/orchestration/ThreadSettlementReactor.ts",
+          "markers": [
+            "SETTLEMENT_SWEEP_CONCURRENCY",
+            "SETTLEMENT_SWEEP_MIN_INTERVAL",
+            "SETTLEMENT_SWEEP_BOOT_DELAY",
+            "claimAutomaticSweep",
+            "SweepTrigger"
+          ]
+        },
+        {
+          "path": "apps/server/src/orchestration/ThreadSettlementReactor.test.ts",
+          "markers": [
+            "holds automatic sweeps until the boot delay elapses",
+            "throttles automatic sweeps to the minimum interval",
+            "sweeps on a settings change without waiting out the boot delay"
+          ]
+        },
+        {
+          "path": "packages/shared/src/shell.ts",
+          "markers": [
+            "COMMAND_RESOLUTION_EXPLICIT_PATH_KEY",
+            "SPAWN_EXECUTABLE_CACHE_TTL_NANOS",
+            "spawnExecutableCache",
+            "scanSpawnExecutableWithNode"
+          ]
+        },
+        {
+          "path": "packages/shared/src/shell.test.ts",
+          "markers": [
+            "serves a repeat explicit-path resolve without stating again",
+            "does not cache an explicit path that is missing",
+            "keys cached explicit paths per command",
+            "re-probes an explicit path once the 30s TTL expires"
+          ]
+        },
+        {
+          "path": "apps/server/src/process/externalLauncher.ts",
+          "markers": [
+            "availableEditorsSnapshot",
+            "warmAvailableEditors",
+            "freshCachedEditors",
+            "EMPTY_AVAILABLE_EDITORS"
+          ]
+        },
+        {
+          "path": "apps/server/src/process/externalLauncher.test.ts",
+          "markers": [
+            "answers a cold editor snapshot immediately without scanning inline",
+            "serves the discovered editors once the backgrounded warm completes",
+            "collapses a burst of cold snapshots into a single scan"
+          ]
+        },
+        {
+          "path": "apps/server/src/ws.ts",
+          "markers": ["availableEditorsSnapshot"]
+        },
+        {
+          "path": "apps/server/src/server.test.ts",
+          "markers": ["returns server config without waiting on a cold editor scan"]
+        }
+      ]
     }
   ]
 }

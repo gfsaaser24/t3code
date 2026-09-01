@@ -1,11 +1,14 @@
 import { CommandId } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -22,6 +25,30 @@ import {
   type SettlementPullRequest,
 } from "./ThreadSettlementPolicy.ts";
 
+/**
+ * Ceiling on how many settlement groups are resolved at once. Each group costs
+ * a `gh pr list` subprocess, so the old fan-out of 8 put eight GitHub CLI
+ * processes on the CPU during boot, competing with connection setup.
+ */
+const SETTLEMENT_SWEEP_CONCURRENCY = 2;
+/**
+ * Floor between two automatic sweeps. Auto-settlement is a day-scale decision;
+ * the periodic tick used to re-walk every unsettled thread once a minute.
+ */
+const SETTLEMENT_SWEEP_MIN_INTERVAL = Duration.minutes(10);
+/**
+ * How long automatic sweeps stay quiet after the reactor is built, so the
+ * first `gh pr list` storm does not land inside the client's connection-setup
+ * budget. A settings change still sweeps immediately.
+ */
+const SETTLEMENT_SWEEP_BOOT_DELAY = Duration.minutes(5);
+
+/**
+ * Why a sweep was queued. Only `"periodic"` is throttled - a settings change is
+ * a user action and must take effect straight away.
+ */
+type SweepTrigger = "periodic" | "settings-changed";
+
 export class ThreadSettlementReactor extends Context.Service<
   ThreadSettlementReactor,
   {
@@ -37,6 +64,27 @@ export const make = Effect.gen(function* () {
   const git = yield* GitManager.GitManager;
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
+  const builtAtNanos = yield* Clock.currentTimeNanos;
+  const lastSweepAtNanos = yield* Ref.make<bigint | null>(null);
+
+  /**
+   * True when an automatic sweep is allowed to run now: past the boot delay,
+   * and at least {@link SETTLEMENT_SWEEP_MIN_INTERVAL} since the last one.
+   * Records the run time as a side effect so the caller cannot forget to.
+   */
+  const claimAutomaticSweep = Effect.fn("ThreadSettlementReactor.claimAutomaticSweep")(
+    function* () {
+      const nowNanos = yield* Clock.currentTimeNanos;
+      const lastNanos = yield* Ref.get(lastSweepAtNanos);
+      const earliestNanos =
+        lastNanos === null
+          ? builtAtNanos + BigInt(Duration.toMillis(SETTLEMENT_SWEEP_BOOT_DELAY)) * 1_000_000n
+          : lastNanos + BigInt(Duration.toMillis(SETTLEMENT_SWEEP_MIN_INTERVAL)) * 1_000_000n;
+      if (nowNanos < earliestNanos) return false;
+      yield* Ref.set(lastSweepAtNanos, nowNanos);
+      return true;
+    },
+  );
 
   const sweep = Effect.fn("ThreadSettlementReactor.sweep")(function* () {
     const snapshot = yield* snapshots.getShellSnapshot();
@@ -135,12 +183,17 @@ export const make = Effect.gen(function* () {
                 }),
           ),
         ),
-      { concurrency: 8, discard: true },
+      { concurrency: SETTLEMENT_SWEEP_CONCURRENCY, discard: true },
     );
   });
 
-  const worker = yield* makeDrainableWorker(() =>
-    sweep().pipe(
+  const worker = yield* makeDrainableWorker((trigger: SweepTrigger) =>
+    Effect.gen(function* () {
+      if (trigger === "periodic" && !(yield* claimAutomaticSweep())) {
+        return;
+      }
+      yield* sweep();
+    }).pipe(
       Effect.catchCause((cause) =>
         Cause.hasInterruptsOnly(cause)
           ? Effect.failCause(cause)
@@ -160,7 +213,7 @@ export const make = Effect.gen(function* () {
     let lastOnMerge = initialSettings.sidebarAutoSettleOnMerge;
     yield* forkParked(
       Effect.gen(function* () {
-        yield* worker.enqueue(undefined);
+        yield* worker.enqueue("periodic");
         yield* worker.drain;
       }).pipe(Effect.repeat(Schedule.spaced("1 minute")), Effect.asVoid),
     );
@@ -174,7 +227,7 @@ export const make = Effect.gen(function* () {
         }
         lastAfterDays = settings.sidebarAutoSettleAfterDays;
         lastOnMerge = settings.sidebarAutoSettleOnMerge;
-        return worker.enqueue(undefined);
+        return worker.enqueue("settings-changed");
       }),
     );
   });

@@ -970,6 +970,139 @@ it.effect("rescans after an interrupted discovery instead of caching the interru
   );
 });
 
+// `availableEditorsSnapshot` is the non-blocking view `server.getConfig` uses:
+// it must answer from the memoized set or answer empty right away, never make
+// the calling fiber wait on a PATH walk across every known editor.
+const countingDiscoveryLayer = (onStat: () => void, env: Record<string, string>) => {
+  const fileInfo = { type: "File" } as FileSystem.File.Info;
+  return Layer.mergeAll(
+    ExternalLauncher.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          FileSystem.layerNoop({
+            stat: () =>
+              Effect.sync(() => {
+                onStat();
+                return fileInfo;
+              }),
+          }),
+          Path.layer,
+          Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.sync(() => makeMockDetachedHandle())),
+          ),
+        ),
+      ),
+    ),
+    Layer.succeed(HostProcessPlatform, "win32"),
+    ConfigProvider.layer(
+      ConfigProvider.fromEnv({ env: { PATHEXT: ".COM;.EXE;.BAT;.CMD", ...env } }),
+    ),
+  );
+};
+
+// Hands the scheduler to the detached warm fiber until it publishes a set.
+// Yielding, never sleeping: the warm runs entirely on the same runtime.
+const settledEditorsSnapshot = (launcher: ExternalLauncher.ExternalLauncher["Service"]) =>
+  Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const editors = yield* launcher.availableEditorsSnapshot();
+      if (editors.length > 0) return editors;
+      yield* Effect.yieldNow;
+    }
+    return yield* launcher.availableEditorsSnapshot();
+  });
+
+it.effect("answers a cold editor snapshot immediately without scanning inline", () => {
+  let statCalls = 0;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+    const editors = yield* launcher.availableEditorsSnapshot();
+
+    assert.deepEqual([...editors], []);
+    // The scan is forked; nothing walked PATH on the calling fiber.
+    assert.equal(statCalls, 0);
+  }).pipe(
+    Effect.provide(
+      countingDiscoveryLayer(
+        () => {
+          statCalls += 1;
+        },
+        { PATH: "C:\\t3-editor-snapshot-cold-test" },
+      ),
+    ),
+  );
+});
+
+it.effect("serves the discovered editors once the backgrounded warm completes", () => {
+  let statCalls = 0;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+    assert.deepEqual([...(yield* launcher.availableEditorsSnapshot())], []);
+
+    const editors = yield* settledEditorsSnapshot(launcher);
+
+    assert.equal(editors.includes("vscode"), true);
+    assert.isAbove(statCalls, 0);
+  }).pipe(
+    Effect.provide(
+      countingDiscoveryLayer(
+        () => {
+          statCalls += 1;
+        },
+        { PATH: "C:\\t3-editor-snapshot-warm-test" },
+      ),
+    ),
+  );
+});
+
+// A burst of connects on a cold cache each fork a warm. The warm permit plus
+// its cache re-check must collapse them into a single PATH walk.
+it.effect("collapses a burst of cold snapshots into a single scan", () => {
+  let statCalls = 0;
+  return Effect.gen(function* () {
+    const launcher = yield* ExternalLauncher.ExternalLauncher;
+
+    const burst = yield* Effect.all(
+      Array.from({ length: 8 }, () => launcher.availableEditorsSnapshot()),
+      { concurrency: "unbounded" },
+    );
+    for (const editors of burst) {
+      assert.deepEqual([...editors], []);
+    }
+
+    const editors = yield* settledEditorsSnapshot(launcher);
+    assert.equal(editors.includes("vscode"), true);
+    // Let any queued warm run; each must find the cache fresh and no-op.
+    yield* Effect.yieldNow;
+    yield* Effect.yieldNow;
+    const statCallsAfterBurst = statCalls;
+    assert.isAbove(statCallsAfterBurst, 0);
+
+    // Past both the discovery window and the shared command-resolution cache,
+    // one blocking scan measures what a single PATH walk costs.
+    yield* TestClock.adjust("61 seconds");
+    yield* launcher.resolveAvailableEditors();
+    const singleScanStatCalls = statCalls - statCallsAfterBurst;
+
+    assert.equal(statCallsAfterBurst, singleScanStatCalls);
+  }).pipe(
+    Effect.provide(
+      Layer.merge(
+        countingDiscoveryLayer(
+          () => {
+            statCalls += 1;
+          },
+          { PATH: "C:\\t3-editor-snapshot-burst-test" },
+        ),
+        TestClock.layer(),
+      ),
+    ),
+  );
+});
+
 it.effect("rejects unknown editors through the service API", () =>
   Effect.gen(function* () {
     const launcher = yield* ExternalLauncher.ExternalLauncher;
