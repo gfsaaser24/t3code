@@ -437,6 +437,33 @@ version line never advanced there.
 On a nightly-sync conflict: keep upstream's job graph and re-add the two `env` entries plus the
 five `ref:`/push lines. If upstream ever gains its own release-branch input, prefer it.
 
+## Durable server-config subscription (fork fix)
+
+Upstream `b883fc066` (#8367, "halve server config bootstrap traffic") turned the server-config
+subscription into a liveness dependency of the whole WebSocket session. In
+`packages/client-runtime/src/rpc/session.ts`, a **clean** end of that stream failed
+`configSubscriptionClosed`, which is raced by `closed`, so the supervisor tore the socket down; the
+RPC protocol is built with `retryTransientErrors: false` and `Schedule.recurs(0)`, so nothing
+retried. A busy server ends or stalls the config stream while the socket is perfectly healthy, and
+each teardown re-established every subscription on reconnect, which raised the load that caused the
+next teardown (observed: six whole-connection kills in 24 minutes, at shrinking intervals).
+
+- A clean end of the config stream is no longer session-fatal; the session re-subscribes on the
+  live socket under `SERVER_CONFIG_RESUBSCRIBE_SCHEDULE` (jittered exponential from 500 ms, capped
+  at 10 s, unbounded while the session scope is open). The loop is forked into the session scope, so
+  a real disconnect interrupts it.
+- Server-side config errors the server can recover from (`KeybindingsConfigParseError`,
+  `ServerSettingsError`) are recovered into a clean end and take the same loop.
+- Genuinely non-transient failures (defects, `EnvironmentAuthorizationError`) and transport failures
+  still fail `serverConfigExit` and `configSubscriptionClosed` exactly as upstream does, so `closed`
+  keeps its race shape and consumers still get a transport-shaped failure.
+- Replay state is preserved across a re-subscribe: `applyServerConfigProjection` folds the new
+  snapshot onto the existing projection, so consumers see one snapshot event, not a torn projection.
+
+On a nightly-sync conflict: keep upstream's `onExit` shape and re-apply the success-branch change,
+the `Effect.catchTags` recovery, and the `Effect.repeat` wrapper. Retire this seam if upstream merges
+its own durable config subscription — PR pingdotgg/t3code#7233 (issue #7231) is the candidate.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the

@@ -260,6 +260,39 @@ const publishConfigEvents = Effect.fn("TestRpcSessionFactory.publishConfigEvents
   );
 });
 
+const endConfigStream = Effect.fn("TestRpcSessionFactory.endConfigStream")(function* (
+  socket: TestWebSocket,
+  index = 0,
+) {
+  const request = yield* awaitRequest(socket, index);
+  socket.serverMessage(
+    encodeJson({
+      _tag: "Exit",
+      requestId: request.id,
+      exit: { _tag: "Success", value: null },
+    }),
+  );
+});
+
+/**
+ * Steps the test clock in small increments until the socket has sent `index + 1`
+ * requests. The re-subscribe backoff is a real sleep, and virtual time only
+ * moves when something advances it; the increments stay well under the ping
+ * window so waiting here cannot itself close the session.
+ */
+const awaitRequestWithBackoff = Effect.fn("TestRpcSessionFactory.awaitRequestWithBackoff")(
+  function* (socket: TestWebSocket, index: number) {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const request = socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest)[index];
+      if (request) {
+        return request;
+      }
+      yield* TestClock.adjust("100 millis");
+    }
+    return yield* Effect.die(new Error("Expected the session to re-subscribe to server config."));
+  },
+);
+
 describe("RpcSessionFactory", () => {
   it.effect("owns one scoped websocket attempt and exposes readiness and closure", () =>
     Effect.gen(function* () {
@@ -676,6 +709,126 @@ describe("RpcSessionFactory", () => {
         }
       }),
     ),
+  );
+
+  it.effect("re-subscribes server config when the stream ends cleanly", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      const closedFiber = yield* Effect.forkChild(Effect.exit(session.closed));
+      const observed = yield* Queue.unbounded<ServerConfigStreamEventType>();
+      yield* session.subscribeServerConfig({}).pipe(
+        Stream.runForEach((event) => Queue.offer(observed, event)),
+        Effect.forkChild,
+      );
+      expect((yield* Queue.take(observed)).type).toBe("snapshot");
+
+      yield* endConfigStream(socket);
+
+      const resubscribe = yield* awaitRequestWithBackoff(socket, 1);
+      expect(resubscribe).toMatchObject({
+        _tag: "Request",
+        tag: WS_METHODS.subscribeServerConfig,
+      });
+      expect(sockets).toHaveLength(1);
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+
+      socket.serverMessage(
+        encodeJson({
+          _tag: "Chunk",
+          requestId: resubscribe.id,
+          values: [
+            {
+              version: 1,
+              type: "snapshot",
+              config: {
+                ...ENCODED_SERVER_CONFIG,
+                environment: {
+                  ...ENCODED_SERVER_CONFIG.environment,
+                  label: "Re-subscribed environment",
+                },
+              },
+            },
+          ],
+        }),
+      );
+
+      const replacement = yield* Queue.take(observed);
+      expect(replacement).toMatchObject({
+        type: "snapshot",
+        config: { environment: { label: "Re-subscribed environment" } },
+      });
+      expect(closedFiber.pollUnsafe()).toBeUndefined();
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("closes the session when the config stream fails with a non-transient error", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      const request = yield* awaitRequest(socket);
+      socket.serverMessage(
+        encodeJson({
+          _tag: "Exit",
+          requestId: request.id,
+          exit: {
+            _tag: "Failure",
+            cause: [
+              {
+                _tag: "Fail",
+                error: {
+                  _tag: "EnvironmentAuthorizationError",
+                  message: "config subscription rejected",
+                  requiredScope: "orchestration:read",
+                },
+              },
+            ],
+          },
+        }),
+      );
+
+      const error = yield* Fiber.join(closedFiber);
+      expect(error).toBeInstanceOf(ConnectionBlockedError);
+      expect(error).toMatchObject({ reason: "permission" });
+
+      yield* TestClock.adjust("30 seconds");
+      expect(socket.sent.map((message) => decodeJson(message)).filter(isRpcRequest)).toHaveLength(
+        1,
+      );
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("closes the session when the websocket disconnects", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      socket.close(1006, "network lost");
+
+      const error = yield* Effect.flip(session.closed);
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error).toMatchObject({ reason: "transport" });
+      yield* Effect.yieldNow;
+      expect(sockets).toHaveLength(1);
+    }).pipe(Effect.scoped),
   );
 
   it.effect.each([{ failure: "defect" as const }, { failure: "typed" as const }])(

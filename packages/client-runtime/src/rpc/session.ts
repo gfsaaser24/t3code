@@ -41,6 +41,26 @@ import {
 
 const SOCKET_OPEN_TIMEOUT = "15 seconds";
 
+// T3 Turbo seam: durable-config-subscription-resilience.
+//
+// Upstream #8367 made the server-config subscription a liveness dependency of
+// the whole WebSocket session: a *clean* end of that stream failed
+// `configSubscriptionClosed`, which races `closed`, which tears the socket down.
+// A loaded server ends or stalls the config stream while the socket itself is
+// perfectly healthy, so one slow snapshot became a full reconnect -- and the
+// reconnect re-established every subscription, which raised the load that caused
+// the next one. We re-subscribe on the live socket instead.
+//
+// The backoff is bounded rather than unbounded-exponential: the cap is the worst
+// config staleness a user can see, and 10s of stale config is cheaper than a
+// reconnect. The loop is forked into the session scope, so a real disconnect
+// interrupts it.
+const SERVER_CONFIG_RESUBSCRIBE_MAX_DELAY = "10 seconds";
+const SERVER_CONFIG_RESUBSCRIBE_SCHEDULE = Schedule.min([
+  Schedule.exponential("500 millis"),
+  Schedule.spaced(SERVER_CONFIG_RESUBSCRIBE_MAX_DELAY),
+]).pipe(Schedule.jittered);
+
 export interface RpcSession {
   readonly client: WsRpcProtocolClient;
   readonly initialConfig: Effect.Effect<ServerConfig, ConnectionAttemptError>;
@@ -232,12 +252,19 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
           }
         }),
       ),
+      // T3 Turbo (durable-config-subscription-resilience): a config error the
+      // server can recover from is the environment's problem, not the socket's.
+      // Recovering it into a clean end hands it to the re-subscribe loop below
+      // instead of killing a healthy session.
+      Effect.catchTags({
+        KeybindingsConfigParseError: () => Effect.void,
+        ServerSettingsError: () => Effect.void,
+      }),
       Effect.onExit((exit) => {
         if (Exit.isSuccess(exit)) {
-          return Effect.all([
-            Deferred.succeed(serverConfigExit, undefined),
-            Deferred.fail(configSubscriptionClosed, configSubscriptionEndedError),
-          ]).pipe(Effect.asVoid);
+          // T3 Turbo (durable-config-subscription-resilience): a clean end is
+          // NOT session-fatal. Upstream failed `configSubscriptionClosed` here.
+          return Effect.void;
         }
         if (Cause.hasInterruptsOnly(exit.cause)) {
           return Effect.void;
@@ -248,7 +275,11 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
         ]).pipe(Effect.asVoid);
       }),
     );
-    yield* serverConfigSource.pipe(Effect.forkScoped);
+    yield* serverConfigSource.pipe(
+      Effect.repeat(SERVER_CONFIG_RESUBSCRIBE_SCHEDULE),
+      Effect.withSpan("environment.serverConfig.resubscribe"),
+      Effect.forkScoped,
+    );
     const initialConfig = Effect.raceFirst(
       Deferred.await(initialConfigDeferred),
       Deferred.await(serverConfigExit).pipe(
