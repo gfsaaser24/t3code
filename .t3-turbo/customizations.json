@@ -1358,6 +1358,29 @@
           ]
         }
       ]
+    },
+    {
+      "id": "durable-config-subscription-resilience",
+      "status": "implemented",
+      "summary": "Upstream #8367 (perf: halve server config bootstrap traffic) made the server-config subscription a liveness dependency of the WebSocket session: a clean end of that stream failed configSubscriptionClosed, which races closed and tears the socket down, and the protocol is configured with no retry. On a loaded server the config stream ends or stalls while the socket is healthy, so one slow snapshot caused a full reconnect that re-established every subscription and raised the load that caused the next one. The fork re-subscribes on the live socket with a jittered exponential backoff capped at 10s instead, keeps first-snapshot semantics, and only fails the session on a genuinely non-transient config failure.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/rpc/session.ts",
+          "markers": [
+            "SERVER_CONFIG_RESUBSCRIBE_SCHEDULE",
+            "environment.serverConfig.resubscribe",
+            "durable-config-subscription-resilience"
+          ]
+        },
+        {
+          "path": "packages/client-runtime/src/rpc/session.test.ts",
+          "markers": [
+            "re-subscribes server config when the stream ends cleanly",
+            "closes the session when the config stream fails with a non-transient error",
+            "closes the session when the websocket disconnects"
+          ]
+        }
+      ]
     }
   ]
 }
