@@ -40,6 +40,8 @@ policy in [CONTRIBUTING.md](../CONTRIBUTING.md); agent rules in [AGENTS.md](../A
 - [T3 Connect](./internals/t3-connect.md)
 - [CI gates](./internals/ci.md)
 - [Engineering work artifacts](./internals/work-artifacts.md)
+- [T3 Turbo downstream](./internals/t3-turbo.md)
+- [T3 Turbo nightly inbound updates](./internals/t3-turbo-nightly-inbound.md)
 
 ### Runbooks
 

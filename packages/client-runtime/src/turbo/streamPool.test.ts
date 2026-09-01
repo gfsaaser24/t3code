@@ -58,6 +58,7 @@ function session(client: WsRpcProtocolClient): RpcSession {
   return {
     client,
     initialConfig: Effect.never,
+    subscribeServerConfig: () => Stream.die(new Error("Config is not used by stream pool tests.")),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,

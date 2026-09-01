@@ -199,6 +199,10 @@ const POOL_CAPACITY = 1024;
 const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([
   WS_METHODS.subscribePreviewEvents,
   WS_METHODS.previewAutomationConnect,
+  // Server config is a durable, session-owned stream with its own replay and
+  // projection. It is low volume, and pooling it would both delay config by a
+  // frame and put a queue between the session and its own durable state.
+  WS_METHODS.subscribeServerConfig,
 ]);
 
 // The connection "synchronized" marker is what flips a subscription to "live",
@@ -329,7 +333,11 @@ export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
           Option.match({
             onNone: () => Stream.empty,
             onSome: (session) => {
-              const method = session.client[tag] as (
+              const method = (
+                tag === WS_METHODS.subscribeServerConfig
+                  ? session.subscribeServerConfig
+                  : session.client[tag]
+              ) as (
                 input: EnvironmentRpcInput<TTag>,
               ) => Stream.Stream<
                 EnvironmentRpcStreamValue<TTag>,
