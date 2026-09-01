@@ -206,6 +206,7 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription: `Allow ${MOBILE_PRODUCT_NAME} to connect to ${MOBILE_PRODUCT_NAME} servers on your local network or tailnet.`,
+      NSPhotoLibraryAddUsageDescription: `Allow ${MOBILE_PRODUCT_NAME} to save images to your photo library.`,
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that

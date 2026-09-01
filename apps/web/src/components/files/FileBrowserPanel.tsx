@@ -3,13 +3,13 @@ import type {
   ContextMenuOpenContext as TreeContextMenuOpenContext,
 } from "@pierre/trees";
 import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
-import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
+import { FileTree, useFileTree, useFileTreeSearch, useFileTreeSelector } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { RotateCw } from "lucide-react";
+import { ChevronsDownUpIcon, ChevronsUpDownIcon, RotateCw } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -34,6 +34,12 @@ import {
   rootDirectoryTreePaths,
   setAllDirectoriesExpanded,
 } from "./fileTreeBulkExpansion";
+// Upstream's toolbar toggle drives each directory handle directly; the Turbo
+// alt-click path resets the whole tree, so both expansion helpers coexist.
+import {
+  areAllDirectoriesExpanded,
+  setAllDirectoriesExpanded as setAllDirectoryHandlesExpanded,
+} from "./fileTreeExpansion";
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 
 interface FileBrowserPanelProps {
@@ -369,6 +375,12 @@ export default function FileBrowserPanel({
     unsafeCSS: TREE_UNSAFE_CSS,
   });
   const search = useFileTreeSearch(model);
+  const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
+    areAllDirectoriesExpanded(currentModel, directoryPaths),
+  );
+  const toggleAllDirectories = () => {
+    setAllDirectoryHandlesExpanded(model, directoryPaths, !allDirectoriesExpanded);
+  };
   const handleSearchValueChange = (value: string) => {
     if (value.trim().length === 0) {
       search.close();
@@ -531,6 +543,32 @@ export default function FileBrowserPanel({
           onValueChange={handleSearchValueChange}
           onClose={search.close}
         />
+        {directoryPaths.length > 0 ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={
+                    allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"
+                  }
+                  onClick={toggleAllDirectories}
+                />
+              }
+            >
+              {allDirectoriesExpanded ? (
+                <ChevronsDownUpIcon className="size-3.5" />
+              ) : (
+                <ChevronsUpDownIcon className="size-3.5" />
+              )}
+            </TooltipTrigger>
+            <TooltipPopup>
+              {allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
       {entriesQuery.error && entriesQuery.data === null ? (
         <div className="p-4 text-xs leading-relaxed text-destructive">{entriesQuery.error}</div>
