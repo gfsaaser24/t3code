@@ -56,7 +56,7 @@ apps/web/package.json
 
 Commit the bump to `turbo`. (History: 0.0.35 started the independent line,
 0.0.36 added the personal `~/.t3` backend, 0.0.37 restored the connect
-config to local builds.)
+config to local builds, 0.0.49 retired the personal `~/.t3` backend.)
 
 ## 3. Build
 

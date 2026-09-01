@@ -8,6 +8,14 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **0.0.49: T3 Turbo no longer hosts the legacy `~/.t3` (T3 Code personal) database as a second
+  backend; import it once via the official-data-import path if needed.** The desktop bootstrap no
+  longer probes for `~/.t3/userdata/state.sqlite` and no longer registers a `local:t3` instance in
+  the backend pool, and `DesktopBackendConfiguration.resolveLocalHome` — the start-config builder
+  that existed only for that instance — is gone with it. T3 Turbo now stands on its own home. The
+  one-way official import (`apps/server/src/turbo/officialImport/**`, seam `official-data-import`)
+  is untouched and remains the supported way to bring legacy data across. Also ingests upstream
+  through `692eb1a57`.
 - **Cold start replays projection history in batches again (0.0.48).** The fork's batched projection
   bootstrap was silently lost in the 0.0.45 ingest, because it had never been registered as a seam
   and upstream's `ProjectionPipeline.test.ts` asserts exact shell-update counts. Restored on top of
@@ -224,7 +232,8 @@ No version manifests were bumped: this work ships with the next release, per the
 ## 0.0.36 — 2026-08-08
 
 - Hosted the personal official T3 Code home as a second local backend on the desktop
-  (`cf516adb`), since replaced by the guarded one-way official import.
+  (`cf516adb`), since replaced by the guarded one-way official import and removed entirely in
+  0.0.49.
 
 ## 0.0.35 — 2026-08-08
 
