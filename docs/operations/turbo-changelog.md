@@ -8,6 +8,14 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **Cold start replays projection history in batches again (0.0.48).** The fork's batched projection
+  bootstrap was silently lost in the 0.0.45 ingest, because it had never been registered as a seam
+  and upstream's `ProjectionPipeline.test.ts` asserts exact shell-update counts. Restored on top of
+  upstream's current pipeline: the live path and upstream's `shouldRefreshThreadShellSummary` gate
+  are untouched, while bootstrap replays 500 events per `sql.withTransaction`, defers each thread's
+  shell-summary refresh to the end of its batch (once per thread, not once per event), and writes
+  one projection-state row per batch. New seam `batched-projection-bootstrap`, pinned by
+  `apps/server/src/orchestration/Layers/ProjectionPipeline.turbo.test.ts`.
 - **Un-settling a thread now sticks, and a merged PR no longer buries live follow-up work.** The
   keep-active pin survives messages, session starts, and approval/input requests — only an
   explicit settle spends it (activity still wakes explicitly _settled_ threads). And a merged or
