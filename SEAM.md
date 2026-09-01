@@ -464,6 +464,42 @@ On a nightly-sync conflict: keep upstream's `onExit` shape and re-apply the succ
 the `Effect.catchTags` recovery, and the `Effect.repeat` wrapper. Retire this seam if upstream merges
 its own durable config subscription — PR pingdotgg/t3code#7233 (issue #7231) is the candidate.
 
+## Batched projection bootstrap (fork perf)
+
+Upstream's `apps/server/src/orchestration/Layers/ProjectionPipeline.ts` bootstraps every projector by
+streaming history through `runProjectorForEvent`, which opens one `sql.withTransaction` per replayed
+event and recomputes a thread's shell summary inline for every event that dirties it. Cold start on a
+real database therefore pays a commit (and an fsync) per event, plus O(events) shell-summary
+recomputes on the same handful of threads.
+
+The fork leaves upstream's live path alone — `projectEvent` still calls `runProjectorForEvent`, and
+upstream's `shouldRefreshThreadShellSummary` gate still decides which events dirty a summary — and
+adds a bootstrap-only batch path:
+
+- `PROJECTION_BOOTSTRAP_BATCH_SIZE = 500`. `bootstrapProjector` reads from `lastAppliedSequence` in
+  pages of that size and stops when a page comes back empty.
+- `runProjectorBatch` runs the whole page inside **one** `sql.withTransaction`, applying the
+  projector per event with a `ProjectionApplyContext`.
+- The context carries `deferredThreadShellSummaryIds`, a `Set<ThreadId>`. While it is present,
+  `refreshOrDeferThreadShellSummary` records the thread instead of recomputing; each recorded thread
+  is refreshed exactly once at the end of the batch. With no context (the live path) it refreshes
+  immediately, which is what upstream's `ProjectionPipeline.test.ts` shell-update counts assert.
+- One `projectionStateRepository.upsert` per batch, stamped with the batch's last event. Attachment
+  side-effects still run outside the transaction, exactly as upstream does per event.
+
+This seam was **lost once already**: the 0.0.45 ingest took upstream's per-event pipeline wholesale
+because upstream's `ProjectionPipeline.test.ts` asserts exact shell-update counts and the fork code
+was not registered here. It is registered now, and
+`apps/server/src/orchestration/Layers/ProjectionPipeline.turbo.test.ts` pins both halves: 1200 events
+across three threads bootstrap in `ceil(n / 500)` projection-state commits with at most one shell
+refresh per thread per batch, and a single live event still refreshes its summary in the same call.
+
+On a nightly-sync conflict: take upstream's file, then re-add `ProjectionApplyContext`, the
+`context?` parameter on `ProjectorDefinition["apply"]`, `PROJECTION_BOOTSTRAP_BATCH_SIZE`,
+`refreshOrDeferThreadShellSummary` (wrapping, never replacing, upstream's
+`shouldRefreshThreadShellSummary` gate), `runProjectorBatch`, and the paging `bootstrapProjector`.
+Both test files must pass.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the

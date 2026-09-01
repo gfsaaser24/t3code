@@ -1381,6 +1381,32 @@
           ]
         }
       ]
+    },
+    {
+      "id": "batched-projection-bootstrap",
+      "status": "implemented",
+      "summary": "Cold start replays projection history in batches instead of one transaction per event. Upstream's ProjectionPipeline runs runProjectorForEvent per replayed event, so a multi-thousand-event history pays one sqlite transaction (and one thread shell-summary recompute per dirtying event) each time. The fork keeps upstream's live path and its shouldRefreshThreadShellSummary gate untouched, and adds a bootstrap-only batch path: PROJECTION_BOOTSTRAP_BATCH_SIZE (500) events per sql.withTransaction, shell-summary refreshes deferred into a per-batch Set and replayed once per thread when the batch closes, and a single projection-state upsert per batch. This was lost once already in the 0.0.45 ingest because it was never registered.",
+      "checks": [
+        {
+          "path": "apps/server/src/orchestration/Layers/ProjectionPipeline.ts",
+          "markers": [
+            "PROJECTION_BOOTSTRAP_BATCH_SIZE",
+            "runProjectorBatch",
+            "refreshOrDeferThreadShellSummary",
+            "deferredThreadShellSummaryIds",
+            "ProjectionApplyContext"
+          ]
+        },
+        {
+          "path": "apps/server/src/orchestration/Layers/ProjectionPipeline.turbo.test.ts",
+          "markers": [
+            "replays history in batched transactions with deduped shell refreshes",
+            "the threads projector should commit once per batch",
+            "shell summaries must refresh at most once per thread per batch",
+            "the live path must refresh the shell summary without waiting for a batch"
+          ]
+        }
+      ]
     }
   ]
 }

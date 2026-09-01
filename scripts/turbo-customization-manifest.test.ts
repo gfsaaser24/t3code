@@ -142,6 +142,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
   ]);
   assert.deepStrictEqual(result.manifest.seams.map((seam) => seam.id).sort(), [
     "agent-docs-operating-model",
+    "batched-projection-bootstrap",
     "canonical-icon-pipeline",
     "changelog-and-runbook",
     "cheap-message-unpacking",
