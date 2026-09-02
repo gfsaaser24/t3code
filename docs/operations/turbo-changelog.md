@@ -8,6 +8,10 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **0.0.51: ingest upstream through v0.0.38 (b21d87243).** The CLI opens projects in the running
+  desktop app, host-file previews and video streaming work across clients, and project-switch and
+  theme fixes land.
+
 - **0.0.50: connecting to a busy server is fast again.** On a large install (28 projects, 125
   threads, 72 live worktrees) the server was spending its event loop on background repository work
   while a client was still connecting: trivial local HTTP GETs took 3–8.5s and the client's 15s
