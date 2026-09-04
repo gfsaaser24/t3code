@@ -16,11 +16,10 @@ export function buildDesktopEnvironmentOptions(input: {
   readonly primaryEnvironmentId: EnvironmentId | null;
 }): readonly DesktopEnvironmentOption[] {
   return input.environments
-    .map(
-      (environment): DesktopEnvironmentOption =>
-        environment.environmentId === input.primaryEnvironmentId
-          ? { ...environment, label: "T3 Turbo", kind: "turbo" }
-          : { ...environment, kind: "other" },
+    .map((environment): DesktopEnvironmentOption =>
+      environment.environmentId === input.primaryEnvironmentId
+        ? { ...environment, label: "T3 Turbo", kind: "turbo" }
+        : { ...environment, kind: "other" },
     )
     .toSorted((left, right) => {
       const rank = { turbo: 0, other: 1 } as const;

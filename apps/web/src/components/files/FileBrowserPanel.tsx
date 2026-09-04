@@ -23,6 +23,7 @@ import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
+import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 import { projectEnvironment } from "~/state/projects";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -40,6 +41,7 @@ import {
   areAllDirectoriesExpanded,
   setAllDirectoriesExpanded as setAllDirectoryHandlesExpanded,
 } from "./fileTreeExpansion";
+import { buildFileTreePathUpdates } from "./fileTreePathReconciliation";
 import { useProjectEntriesQuery } from "./projectFilesQueryState";
 
 interface FileBrowserPanelProps {
@@ -61,18 +63,6 @@ interface FileBrowserPanelProps {
   onRefreshSelectedFile?: () => void;
   workspaceMutationId: string | null;
 }
-
-const TREE_UNSAFE_CSS = `
-  :host {
-    --trees-bg-override: transparent;
-    --trees-selected-bg-override: color-mix(in srgb, currentColor 12%, transparent);
-    --trees-hover-bg-override: color-mix(in srgb, currentColor 7%, transparent);
-    --trees-border-color-override: color-mix(in srgb, currentColor 14%, transparent);
-    --trees-font-family-override: var(--font-sans);
-    --trees-font-size-override: 12px;
-  }
-  button[data-type='item'] { border-radius: 5px; }
-`;
 
 function treePath(entry: ProjectEntry): string {
   return entry.kind === "directory" ? `${entry.path}/` : entry.path;
@@ -160,7 +150,7 @@ export default function FileBrowserPanel({
     () => rootDirectoryTreePaths(directoryPaths),
     [directoryPaths],
   );
-  const previousTreePathsRef = useRef<readonly string[]>([]);
+  const previousTreePathsRef = useRef<readonly string[] | null>(null);
   const syncingSelectionRef = useRef(false);
   const treeSelectionPathRef = useRef<string | null>(null);
   const handledRevealRef = useRef<{ path: string; revealId: number } | null>(null);
@@ -372,7 +362,7 @@ export default function FileBrowserPanel({
       },
     },
     search: false,
-    unsafeCSS: TREE_UNSAFE_CSS,
+    unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
   });
   const search = useFileTreeSearch(model);
   const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
@@ -399,11 +389,19 @@ export default function FileBrowserPanel({
   });
 
   useEffect(() => {
+    if (entriesQuery.data === null) return;
     if (previousTreePathsRef.current === treePaths) return;
     entryKindsRef.current = entryKinds;
+    const previousTreePaths = previousTreePathsRef.current;
     previousTreePathsRef.current = treePaths;
-    model.resetPaths(treePaths, { initialExpandedPaths: initialDirectoryPaths });
-  }, [entryKinds, initialDirectoryPaths, model, treePaths]);
+    if (previousTreePaths === null) {
+      // Turbo: the first paint opens the root directories only.
+      model.resetPaths(treePaths, { initialExpandedPaths: initialDirectoryPaths });
+      return;
+    }
+    const updates = buildFileTreePathUpdates(previousTreePaths, treePaths);
+    if (updates.length > 0) model.batch(updates);
+  }, [entriesQuery.data, entryKinds, initialDirectoryPaths, model, treePaths]);
 
   useEffect(() => {
     const path = requestedRevealPath ?? selectedPath;
@@ -577,10 +575,7 @@ export default function FileBrowserPanel({
           model={model}
           aria-label={`${projectName} files`}
           className="min-h-0 flex-1 overflow-hidden"
-          style={{
-            colorScheme: resolvedTheme,
-            ["--trees-fg-override" as string]: "var(--contrast-foreground)",
-          }}
+          style={pierreTreeStyle(resolvedTheme)}
         />
       )}
     </div>

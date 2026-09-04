@@ -16,7 +16,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 
 import { migrationManifest, runMigrations } from "../../persistence/Migrations.ts";
-import * as NodeSqliteClient from "../../persistence/NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { prepareImportCheckpointRefChanges } from "./checkpointRefs.ts";
 import { prepareOfficialImport } from "./execute.ts";
 import {

@@ -557,6 +557,34 @@ and `loadServerConfig` going back to `resolveAvailableEditorsForConfig(resolveAv
 `resolveAvailableEditorsForConfig` is still used for `remoteOpenTargets`, so its presence is not
 evidence the seam survived.
 
+## Shell snapshot budget (`shell-snapshot-budget`)
+
+The sidebar loads its authoritative thread list with one HTTP call, `GET /api/orchestration/shell`,
+and the client abandons that call after `DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS`. Measured on 0.0.51 with
+30 projects and 130+ live worktrees, the call took 7-13s and was cancelled at the 6s budget on
+every boot (HTTP 499, six of six samples). SQL was 3ms of that; the rest was
+`ProjectionSnapshotQuery.resolveRepositoryIdentitiesForProjects` re-spawning `git rev-parse` and
+`git remote -v` for every project (1-minute cache) while the event loop was busy with git polling
+and provider probes. When the call fails the client keeps the cached shell, and every later
+`thread.deleted` / `thread.settled` is applied to a list the user never sees refreshed - deletes and
+settles "do nothing".
+
+Two fork-owned constants, no product behavior change:
+
+- **`packages/client-runtime/src/state/shellSnapshotHttp.ts`** - `DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS`
+  is 30s (upstream: 6s) and exported. The cached shell still renders while the request runs.
+- **`apps/server/src/project/RepositoryIdentityResolver.ts`** - `DEFAULT_POSITIVE_CACHE_TTL` is 12h
+  and `DEFAULT_NEGATIVE_CACHE_TTL` is 10min (upstream: 1min each), both exported. A repository's
+  remote does not change minute to minute, the identity is cosmetic (PR links, icons), and a
+  restart or explicit refresh still re-resolves it. Tests pass their own TTLs and are unaffected.
+
+Upstream still ships both defaults as of `c0ebc882b` (2026-09-03); pingdotgg/t3code#9052 (sidebar
+status leasing by visibility) reduces the surrounding git load but not this snapshot path.
+
+On a nightly-sync conflict: take upstream's file, then restore the two constants and their
+`Turbo (shell-snapshot-budget)` comments. If upstream ever resolves identities off the snapshot's
+critical path (background warm, non-blocking cache read), drop the TTL hunk and keep the timeout.
+
 ## Nightly sync conflicts
 
 Resolve against the new upstream file first, then reapply only the behavior above; never take the

@@ -15,11 +15,11 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   firstValidTimestampMs,
   parseTimestampMs,
-  resolveSettledTimestamp,
   sortSettledThreadsForSidebar,
   sortSnoozedThreadsForSidebar,
   sortThreadsForSidebar,
 } from "../components/Sidebar.logic";
+import { resolveSettledThreadTimestamp as resolveSettledTimestamp } from "../lib/threadSort";
 import { compareIsoTimestamps } from "@t3tools/client-runtime/state/thread-activity-order";
 
 /** Deterministic LCG: the corpora must be identical on every machine.
@@ -241,9 +241,16 @@ describe("sortSettledThreadsForSidebar (W10 settled bucket)", () => {
       },
     }));
 
+    // The resolver may read `updatedAt` more than once per call (upstream's
+    // validates then returns); the invariant is one resolve per row.
+    const baseline = reads;
+    resolveSettledTimestamp(rows[0]!);
+    const readsPerResolve = reads - baseline;
+    reads = baseline;
+
     const sorted = sortSettledThreadsForSidebar(rows);
 
-    expect(reads).toBe(rows.length);
+    expect(reads).toBe(rows.length * readsPerResolve);
     expect(sorted[0]?.id).toBe("thread-15");
   });
 });

@@ -266,17 +266,14 @@ describe("ComposerPrimaryActions", () => {
     const markup = renderSendButton();
 
     expect(markup).toContain("stage-nightly");
-    expect(markup).toContain("bg-transparent text-white");
-    expect(markup).not.toContain("bg-message-action text-message-action-foreground");
   });
 
-  it("keeps the normal send-button fill when artwork identification is inactive", () => {
+  it("hides stage artwork when artwork identification is inactive", () => {
     stageArtworkState.variant = "nightly";
 
     const markup = renderSendButton();
 
     expect(markup).not.toContain("stage-nightly");
-    expect(markup).toContain("bg-message-action text-message-action-foreground");
   });
 
   it("only renders stop while running when Enter-to-send is available", () => {

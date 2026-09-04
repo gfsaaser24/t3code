@@ -111,4 +111,17 @@ describe("clientPersistenceStorage", () => {
       }),
     );
   });
+
+  it("keeps the diff layout across reloads and defaults it to stacked", async () => {
+    const testWindow = getTestWindow();
+    const { readBrowserClientSettings, writeBrowserClientSettings } =
+      await import("./clientPersistenceStorage");
+
+    expect(readBrowserClientSettings()).toBeNull();
+    testWindow.localStorage.setItem("t3code:client-settings:v1", JSON.stringify({}));
+    expect(readBrowserClientSettings()?.diffLayout).toBe("stacked");
+
+    writeBrowserClientSettings({ ...DEFAULT_CLIENT_SETTINGS, diffLayout: "split" });
+    expect(readBrowserClientSettings()?.diffLayout).toBe("split");
+  });
 });

@@ -13,8 +13,13 @@ import * as Layer from "effect/Layer";
 import * as ProcessRunner from "../processRunner.ts";
 
 const DEFAULT_REPOSITORY_IDENTITY_CACHE_CAPACITY = 512;
-const DEFAULT_POSITIVE_CACHE_TTL = Duration.minutes(1);
-const DEFAULT_NEGATIVE_CACHE_TTL = Duration.minutes(1);
+// Turbo (shell-snapshot-budget): upstream keeps both at 1 minute, so every
+// shell snapshot after a quiet minute re-spawns `git rev-parse` and
+// `git remote -v` for every project. A repository's remote does not change
+// minute to minute; the cached identity is only cosmetic (PR links, icons)
+// and a restart or an explicit refresh still re-resolves it.
+export const DEFAULT_POSITIVE_CACHE_TTL = Duration.hours(12);
+export const DEFAULT_NEGATIVE_CACHE_TTL = Duration.minutes(10);
 
 export interface RepositoryIdentityResolverOptions {
   readonly cacheCapacity?: number;

@@ -164,6 +164,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "release-from-turbo-branch",
     "settled-lifecycle-sticky-pin",
     "shared-sha256-base64url",
+    "shell-snapshot-budget",
     "sqlite-fast-mode-pragma",
     "startup-load-shedding",
     "streaming-flag-cleared-on-turn-settle",
