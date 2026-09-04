@@ -31,7 +31,7 @@ import * as NodeURL from "node:url";
 import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
 import { sortThreadActivities } from "../../../../packages/client-runtime/src/state/threadActivityOrder.ts";
-import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
+import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const HERE = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const REPO_ROOT = NodePath.resolve(HERE, "../../../..");
