@@ -8,6 +8,15 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **0.0.52: ingest upstream through v0.0.39-nightly.20260903.1273 (c0ebc882b), and the sidebar
+  shows deletes and settles again.** 189 upstream commits land, including sidebar status leasing by
+  visibility (#9052), incremental streaming activity appends (#9152), bounded replay payloads
+  (#8992), the Antigravity provider, and the attachment/browser file preview work. Fork fix: on a
+  large install the sidebar's authoritative shell snapshot took 7-13s (repository identity
+  re-resolved per project behind git polling) and the client cancelled it at 6s on every boot, so
+  deletes and settles were applied to a cached list nobody saw. The client now waits 30s for that
+  snapshot and repository identities cache for 12 hours (`shell-snapshot-budget`).
+
 - **0.0.51: ingest upstream through v0.0.38 (b21d87243).** The CLI opens projects in the running
   desktop app, host-file previews and video streaming work across clients, and project-switch and
   theme fixes land.

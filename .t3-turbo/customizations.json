@@ -16,7 +16,7 @@
         {
           "path": "AGENTS.md",
           "markers": [
-            "T3 Turbo \u2014 how this branch operates",
+            "T3 Turbo — how this branch operates",
             "write anything to `pingdotgg/t3code`",
             "Turbo changes always survive ingestion",
             "Turbo state is isolated from the official T3 install"
@@ -743,7 +743,7 @@
     {
       "id": "streaming-flag-cleared-on-turn-settle",
       "status": "implemented",
-      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent \u2014 which never arrives when a turn dies \u2014 and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
+      "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent — which never arrives when a turn dies — and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",
       "checks": [
         {
           "path": "packages/client-runtime/src/state/threadReducer.ts",
@@ -1490,6 +1490,32 @@
         {
           "path": "apps/server/src/server.test.ts",
           "markers": ["returns server config without waiting on a cold editor scan"]
+        }
+      ]
+    },
+    {
+      "id": "shell-snapshot-budget",
+      "status": "implemented",
+      "summary": "The sidebar's authoritative shell snapshot stays reachable on a large install. Measured on 0.0.51 with 30 projects and 130+ live worktrees: GET /api/orchestration/shell took 7-13s because ProjectionSnapshotQuery re-resolves every project's repository identity (git rev-parse + git remote -v per project, 1-minute cache) behind git polling, and the client cancelled it at its 6s budget every boot (HTTP 499), so the sidebar rendered its cached list and thread deletes/settles never appeared. Two fork-owned constants: DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS is 30s in @t3tools/client-runtime shellSnapshotHttp, and RepositoryIdentityResolver keeps positive identities for 12h and negatives for 10min.",
+      "checks": [
+        {
+          "path": "packages/client-runtime/src/state/shellSnapshotHttp.ts",
+          "markers": [
+            "Turbo (shell-snapshot-budget)",
+            "export const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 30_000;"
+          ]
+        },
+        {
+          "path": "apps/server/src/project/RepositoryIdentityResolver.ts",
+          "markers": [
+            "Turbo (shell-snapshot-budget)",
+            "export const DEFAULT_POSITIVE_CACHE_TTL = Duration.hours(12);",
+            "export const DEFAULT_NEGATIVE_CACHE_TTL = Duration.minutes(10);"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": ["## Shell snapshot budget (`shell-snapshot-budget`)"]
         }
       ]
     }

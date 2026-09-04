@@ -14,7 +14,13 @@ import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./envir
 
 // Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
 // fallback for long. The cached shell renders while this runs.
-const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 6_000;
+//
+// Turbo (shell-snapshot-budget): upstream gives this 6s. On a large install
+// (30 projects, 130+ worktrees) the snapshot spent 7-13s resolving repository
+// identities behind git polling and was cancelled every time, so the sidebar
+// stayed on its cached list and deletes/settles never showed. 30s keeps the
+// authoritative list reachable; the cached shell still renders meanwhile.
+export const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 30_000;
 
 /**
  * Load the environment shell snapshot (projects + thread shells) over HTTP
