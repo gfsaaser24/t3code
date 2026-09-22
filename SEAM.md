@@ -13,9 +13,12 @@ label is the nature of this fork's change.
   groups.
 - **Optional** `infra/relay/alchemy.run.ts` — provider layers and tracing outputs exist only when
   configured.
-- **Optional** `infra/relay/scripts/deploy.test.ts` — covers deployments without tracing outputs.
-- **Optional** `infra/relay/scripts/deploy.ts` — accepts absent tracing outputs while retaining the
-  relay URL requirement.
+- **Retired 2026-09-22** `infra/relay/scripts/deploy.ts` + `deploy.test.ts` — upstream deleted the
+  wrapper; `alchemy deploy --stage <stage> --yes --no-input` plus upstream's `PublishClientConfig`
+  action in `alchemy.run.ts` replace it. `deploy-relay.yml` calls alchemy directly and sets
+  `T3CODE_RELAY_CLIENT_CONFIG_ENV`. On conflict, do not resurrect the scripts.
+- **Retired 2026-09-22** `patches/alchemy@2.0.0-beta.65.patch` — upstream moved to alchemy
+  `2.0.0-beta.79`; the pinned patch no longer applies and was dropped from `pnpm-workspace.yaml`.
 - **Optional** `infra/relay/src/Config.ts` — APNs is a complete optional group.
 - **Optional** `infra/relay/src/agentActivity/ApnsDeliveries.test.ts` — adapts delivery tests to the
   optional APNs type.
