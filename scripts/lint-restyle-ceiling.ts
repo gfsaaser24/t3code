@@ -8,7 +8,12 @@ import * as NodeURL from "node:url";
 // components/ui exports are migrated to variants (see vite.config.ts). This gate keeps the
 // count from growing: CI fails when findings exceed the ceiling. Lower the ceiling when you
 // migrate a file, and delete this script when the rule becomes an error.
-export const RESTYLE_CEILING = 1207;
+// T3 Turbo: upstream's ceiling counts upstream code only. The fork's own UI (chat panes, the
+// T3 Turbo settings page, the environment switcher) adds six overrides on top, so the fork
+// ceiling is upstream's + 6. When upstream lowers its number, lower this one by the same amount.
+export const UPSTREAM_RESTYLE_CEILING = 1207;
+export const TURBO_RESTYLE_OVERRIDES = 6;
+export const RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES;
 
 const RULE = "shadcn(no-restyle)";
 

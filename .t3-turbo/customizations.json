@@ -1118,15 +1118,8 @@
             "const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([",
             "WS_METHODS.subscribePreviewEvents,",
             "WS_METHODS.previewAutomationConnect,",
-            "NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)"
-          ]
-        },
-        {
-          "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
-          "markers": [
-            "import { POOL_WINDOW } from \"../rpc/client.ts\";",
-            "const MAX_POOL_WINDOWS = 12;",
-            "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
+            "isPooled(tag) ? poolWithinFrame(items) : items",
+            "const UPSTREAM_BATCHED_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set(["
           ]
         },
         {
@@ -1139,22 +1132,6 @@
             "never pools a subscription whose items are distinct facts",
             "keeps the immediate-release bypass tied to the contracts literal"
           ]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threads-sync.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threads-pagination.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/shell-sync.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/server.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
         },
         {
           "path": "SEAM.md",
@@ -1225,6 +1202,49 @@
         {
           "path": "apps/web/src/components/chat/providerIconUtils.ts",
           "markers": ["[ProviderDriverKind.make(\"openrouter\")]: OpenRouterIcon,"]
+        }
+      ]
+    },
+    {
+      "id": "relay-external-migrations",
+      "status": "implemented",
+      "summary": "The external Supabase Postgres path runs no Drizzle migrations, so deploy-relay.yml applies infra/relay/migrations/postgres itself before alchemy deploy, once per folder in its own transaction, recorded in relay_external_migrations; a baseline tag seeds a database bootstrapped from schema.sql.",
+      "checks": [
+        {
+          "path": "infra/relay/scripts/apply-external-migrations.ts",
+          "markers": [
+            "export const MIGRATIONS_LEDGER_TABLE = \"relay_external_migrations\";",
+            "export function splitMigrationStatements(",
+            "export function planMigrations(",
+            "RELAY_EXTERNAL_MIGRATIONS_BASELINE"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/applyExternalMigrations.test.ts",
+          "markers": ["seeds folders up to the baseline on an empty ledger and runs the rest"]
+        },
+        {
+          "path": ".github/workflows/deploy-relay.yml",
+          "markers": [
+            "name: Apply external Postgres migrations",
+            "run: node infra/relay/scripts/apply-external-migrations.ts",
+            "RELAY_EXTERNAL_MIGRATIONS_BASELINE: 20260727144838_migration"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "restyle-ceiling-fork-delta",
+      "status": "implemented",
+      "summary": "Upstream's shadcn no-restyle ceiling counts upstream code only; the fork's own UI adds a fixed number of className overrides, expressed as UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES so upstream changes to the ceiling merge cleanly.",
+      "checks": [
+        {
+          "path": "scripts/lint-restyle-ceiling.ts",
+          "markers": [
+            "export const UPSTREAM_RESTYLE_CEILING = ",
+            "export const TURBO_RESTYLE_OVERRIDES = 6;",
+            "export const RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES;"
+          ]
         }
       ]
     },

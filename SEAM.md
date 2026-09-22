@@ -22,6 +22,14 @@ fork's change.
   groups.
 - **Optional** `infra/relay/alchemy.run.ts` — provider layers and tracing outputs exist only when
   configured.
+- **Tuned** `scripts/lint-restyle-ceiling.ts` — `RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING +
+TURBO_RESTYLE_OVERRIDES` (6 fork className overrides on components/ui exports). On conflict,
+  take upstream's new number into `UPSTREAM_RESTYLE_CEILING` and keep the sum.
+- **Additive** `infra/relay/scripts/apply-external-migrations.ts` (+ test) — applies
+  `infra/relay/migrations/postgres` to the self-hosted Supabase Postgres from `deploy-relay.yml`
+  before `alchemy deploy`, one transaction per folder, ledger table `relay_external_migrations`,
+  `RELAY_EXTERNAL_MIGRATIONS_BASELINE` seeds a schema.sql-bootstrapped database. On conflict, keep
+  the fork files and the workflow step; bump the baseline only if schema.sql is regenerated.
 - **Retired 2026-09-22** `infra/relay/scripts/deploy.ts` + `deploy.test.ts` — upstream deleted the
   wrapper; `alchemy deploy --stage <stage> --yes --no-input` plus upstream's `PublishClientConfig`
   action in `alchemy.run.ts` replace it. `deploy-relay.yml` calls alchemy directly and sets
@@ -307,6 +315,12 @@ fork's change.
   distinct facts rather than a cumulative state, so they bypass the pool; never pool them, and add
   any new non-cumulative subscription to that set. It is keyed on the tag rather than passed at the
   call site on purpose: a second subscriber of the same tag cannot forget to opt out.
+- **Narrowed 2026-09-22** — upstream now batches `subscribeThread` (#11302), `subscribeShell`
+  (#10413), and `subscribeServerLifecycle` per socket chunk itself, and its tests assert that chunk
+  boundary, so those three tags bypass the fork pool (`UPSTREAM_BATCHED_SUBSCRIPTION_TAGS`,
+  `isPooled(tag)`). The pool still covers terminal, telemetry, vcs, device, worktree, and clone
+  subscriptions. `streamPoolTestClock.ts` (`awaitPooled`) and the four tuned upstream tests were
+  retired with it; those tests are upstream verbatim again.
 - **Additive** `packages/client-runtime/src/turbo/streamPoolTestClock.ts` — `awaitPooled` steps the
   virtual clock one pool window at a time while a test waits, stops as soon as the wait resolves,
   and dies with a diagnostic after 12 windows rather than hanging. It imports the window from

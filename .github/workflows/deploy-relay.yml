@@ -101,6 +101,16 @@ jobs:
             echo "::notice::APNs is not fully configured; mobile push is disabled."
           fi
 
+      # T3 Turbo: the external-database path runs no Drizzle migrations, so apply
+      # infra/relay/migrations/postgres to Supabase here, before the Worker that expects
+      # them goes live. The baseline marks the folders the schema.sql bootstrap already covered.
+      - name: Apply external Postgres migrations
+        if: steps.cloudflare_config.outputs.enabled == 'true' && env.DATABASE_HOST != ''
+        run: node infra/relay/scripts/apply-external-migrations.ts
+        env:
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+          RELAY_EXTERNAL_MIGRATIONS_BASELINE: 20260727144838_migration
+
       - name: Deploy production relay stage
         if: steps.cloudflare_config.outputs.enabled == 'true'
         run: vp run --filter t3code-relay deploy --stage prod --yes --no-input

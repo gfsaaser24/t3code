@@ -23,7 +23,6 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { awaitPooled } from "../turbo/streamPoolTestClock.ts";
 import { makeEnvironmentShellState, ShellSnapshotLoader } from "./shell.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -119,15 +118,9 @@ describe("environment shell synchronization", () => {
         kind: "snapshot",
         snapshot: LIVE_SHELL_SNAPSHOT,
       });
-      // The snapshot item is pooled for one frame before it reaches the state,
-      // so the virtual clock has to cross the pool window while this waits.
-      const synchronizing = yield* awaitPooled(
-        SubscriptionRef.changes(shellState).pipe(
-          Stream.filter(
-            (state) => state.status === "synchronizing" && Option.isSome(state.snapshot),
-          ),
-          Stream.runHead,
-        ),
+      const synchronizing = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter((state) => state.status === "synchronizing" && Option.isSome(state.snapshot)),
+        Stream.runHead,
       );
       expect(Option.getOrThrow(Option.getOrThrow(synchronizing).snapshot)).toEqual(
         LIVE_SHELL_SNAPSHOT,
@@ -414,20 +407,16 @@ describe("environment shell synchronization", () => {
         Stream.runHead,
       );
 
-      // A newer snapshot arrives on the stream and advances the cursor. The
-      // snapshot is pooled for one frame, so cross the pool window here.
+      // A newer snapshot arrives on the stream and advances the cursor.
       yield* Queue.offer(events, {
         kind: "snapshot",
         snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 40 },
       });
-      yield* awaitPooled(
-        SubscriptionRef.changes(shellState).pipe(
-          Stream.filter(
-            (value) =>
-              Option.isSome(value.snapshot) && value.snapshot.value.snapshotSequence === 40,
-          ),
-          Stream.runHead,
+      yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter(
+          (value) => Option.isSome(value.snapshot) && value.snapshot.value.snapshotSequence === 40,
         ),
+        Stream.runHead,
       );
 
       yield* Queue.offer(wakeups, "application-active");

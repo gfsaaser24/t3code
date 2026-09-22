@@ -31,9 +31,11 @@ fails without PlanetScale credentials.
   disabled.
 - A least-privilege `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 - Healthy self-hosted Supabase PostgreSQL 17 with `schema.sql`, `seed.sql`, and `rls.sql` applied.
-  The external-database path provisions Hyperdrive only; it runs no Drizzle migrations, so every
-  file under `infra/relay/migrations/postgres` has to be applied to Supabase by hand before the
-  Worker that expects it goes live.
+  The external-database path provisions Hyperdrive only; Alchemy runs no Drizzle migrations
+  against it. `deploy-relay.yml` therefore runs `infra/relay/scripts/apply-external-migrations.ts`
+  before `alchemy deploy`: each folder under `infra/relay/migrations/postgres` is applied once and
+  recorded in `relay_external_migrations`; `RELAY_EXTERNAL_MIGRATIONS_BASELINE` marks the folders
+  the original `schema.sql` bootstrap already covered.
 - Dedicated `relay_runtime` database role with `service_role` membership.
 - A TLS database endpoint reachable by Hyperdrive and limited to Cloudflare IP ranges, or an
   approved private-database Tunnel/VPC path.

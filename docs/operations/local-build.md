@@ -66,6 +66,16 @@ Remove-Item release -Recurse -Force -ErrorAction SilentlyContinue
 pnpm dist:desktop:win:x64
 ```
 
+Since 0.0.53 the upstream preflight also demands Visual Studio Build Tools with the C++
+workload, Windows SDK, and **Spectre-mitigated libraries** (it builds the native capture helper).
+If only the Spectre libs are missing, build the Rust helper yourself and let the script reuse it:
+
+```powershell
+cargo build --release --target x86_64-pc-windows-msvc --manifest-path native\resource-monitor\Cargo.toml
+$env:T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR = 'true'
+pnpm dist:desktop:win:x64
+```
+
 Artifacts land in `release/` (`T3-Turbo-<version>-x64.exe`). The
 `No WSL node-pty prebuild` warning is expected locally — it only affects the
 WSL backend, which CI builds on Linux.
@@ -78,12 +88,13 @@ by extracting the installer (7za lives in electron-builder's cache at
 
 ```powershell
 & $7za x release\T3-Turbo-<v>-x64.exe -o$env:TEMP\t3check -y
-# app.asar        → must contain the Clerk publishable key
-# app.asar.unpacked (web assets) → must contain the relay domain,
-#                                  JWT template name, CLI OAuth client id
-Select-String -Path $env:TEMP\t3check\resources\app.asar -Pattern $clerkKey -SimpleMatch
-Get-ChildItem $env:TEMP\t3check\resources\app.asar.unpacked -Recurse -Filter *.js |
-  Select-String -Pattern 'relay\.' -List | Select-Object -First 3
+# app.asar    → must contain the Clerk publishable key and the version string
+# server.asar → must contain the relay domain (since 0.0.53 the web bundle and
+#               server ship in server.asar; app.asar.unpacked no longer holds them)
+Select-String -Path $env:TEMP\t3check\resources\app.asar -Pattern $clerkKey -SimpleMatch -List
+Select-String -Path $env:TEMP\t3check\resources\server.asar -Pattern 'relay.t3turbo.pro' -SimpleMatch -List
+Select-String -Path $env:TEMP\t3check\resources\app.asar -Pattern '"version":"<v>"' -SimpleMatch -List
+# resources\resource-monitor\ must hold t3-resource-monitor.exe
 ```
 
 Zero hits on any marker = unconfigured build. Fix `.env.local`, rebuild.

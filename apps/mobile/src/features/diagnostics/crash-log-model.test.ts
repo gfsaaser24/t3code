@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { formatStartupCrashReport, parseStartupCrashRecords } from "./crash-log-model";
+import { MOBILE_PRODUCT_NAME } from "../../lib/mobileBranding";
 
 // Verbatim shape of the entry expo-updates wrote for the build 56 launch crash.
 const BUNDLE =
@@ -61,14 +62,14 @@ describe("formatStartupCrashReport", () => {
       version: "1.1.1",
       build: "56",
     });
-    expect(report.startsWith("T3 Code 1.1.1 (56)\n")).toBe(true);
+    expect(report.startsWith(`${MOBILE_PRODUCT_NAME} 1.1.1 (56)\n`)).toBe(true);
     expect(report).toContain("2026-09-13T05:35:52.000Z");
     expect(report).toContain("at NewTaskFlowProvider");
   });
 
   it("says so when nothing was recorded", () => {
     expect(formatStartupCrashReport([], { version: "1.1.1", build: "56" })).toBe(
-      "T3 Code 1.1.1 (56)\nNo startup crashes recorded.",
+      `${MOBILE_PRODUCT_NAME} 1.1.1 (56)\nNo startup crashes recorded.`,
     );
   });
 });

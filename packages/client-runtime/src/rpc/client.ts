@@ -216,6 +216,25 @@ const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTa
   WS_METHODS.pullRequestsSubscribeRefreshes,
 ]);
 
+// Upstream now batches these two subscriptions itself: the thread store applies a whole received
+// array with one state write (`Stream.runForEachArray` in `state/threads.ts`, pingdotgg/t3code#11302)
+// and the shell store does the same (`applyItems` in `state/shell.ts`, #10413). One socket chunk is
+// one state write and one atom publish, which is the screen cost this pool exists to collapse, so
+// pooling them on top buys nothing and is no longer free: the chunk boundary IS upstream's batch
+// boundary now, and re-cutting it changes how many writes a burst produces. Do not pool a
+// subscription whose store already applies an array at a time.
+const UPSTREAM_BATCHED_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([
+  ORCHESTRATION_WS_METHODS.subscribeThread,
+  ORCHESTRATION_WS_METHODS.subscribeShell,
+  // Lifecycle carries one welcome per session and its consumer resolves the payload against the
+  // authoritative session. It is low volume, so a frame of pooling saves no repaint, and the queue
+  // in front of it only delays a welcome across a session switch.
+  WS_METHODS.subscribeServerLifecycle,
+]);
+
+const isPooled = (tag: EnvironmentSubscriptionRpcTag): boolean =>
+  !NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) && !UPSTREAM_BATCHED_SUBSCRIPTION_TAGS.has(tag);
+
 // The connection "synchronized" marker is what flips a subscription to "live",
 // so it is released the moment it arrives rather than waiting out the window.
 //
@@ -373,7 +392,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                       const items = method(input);
                       const stream = mapStream(
                         session,
-                        NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items),
+                        isPooled(tag) ? poolWithinFrame(items) : items,
                       );
                       // An evicted preview host completes its registration stream.
                       // Re-register only after completion; failures still follow the

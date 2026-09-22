@@ -549,10 +549,6 @@ export const make = Effect.gen(function* () {
   const liveActivities = yield* LiveActivities.LiveActivities;
   const deliveryQueue = yield* ApnsDeliveryQueue.ApnsDeliveryQueue;
   const config = yield* RelayConfiguration.RelayConfiguration;
-  const apnsCredentials = config.apns;
-  if (apnsCredentials === null) {
-    return yield* Effect.die("APNs deliveries initialized without APNs configuration");
-  }
   const apns = yield* Apns.ApnsClient;
   const activityRows = yield* AgentActivityRows.AgentActivityRows;
 
@@ -795,7 +791,7 @@ export const make = Effect.gen(function* () {
     );
     const result = yield* apns
       .sendLiveActivityRequest({
-        credentials: credentialsForTarget(apnsCredentials, deliveryTarget),
+        credentials: credentialsForTarget(config.apns, deliveryTarget),
         request,
         issuedAtUnixSeconds: epochSeconds,
       })
@@ -963,7 +959,7 @@ export const make = Effect.gen(function* () {
     }
     const result = yield* apns
       .sendPushNotificationRequest({
-        credentials: credentialsForTarget(apnsCredentials, deliveryTarget),
+        credentials: credentialsForTarget(config.apns, deliveryTarget),
         request,
         issuedAtUnixSeconds: epochSeconds,
       })

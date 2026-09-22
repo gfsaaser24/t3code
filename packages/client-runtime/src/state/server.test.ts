@@ -30,7 +30,6 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { awaitPooled } from "../turbo/streamPoolTestClock.ts";
 import {
   applyServerWelcomeEvent,
   makeEnvironmentServerWelcomeState,
@@ -807,18 +806,14 @@ describe("server state projection", () => {
             type: "providerStatuses",
             payload: { providers },
           });
-          // The config event is pooled for one frame before it reaches the
-          // projection, so the virtual clock has to cross the pool window.
-          const projected = yield* awaitPooled(
-            SubscriptionRef.changes(state).pipe(
-              Stream.filter((value) =>
-                Option.match(value, {
-                  onNone: () => false,
-                  onSome: (projection) => projection.latestEvent.type === "providerStatuses",
-                }),
-              ),
-              Stream.runHead,
+          const projected = yield* SubscriptionRef.changes(state).pipe(
+            Stream.filter((value) =>
+              Option.match(value, {
+                onNone: () => false,
+                onSome: (projection) => projection.latestEvent.type === "providerStatuses",
+              }),
             ),
+            Stream.runHead,
           );
           expect(Option.getOrThrow(Option.getOrThrow(projected)).config.providers).toBe(providers);
         }),
