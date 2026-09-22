@@ -22,11 +22,16 @@ per-commit — the ingestion PR entry records the upstream range instead.
   `desktop-macos-preview-publish.yml`, and `windows-tests.yml`. Every fork seam (chat panes,
   batched projection bootstrap, shell snapshot budget, startup load shedding, durable config
   resubscribe, T3 Turbo settings, official import, OpenRouter parked) was re-applied by hand on
-  the upstream file. Four fork seams are RETIRED because upstream now ships the equivalent:
+  the upstream file. Five fork seams are RETIRED because upstream now ships the equivalent:
   terminal scrollback batching (`TerminalHistoryBuffer` → upstream `BoundedTerminalHistory`),
   the client terminal buffer byte budget (→ upstream `terminalOutput.ts`), the terminal drawer
-  redraw gate (→ upstream output cursor), and the fork's own provider usage-limits subsystem (→
-  upstream usage limits and Limits tab). Seam count goes 32 → 29. Effect moves to 4.0.0-rc.115,
+  redraw gate (→ upstream output cursor), deferred streaming code blocks (→ upstream incremental
+  fence highlighting), and the fork's own provider usage-limits subsystem (→ upstream usage
+  limits and Limits tab). The pooled-subscription frame is narrowed: thread, shell, and server
+  lifecycle subscriptions now batch upstream-side and bypass the fork pool. Two seams are ADDED:
+  `relay-external-migrations` (deploy-relay.yml applies the relay Postgres migrations to the
+  self-hosted Supabase before `alchemy deploy`) and `restyle-ceiling-fork-delta` (upstream's
+  no-restyle ceiling plus the fork's six overrides). Seam count goes 32 → 30. Effect moves to 4.0.0-rc.115,
   so fork tagged errors use `Schema.TaggedError` and relay config uses `Config.NonEmptyString`.
   Only the `turbo` line moves in this entry; fork `main` gets its own merge PR. The nightly sync workflow, disabled by hand on 2026-09-09 after nine conflict failures, is
   re-enabled after this ingest.
