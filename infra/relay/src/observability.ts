@@ -15,8 +15,8 @@ import { OtlpExporter, OtlpSerialization, OtlpTracer } from "effect/unstable/obs
 import { relayResourceNameForStage } from "./deploymentConfig.ts";
 
 const axiomConfiguration = Config.all({
-  orgId: Config.nonEmptyString("AXIOM_ORG_ID"),
-  token: Config.nonEmptyString("AXIOM_TOKEN").pipe(Config.map(Redacted.make)),
+  orgId: Config.NonEmptyString("AXIOM_ORG_ID"),
+  token: Config.NonEmptyString("AXIOM_TOKEN").pipe(Config.map(Redacted.make)),
 });
 
 export const AxiomConfiguration = axiomConfiguration.pipe(

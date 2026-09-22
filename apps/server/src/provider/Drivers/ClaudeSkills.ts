@@ -104,7 +104,7 @@ function parseSkillFrontmatter(contents: string): SkillFrontmatter {
  * user and project one. Absent on almost every machine, which is why a missing
  * file is the normal case rather than an error.
  */
-export function claudeManagedSettingsPath(
+function claudeManagedSettingsPath(
   path: Path.Path,
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv,
@@ -273,7 +273,7 @@ const readSkillOverrides = Effect.fn("readSkillOverrides")(function* (
  * `CLAUDE_CONFIG_DIR` by `makeClaudeEnvironment`), then a `CLAUDE_CONFIG_DIR`
  * already present in the process environment, then `~/.claude`.
  */
-export const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
+const resolveClaudeConfigDirPath = Effect.fn("resolveClaudeConfigDirPath")(function* (
   config: Pick<ClaudeSettings, "homePath">,
   environment: NodeJS.ProcessEnv,
   cwd?: string,

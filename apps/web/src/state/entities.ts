@@ -15,16 +15,16 @@ import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
-import { allEnvironmentShellsBootstrappedAtom } from "./shell";
+import {
+  allEnvironmentProjectSnapshotsReadyAtom,
+  allEnvironmentShellsBootstrappedAtom,
+} from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
-);
-const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
-  Atom.withLabel("web-thread-refs:empty"),
 );
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("web-thread-shell:empty"),
@@ -36,7 +36,7 @@ const EMPTY_THREAD_STATUS_ATOM = Atom.make<EnvironmentThreadStatus>("empty").pip
   Atom.withLabel("web-thread-status:empty"),
 );
 
-export const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
+const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("web-active-environment-id"),
 );
@@ -53,16 +53,6 @@ export function useThreadRefs(): ReadonlyArray<ScopedThreadRef> {
   return useAtomValue(environmentThreadShells.threadRefsAtom);
 }
 
-export function useEnvironmentThreadRefs(
-  environmentId: EnvironmentId | null,
-): ReadonlyArray<ScopedThreadRef> {
-  return useAtomValue(
-    environmentId === null
-      ? EMPTY_THREAD_REFS_ATOM
-      : environmentThreadShells.environmentThreadRefsAtom(environmentId),
-  );
-}
-
 export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
 }
@@ -77,6 +67,10 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
+}
+
+export function useAllEnvironmentProjectSnapshotsReady(): boolean {
+  return useAtomValue(allEnvironmentProjectSnapshotsReadyAtom);
 }
 
 export function useThreadShellsForProjectRefs(
@@ -219,6 +213,13 @@ export function readEnvironmentSupportsPinReorder(environmentId: EnvironmentId):
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadPinReorder === true
+  );
+}
+
+export function readEnvironmentSupportsActiveReorder(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadActiveReorder === true
   );
 }
 

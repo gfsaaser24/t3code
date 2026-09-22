@@ -218,7 +218,7 @@
         },
         {
           "path": "apps/web/src/rightPanelStore.ts",
-          "markers": ["const fileSurface =", "openFile: (ref, relativePath, line) =>"]
+          "markers": ["const fileSurface =", "openFile: (ref, requestedPath, line) =>"]
         },
         {
           "path": "packages/shared/src/filePreview.test.ts",
@@ -525,55 +525,6 @@
       ]
     },
     {
-      "id": "terminal-scrollback-batching",
-      "status": "implemented",
-      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the debounce runs on a per-session fiber (never inside the shared worker, which would serialize every session's batch interval and every drain behind one another) and is enqueued once per burst rather than once per chunk, the batch is a keyed coalescing worker that flushPersist enqueues into and drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
-      "checks": [
-        {
-          "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
-          "markers": [
-            "export function queueTerminalHistoryChunk",
-            "export function flushTerminalHistoryBuffer",
-            "export function endTerminalHistoryStream",
-            "export function readTerminalHistoryBuffer",
-            "export function takeTerminalHistoryToPersist",
-            "dirtySincePersist"
-          ]
-        },
-        {
-          "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
-          "markers": [
-            "matches upstream across the cap-trim boundary",
-            "matches upstream's graceful degradation for a non-positive cap",
-            "is byte-identical however the recorded stream is chunked and batched",
-            "is byte-identical however the real stream is chunked and batched",
-            "still owes the persist when a read flushed the batch before the batch tick",
-            "import { capHistory, sanitizeTerminalHistoryChunk } from \"../terminal/Manager.ts\";"
-          ]
-        },
-        {
-          "path": "apps/server/src/terminal/Manager.ts",
-          "markers": [
-            "const DEFAULT_HISTORY_BATCH_MS = 16;",
-            "historyBuffer: TerminalHistoryBuffer;",
-            "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
-            "historyBatchWorker.drainKey(sessionKey);",
-            "readTerminalHistoryBuffer(session.historyBuffer)",
-            "takeTerminalHistoryToPersist(session.historyBuffer)",
-            "export function sanitizeTerminalHistoryChunk",
-            "export function capHistory",
-            "historyBatchScheduled: boolean;",
-            "if (session.historyBatchScheduled) {",
-            "session.historyBatchScheduled = false;"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `apps/server/src/terminal/Manager.ts`"]
-        }
-      ]
-    },
-    {
       "id": "sqlite-fast-mode-pragma",
       "status": "implemented",
       "summary": "The single sqlite setup layer applies the standard WAL companion PRAGMA synchronous = NORMAL to every connection, leaving foreign_keys and journal_mode untouched.",
@@ -610,15 +561,13 @@
             "import { compareIsoTimestamps } from \"@t3tools/client-runtime/state/thread-activity-order\"",
             "compareIsoTimestamps(left.createdAt, right.createdAt)",
             "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
-            "compareIsoTimestamps(a.createdAt, b.createdAt)",
             "compareIsoTimestamps(a.completedAt, b.completedAt)"
           ]
         },
         {
           "path": "apps/web/src/components/Sidebar.logic.ts",
           "markers": [
-            "anchorMs: activeThreadAnchorTimestampMs(thread)",
-            "right.anchorMs - left.anchorMs",
+            "export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from \"@t3tools/client-runtime/state/thread-sort\";",
             "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
             "right.settledAtMs - left.settledAtMs",
             "export function sortSnoozedThreadsForSidebar",
@@ -677,7 +626,7 @@
             "encode: (value) => value.trim(),",
             "Schema.toType(Schema.Array(element))",
             "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
-            "new SchemaIssue.Pointer([index], error.issue)"
+            "new SchemaIssue.Pointer([index], issue)"
           ]
         },
         {
@@ -692,51 +641,6 @@
         {
           "path": "SEAM.md",
           "markers": ["**Tuned** `packages/contracts/src/baseSchemas.ts`"]
-        }
-      ]
-    },
-    {
-      "id": "deferred-streaming-code-blocks",
-      "status": "implemented",
-      "summary": "Streaming code fences render as a row-capped, height-reserving placeholder inside the chat code-block frame and are highlighted exactly once when the message completes; the line count is incremental across deltas, the animation is the repo's duty-cycled skeleton sweep, and a fence that never grows is treated as history whose persisted streaming flag predates the reducer fix.",
-      "checks": [
-        {
-          "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
-          "markers": [
-            "export const STREAMING_CODE_FIRST_DELTA_MS = 500;",
-            "export const STREAMING_CODE_MAX_PLACEHOLDER_ROWS = 24;",
-            "if (input.stall === \"never-started\") return \"highlighted\";",
-            "export function countStreamingCodeLines(code: string): number",
-            "export function advanceStreamingCodeLineCount(",
-            "export function resolveStreamingCodeBlockView(input: {",
-            "export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall",
-            "export function StreamingCodeBlockFrame({",
-            "data-streaming-code-placeholder",
-            "data-streaming-code-spacer",
-            "import { Skeleton } from \"~/components/ui/skeleton\";"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/ChatMarkdown.tsx",
-          "markers": [
-            "import { StreamingCodeBlockFrame } from \"../turbo/streamingCodeBlock\";",
-            "<StreamingCodeBlockFrame",
-            "highlighted={"
-          ]
-        },
-        {
-          "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
-          "markers": [
-            "grows one placeholder line per accumulated code line",
-            "caps the rendered rows and reserves the rest with one spacer",
-            "uses the duty-cycled skeleton sweep, not a per-frame pulse",
-            "agrees with the full scan at every prefix of a streamed fence",
-            "colours a fence that never grew, even though the message still claims to stream"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `apps/web/src/components/ChatMarkdown.tsx`"]
         }
       ]
     },
@@ -765,67 +669,6 @@
           "path": "SEAM.md",
           "markers": [
             "**Additive** `packages/client-runtime/src/turbo/threadReducerStreamingSettle.test.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "terminal-buffer-byte-budget",
-      "status": "implemented",
-      "summary": "The client terminal buffer tracks its UTF-8 byte length in the reducer state and only re-encodes to trim once the total passes the cap plus a 25% slack window, then trims back down to the cap while keeping the multi-byte safety loop.",
-      "checks": [
-        {
-          "path": "packages/client-runtime/src/state/terminalSession.ts",
-          "markers": [
-            "readonly bufferBytes: number;",
-            "export const TERMINAL_BUFFER_TRIM_SLACK_RATIO = 0.25;",
-            "function utf8ByteLength(text: string): number",
-            "appendedBytes <= terminalBufferTrimThreshold(maxBufferBytes)",
-            "(byte & 0b1100_0000) !== 0b1000_0000"
-          ]
-        },
-        {
-          "path": "packages/client-runtime/src/state/terminalSession.test.ts",
-          "markers": [
-            "caps retained output by UTF-8 byte length once the slack threshold is crossed",
-            "expect(withinSlack.buffer.startsWith(snapshot.buffer)).toBe(true);"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `packages/client-runtime/src/state/terminalSession.ts`",
-            "**Tuned** `packages/client-runtime/src/state/terminalSession.test.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "terminal-drawer-redraw-gate",
-      "status": "implemented",
-      "summary": "The terminal drawer decides a redraw from the buffer and error it is about to write, not from a version counter that a reconnect restarts at 1 and a pooled burst can land on twice.",
-      "checks": [
-        {
-          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
-          "markers": [
-            "export function terminalNeedsRedraw(",
-            "current.buffer !== previous.buffer ||",
-            "current.error !== previous.error ||",
-            "if (!terminalNeedsRedraw(previous, current)) {"
-          ]
-        },
-        {
-          "path": "apps/web/src/turbo/terminalDrawerRedraw.test.ts",
-          "markers": [
-            "redraws a reconnect that reuses the version number the screen already drew",
-            "still redraws on a version bump, which is what drives the mount focus"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `apps/web/src/components/ThreadTerminalDrawer.tsx`",
-            "**Additive** `apps/web/src/turbo/terminalDrawerRedraw.test.ts`"
           ]
         }
       ]
@@ -1160,7 +1003,7 @@
           "markers": [
             "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
             "const orderedActivities = useMemo(",
-            "derivePendingApprovals(orderedActivities)"
+            "derivePendingRequests(orderedActivities)"
           ]
         },
         {
@@ -1174,8 +1017,7 @@
           "path": "apps/web/src/session-logic.test.ts",
           "markers": [
             "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
-            "derivePendingApprovals(sortThreadActivities(activities))",
-            "derivePendingUserInputs(sortThreadActivities(activities))",
+            "deriveActivePlanState(sortThreadActivities(activities), TurnId.make(\"turn-1\"))",
             "deriveWorkLogEntries(sortThreadActivities(activities))"
           ]
         },
@@ -1231,15 +1073,8 @@
             "const NON_CUMULATIVE_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set([",
             "WS_METHODS.subscribePreviewEvents,",
             "WS_METHODS.previewAutomationConnect,",
-            "NON_CUMULATIVE_SUBSCRIPTION_TAGS.has(tag) ? items : poolWithinFrame(items)"
-          ]
-        },
-        {
-          "path": "packages/client-runtime/src/turbo/streamPoolTestClock.ts",
-          "markers": [
-            "import { POOL_WINDOW } from \"../rpc/client.ts\";",
-            "const MAX_POOL_WINDOWS = 12;",
-            "export const awaitPooled = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>"
+            "isPooled(tag) ? poolWithinFrame(items) : items",
+            "const UPSTREAM_BATCHED_SUBSCRIPTION_TAGS: ReadonlySet<EnvironmentSubscriptionRpcTag> = new Set(["
           ]
         },
         {
@@ -1252,22 +1087,6 @@
             "never pools a subscription whose items are distinct facts",
             "keeps the immediate-release bypass tied to the contracts literal"
           ]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threads-sync.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/threads-pagination.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/shell-sync.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
-        },
-        {
-          "path": "packages/client-runtime/src/state/server.test.ts",
-          "markers": ["import { awaitPooled } from \"../turbo/streamPoolTestClock.ts\";"]
         },
         {
           "path": "SEAM.md",
@@ -1336,8 +1155,51 @@
           "markers": ["label: \"OpenRouter\""]
         },
         {
-          "path": "apps/web/src/session-logic.ts",
-          "markers": ["label: \"OpenRouter\""]
+          "path": "apps/web/src/components/chat/providerIconUtils.ts",
+          "markers": ["[ProviderDriverKind.make(\"openrouter\")]: OpenRouterIcon,"]
+        }
+      ]
+    },
+    {
+      "id": "relay-external-migrations",
+      "status": "implemented",
+      "summary": "The external Supabase Postgres path runs no Drizzle migrations, so deploy-relay.yml applies infra/relay/migrations/postgres itself before alchemy deploy, once per folder in its own transaction, recorded in relay_external_migrations; a baseline tag seeds a database bootstrapped from schema.sql.",
+      "checks": [
+        {
+          "path": "infra/relay/scripts/apply-external-migrations.ts",
+          "markers": [
+            "export const MIGRATIONS_LEDGER_TABLE = \"relay_external_migrations\";",
+            "export function splitMigrationStatements(",
+            "export function planMigrations(",
+            "RELAY_EXTERNAL_MIGRATIONS_BASELINE"
+          ]
+        },
+        {
+          "path": "infra/relay/src/turbo/applyExternalMigrations.test.ts",
+          "markers": ["seeds folders up to the baseline on an empty ledger and runs the rest"]
+        },
+        {
+          "path": ".github/workflows/deploy-relay.yml",
+          "markers": [
+            "name: Apply external Postgres migrations",
+            "run: node infra/relay/scripts/apply-external-migrations.ts",
+            "RELAY_EXTERNAL_MIGRATIONS_BASELINE: 20260727144838_migration"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "restyle-ceiling-fork-delta",
+      "status": "implemented",
+      "summary": "Upstream's shadcn no-restyle ceiling counts upstream code only; the fork's own UI adds a fixed number of className overrides, expressed as UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES so upstream changes to the ceiling merge cleanly.",
+      "checks": [
+        {
+          "path": "scripts/lint-restyle-ceiling.ts",
+          "markers": [
+            "export const UPSTREAM_RESTYLE_CEILING = ",
+            "export const TURBO_RESTYLE_OVERRIDES = 6;",
+            "export const RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES;"
+          ]
         }
       ]
     },
@@ -1445,7 +1307,8 @@
           "markers": [
             "holds automatic sweeps until the boot delay elapses",
             "throttles automatic sweeps to the minimum interval",
-            "sweeps on a settings change without waiting out the boot delay"
+            "sweeps on a settings change without waiting out the boot delay",
+            "skips a per-thread event sweep when settlement is disabled"
           ]
         },
         {

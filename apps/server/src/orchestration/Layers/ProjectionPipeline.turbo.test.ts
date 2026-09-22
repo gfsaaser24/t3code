@@ -234,8 +234,9 @@ it.layer(TurboTestLayer)("OrchestrationProjectionPipeline (Turbo batched bootstr
       });
       yield* projectionPipeline.projectEvent(liveEvent);
 
-      // `updatedAt` stamp + the immediate shell refresh.
-      assert.strictEqual(yield* countProbe("thread"), 2);
+      // One write: upstream folds `latestUserMessageAt` into the `updatedAt`
+      // stamp for `thread.message-sent` instead of running a full refresh.
+      assert.strictEqual(yield* countProbe("thread"), 1);
       const latestUserMessageAt = yield* sql<{
         readonly latestUserMessageAt: string | null;
       }>`

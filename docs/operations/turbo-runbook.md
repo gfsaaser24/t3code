@@ -96,6 +96,30 @@ Clerk, Supabase). Relay deploys: [infra/relay/DEPLOY.md](../../infra/relay/DEPLO
 `deploy-relay.yml` manual dispatch. Registered infra branches (`infra/t3turbo-relay`) take
 normal reviewed merges only — never rebased by product ingestion.
 
+## Ingest log
+
+The per-ingest record (fork version, upstream SHA, PRs, seams changed, deploy ids) lives in the
+[changelog](./turbo-changelog.md). Two sync lines exist and can drift: `turbo` ingests upstream
+directly; fork `main` gets a separate merge PR. When only one line moved, say so in the changelog
+entry so the next operator knows which sync is owed. Every ingest ends with `C:\code\t3-turbo`
+checked out on `turbo` at the merged tip; the installer and hosted web are built from there.
+
+## Planned work: multiplayer (campfire port)
+
+Spec: [multiplayer-spec.md](../internals/multiplayer-spec.md). Source is the
+`astraly-labs/campfire` fork (presence, per-thread side threads, team inbox). We port it on Clerk
+identity, not Google OIDC. Facts that bound the work: the relay already stores N link rows per
+environment (`relayEnvironmentLinks` PK `(userId, environmentId)`), the Clerk user id already
+reaches the local server in the cloud mint proof, and only the owner check plus the hardcoded
+`cloud-connect` subject in `apps/server/src/cloud/http.ts` stop teammates from being named.
+
+Phases and the seam ids to register when each lands: 1 identity (`relay-team-membership`,
+`session-identity-actor`), 2 presence (`presence-service`), 3 side threads
+(`side-threads-team-chat`), 4 inbox and docs. Phases 1 and 2 ship as one installer plus a relay
+deploy. Server migrations start at the next free number after the current highest in
+`apps/server/src/persistence/Migrations/`; never reuse campfire's 034-036. `what1f/t3kanban`
+(task board) is a separate, smaller port; it is not scheduled.
+
 ## Hard boundaries (never cross)
 
 - `pingdotgg/t3code` is read-only. The only push target is `gfsaaser24/t3code`.

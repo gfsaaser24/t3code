@@ -35,15 +35,12 @@ interface ComposerPrimaryActionsProps {
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
-  /** Enter-to-send is disabled on mobile viewports, where stop would otherwise
-   * be the only primary action and a running turn could not be steered. */
-  showSendWhileRunning?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
-export const formatPendingPrimaryActionLabel = (input: {
+const formatPendingPrimaryActionLabel = (input: {
   compact: boolean;
   isLastQuestion: boolean;
   isResponding: boolean;
@@ -103,7 +100,6 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isPreparingWorktree,
   hasSendableContent,
   preserveComposerFocusOnPointerDown = false,
-  showSendWhileRunning = false,
   onPreviousPendingQuestion,
   onInterrupt,
   onImplementPlanInNewThread,
@@ -277,7 +273,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 ? "Preparing worktree"
                 : isSendBusy
                   ? "Sending"
-                  : "Send message"
+                  : isRunning
+                    ? "Queue message"
+                    : "Send message"
       }
     >
       {stageBackdropVariant ? (
@@ -286,7 +284,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </span>
       ) : null}
       {isConnecting || isSendBusy ? (
-        <Spinner className="size-3.5" aria-hidden="true" />
+        <Spinner size="sm" aria-hidden="true" />
       ) : (
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
           <path
@@ -306,8 +304,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   }
 
   // Turbo: the fixed slot keeps the stop control in the same box the send
-  // button occupied, and the activity orb rides behind it as a halo. The
-  // steer send button renders beside the slot when upstream enables it.
+  // button occupied, and the activity orb rides behind it as a halo. A
+  // sendable draft queues for the next tool boundary, so upstream's send
+  // button renders beside the slot.
   return (
     <>
       <PrimaryActionSlot>
@@ -321,7 +320,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         ) : null}
         {renderStopGenerationButton(false)}
       </PrimaryActionSlot>
-      {showSendWhileRunning && hasSendableContent ? sendButton : null}
+      {hasSendableContent ? sendButton : null}
     </>
   );
 });

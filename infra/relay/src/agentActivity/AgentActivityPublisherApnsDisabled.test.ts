@@ -9,6 +9,7 @@ import * as LiveActivities from "./LiveActivities.ts";
 import * as AgentActivityPublisher from "./AgentActivityPublisher.ts";
 import * as AgentActivityPublisherApnsDisabled from "./AgentActivityPublisherApnsDisabled.ts";
 import * as ApnsDeliveries from "./ApnsDeliveries.ts";
+import * as FcmDeliveries from "./FcmDeliveries.ts";
 
 const state: RelayAgentActivityState = {
   environmentId: "env" as RelayAgentActivityState["environmentId"],
@@ -50,13 +51,11 @@ function recordingLayers(calls: Array<RecordedCall>) {
   };
   const links: EnvironmentLinks.EnvironmentLinks["Service"] = {
     upsert: () => Effect.void,
-    listUsersForEnvironment: () => Effect.succeed(["dev:julius"]),
     listDeliveryUsersForEnvironment: (input) =>
       Effect.sync(() => {
         calls.push({ method: "links.listDeliveryUsersForEnvironment", input });
         return [{ userId: "dev:julius", notificationsEnabled: true, liveActivitiesEnabled: true }];
       }),
-    listPublicKeysForEnvironment: () => Effect.succeed([]),
     listForUser: () => Effect.succeed([]),
     getForUser: () => Effect.succeed(null),
     revokeForUser: () => Effect.succeed(false),
@@ -73,11 +72,22 @@ function recordingLayers(calls: Array<RecordedCall>) {
     clearStartQueued: () => Effect.void,
     invalidateDeliveryToken: () => Effect.void,
   };
+  // Android delivery is recorded the same way, so a target that reached FCM
+  // instead of APNs would still show up as a read the APNs-off publisher skips.
+  const fcmDeliveries: FcmDeliveries.FcmDeliveries["Service"] = {
+    enqueue: (input) =>
+      Effect.sync(() => {
+        calls.push({ method: "fcmDeliveries.enqueue", input });
+        return null;
+      }),
+    process: () => Effect.void,
+  };
   return Layer.mergeAll(
     Layer.succeed(AgentActivityRows.AgentActivityRows, rows),
     Layer.succeed(EnvironmentLinks.EnvironmentLinks, links),
     Layer.succeed(LiveActivities.LiveActivities, liveActivities),
-    // The exact layer worker.ts installs when APNs is off.
+    Layer.succeed(FcmDeliveries.FcmDeliveries, fcmDeliveries),
+    // The exact layer worker.ts installs when mobile push is off.
     ApnsDeliveries.layerDisabled,
   );
 }
@@ -89,6 +99,7 @@ type PublisherLayer = Layer.Layer<
   | EnvironmentLinks.EnvironmentLinks
   | LiveActivities.LiveActivities
   | ApnsDeliveries.ApnsDeliveries
+  | FcmDeliveries.FcmDeliveries
 >;
 
 const publishWith = (

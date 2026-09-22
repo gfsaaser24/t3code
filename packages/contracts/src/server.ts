@@ -24,6 +24,7 @@ import {
 import { EditorId, FileManagerRevealKind, RemoteOpenTarget } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
@@ -184,35 +185,6 @@ export const ServerProviderUpdateState = Schema.Struct({
 });
 export type ServerProviderUpdateState = typeof ServerProviderUpdateState.Type;
 
-/**
- * One quota bucket a provider account is metered against — Claude's 5-hour
- * session window, its weekly window, Codex's primary/secondary windows, and
- * so on. Deliberately provider-agnostic: the UI maps over `windows` and never
- * branches on which provider produced them, so adding a bucket later is a
- * server-only change.
- */
-export const ProviderUsageWindow = Schema.Struct({
-  // Stable identity for the bucket (`session`, `weekly`, `weekly-fable`,
-  // `codex-primary`, ...). Stays stable even when `label` changes.
-  id: TrimmedNonEmptyString,
-  label: TrimmedNonEmptyString,
-  usedPercent: Schema.Number,
-  // Absent when the provider does not report a reset time. Consumers omit
-  // the reset line rather than guessing one.
-  resetsAt: Schema.NullOr(IsoDateTime),
-});
-export type ProviderUsageWindow = typeof ProviderUsageWindow.Type;
-
-/**
- * Account-level quota usage for one configured provider instance.
- * `updatedAt` answers the only staleness question the UI asks ("as of when?").
- */
-export const ProviderUsageLimits = Schema.Struct({
-  windows: Schema.Array(ProviderUsageWindow),
-  updatedAt: IsoDateTime,
-});
-export type ProviderUsageLimits = typeof ProviderUsageLimits.Type;
-
 export const ServerProvider = Schema.Struct({
   // Routing key for the configured instance this snapshot represents. This
   // is the only stable identity consumers may use for provider routing.
@@ -225,6 +197,9 @@ export const ServerProvider = Schema.Struct({
   badgeLabel: Schema.optional(TrimmedNonEmptyString),
   continuation: Schema.optional(ServerProviderContinuation),
   showInteractionModeToggle: Schema.optional(Schema.Boolean),
+  // The driver streams context window usage, so a started thread will have a
+  // meter once its activities load. Clients reserve the meter's space on it.
+  reportsContextWindow: Schema.optional(Schema.Boolean),
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
@@ -256,12 +231,10 @@ export const ServerProvider = Schema.Struct({
   ),
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   workspaceSnapshots: Schema.optionalKey(Schema.Array(ServerProviderWorkspaceSnapshot)),
+  // Absent when the driver has no notion of subscription usage.
+  usageLimits: Schema.optional(ServerProviderUsageLimits),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),
   updateState: Schema.optionalKey(ServerProviderUpdateState),
-  // Account-level quota usage for this instance. Absent for providers that
-  // do not report usage (Cursor, Grok, OpenCode) and before the first
-  // reading lands; consumers render nothing rather than a placeholder.
-  usageLimits: Schema.optionalKey(ProviderUsageLimits),
 });
 export type ServerProvider = typeof ServerProvider.Type;
 
@@ -288,6 +261,10 @@ export const ServerObservability = Schema.Struct({
   otlpTracesEnabled: Schema.Boolean,
   otlpMetricsUrl: Schema.optional(TrimmedNonEmptyString),
   otlpMetricsEnabled: Schema.Boolean,
+  otlpLogsUrl: Schema.optional(TrimmedNonEmptyString),
+  // Absent on servers from before the log signal shipped, so a newer client
+  // reads those as having no log export rather than rejecting the whole config.
+  otlpLogsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
 });
 export type ServerObservability = typeof ServerObservability.Type;
 
@@ -606,6 +583,8 @@ export const ServerConfig = Schema.Struct({
    * fields to servers that don't advertise this.
    */
   threadSnapshotPagination: Schema.optionalKey(Schema.Boolean),
+  /** Whether thread reads accept the reasoningMessages opt-in. */
+  reasoningMessages: Schema.optionalKey(Schema.Boolean),
   /**
    * Palettes published by this environment's machine. Never sent in a config
    * snapshot: the theme stream emits the current set before any change, so a
@@ -614,19 +593,30 @@ export const ServerConfig = Schema.Struct({
    * and it stays absent for subscribers that did not opt in.
    */
   environmentThemes: Schema.optional(Schema.Array(EnvironmentTheme)),
+  /**
+   * Quota reported by configured `usageLimitSources`. Like themes, never in
+   * a snapshot: the source stream emits the current set on subscribe, and it
+   * stays absent for subscribers that did not opt in.
+   */
+  usageLimitSources: Schema.optional(UsageLimitSourceSnapshots),
 });
 export type ServerConfig = typeof ServerConfig.Type;
 
 /**
  * The machine an environment should be drawn as: the user's pick, else what
- * the server detected, else a generic server. A null config (not connected
- * yet, or an older server) resolves to the same generic so rows never
- * flicker between glyphs.
+ * the server detected, else a generic server. Settings only exist once
+ * connected; a descriptor alone (relay discovery, before any connection)
+ * still yields the detected kind. A null config (nothing known yet, or an
+ * older server) resolves to the same generic so rows never flicker between
+ * glyphs.
  */
 export function resolveEnvironmentMachineKind(
-  config: Pick<ServerConfig, "environment" | "settings"> | null,
+  config: {
+    readonly environment: Pick<ExecutionEnvironmentDescriptor, "platform">;
+    readonly settings?: Pick<ServerSettings, "environmentIcon">;
+  } | null,
 ): EnvironmentMachineKind {
-  return config?.settings.environmentIcon ?? config?.environment.platform.machine ?? "server";
+  return config?.settings?.environmentIcon ?? config?.environment.platform.machine ?? "server";
 }
 
 const ServerUpsertKeybindingReplaceTarget = Schema.Struct({
@@ -725,12 +715,28 @@ export const ServerConfigStreamEnvironmentThemesUpdatedEvent = Schema.Struct({
 export type ServerConfigStreamEnvironmentThemesUpdatedEvent =
   typeof ServerConfigStreamEnvironmentThemesUpdatedEvent.Type;
 
+export const ServerConfigUsageLimitSourcesUpdatedPayload = Schema.Struct({
+  /** The full set; empty once no source is configured. */
+  sources: UsageLimitSourceSnapshots,
+});
+export type ServerConfigUsageLimitSourcesUpdatedPayload =
+  typeof ServerConfigUsageLimitSourcesUpdatedPayload.Type;
+
+export const ServerConfigStreamUsageLimitSourcesUpdatedEvent = Schema.Struct({
+  version: Schema.Literal(1),
+  type: Schema.Literal("usageLimitSourcesUpdated"),
+  payload: ServerConfigUsageLimitSourcesUpdatedPayload,
+});
+export type ServerConfigStreamUsageLimitSourcesUpdatedEvent =
+  typeof ServerConfigStreamUsageLimitSourcesUpdatedEvent.Type;
+
 export const ServerConfigStreamEvent = Schema.Union([
   ServerConfigStreamSnapshotEvent,
   ServerConfigStreamKeybindingsUpdatedEvent,
   ServerConfigStreamProviderStatusesEvent,
   ServerConfigStreamSettingsUpdatedEvent,
   ServerConfigStreamEnvironmentThemesUpdatedEvent,
+  ServerConfigStreamUsageLimitSourcesUpdatedEvent,
 ]);
 export type ServerConfigStreamEvent = typeof ServerConfigStreamEvent.Type;
 
@@ -756,8 +762,11 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   cwd: TrimmedNonEmptyString,
   projectName: TrimmedNonEmptyString,
+  bootstrapStatus: Schema.optional(Schema.Literals(["pending", "complete"])),
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
+  bootstrapProjectCreated: Schema.optional(Schema.Boolean),
+  bootstrapThreadCreated: Schema.optional(Schema.Boolean),
 });
 export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
 
@@ -794,7 +803,7 @@ export const ServerProviderUpdateInput = Schema.Struct({
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 
-export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerProviderUpdateError>()(
+export class ServerProviderUpdateError extends Schema.TaggedError<ServerProviderUpdateError>()(
   "ServerProviderUpdateError",
   {
     provider: ProviderDriverKind,
@@ -850,7 +859,7 @@ export const ServerSelfUpdateProgressEvent = Schema.Union([
 ]);
 export type ServerSelfUpdateProgressEvent = typeof ServerSelfUpdateProgressEvent.Type;
 
-export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpdateError>()(
+export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateError>()(
   "ServerSelfUpdateError",
   {
     reason: TrimmedNonEmptyString,

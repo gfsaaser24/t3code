@@ -13,7 +13,7 @@ import * as Stream from "effect/Stream";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
 
 export const OPENROUTER_DRIVER_KIND = ProviderDriverKind.make("openrouter");
-export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api";
+const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api";
 export const DEFAULT_OPENROUTER_MODEL = "anthropic/claude-sonnet-4.5";
 
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);

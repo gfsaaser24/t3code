@@ -43,8 +43,6 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry.ts";
-import { ProviderUsageLimitsStore } from "../Services/ProviderUsageLimits.ts";
-
 import {
   hydrateCachedProvider,
   isCachedProviderCorrelated,
@@ -104,15 +102,19 @@ export function upsertProviderWorkspaceSnapshot(
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
-  if (!isAntigravity && provider.driver !== ProviderDriverKind.make("opencode")) {
+  const isCodex = provider.driver === ProviderDriverKind.make("codex");
+  if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {
     return true;
   }
 
-  if (isAntigravity && (!provider.enabled || provider.auth.status === "unauthenticated")) {
+  if (
+    (isAntigravity || isCodex) &&
+    (!provider.enabled || provider.auth.status === "unauthenticated")
+  ) {
     return false;
   }
 
-  // Both drivers replace their inventories after successful catalog discovery.
+  // Successful discovery replaces these inventories so cached retired models disappear.
   // Antigravity's local health check does not authenticate or discover models.
   const isPendingAntigravityAuthentication =
     isAntigravity && provider.status === "warning" && provider.auth.status === "unknown";
@@ -160,33 +162,71 @@ const mergeProviderModels = (
     : mergedModels;
 };
 
+/**
+ * Antigravity's health check only initializes the agent, so after a server
+ * restart it reports the account as unchecked. The saved Google login still
+ * works, and the previous snapshot proves it. Carry that account state until
+ * a session, refresh, or sign-out reports something new. A confirmed missing
+ * installation, sign-out, disabled instance, or a changed sign-in method is
+ * never overridden.
+ */
+const carrySavedAntigravityAccount = (
+  previousProvider: ServerProvider,
+  nextProvider: ServerProvider,
+): Pick<ServerProvider, "auth" | "status"> | undefined => {
+  const antigravity = ProviderDriverKind.make("antigravity");
+  if (
+    nextProvider.driver !== antigravity ||
+    previousProvider.driver !== antigravity ||
+    !nextProvider.enabled ||
+    nextProvider.auth.status !== "unknown" ||
+    previousProvider.auth.status !== "authenticated" ||
+    (nextProvider.auth.type !== undefined &&
+      nextProvider.auth.type !== previousProvider.auth.type) ||
+    (!nextProvider.installed && nextProvider.status !== "warning")
+  ) {
+    return undefined;
+  }
+  // The pending boot probe (`installed: false`, warning) and a failed probe
+  // keep their own status; only a passed health check reads as ready.
+  const status =
+    nextProvider.installed && nextProvider.status === "warning" ? "ready" : nextProvider.status;
+  return { auth: previousProvider.auth, status };
+};
+
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
-): ServerProvider =>
-  !previousProvider
-    ? nextProvider
-    : {
-        ...nextProvider,
-        models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
-        ...(nextProvider.workspaceSnapshots !== undefined
-          ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
-          : previousProvider.workspaceSnapshots !== undefined
-            ? { workspaceSnapshots: previousProvider.workspaceSnapshots }
-            : {}),
-        ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
-          ? {
-              slashCommands:
-                nextProvider.slashCommands.length === 0
-                  ? previousProvider.slashCommands
-                  : nextProvider.slashCommands,
-              skills:
-                nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
-            }
-          : {}),
-      };
+): ServerProvider => {
+  if (!previousProvider) {
+    return nextProvider;
+  }
+  const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
+  // "Google account access is not checked yet" describes the probe, not the
+  // account; it must not outlive the state it explained.
+  const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
+  return {
+    ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
+    ...savedAccount,
+    models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+    ...(nextProvider.workspaceSnapshots !== undefined
+      ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
+      : previousProvider.workspaceSnapshots !== undefined
+        ? { workspaceSnapshots: previousProvider.workspaceSnapshots }
+        : {}),
+    ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
+      ? {
+          slashCommands:
+            nextProvider.slashCommands.length === 0
+              ? previousProvider.slashCommands
+              : nextProvider.slashCommands,
+          skills: nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
+        }
+      : {}),
+  };
+};
 
-export const haveProvidersChanged = (
+const haveProvidersChanged = (
   previousProviders: ReadonlyArray<ServerProvider>,
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);
@@ -238,7 +278,6 @@ export const ProviderRegistryLive = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
     const instanceRegistry = yield* ProviderInstanceRegistry;
-    const usageStore = yield* ProviderUsageLimitsStore;
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -353,15 +392,7 @@ export const ProviderRegistryLive = Layer.effect(
           cacheDir: config.providerStatusCacheDir,
           instanceId: key,
         }).pipe(Effect.provideService(Path.Path, path));
-        // Usage readings are deliberately not cached. They go stale in
-        // minutes, and rehydrating a days-old reading on boot would draw
-        // confident-looking meters that are simply wrong; the first probe
-        // or turn repopulates them within seconds.
-        const {
-          usageLimits: _usageLimits,
-          workspaceSnapshots: _workspaceSnapshots,
-          ...machineProvider
-        } = provider;
+        const { workspaceSnapshots: _workspaceSnapshots, ...machineProvider } = provider;
         yield* writeProviderStatusCache({ filePath, provider: machineProvider }).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
@@ -385,38 +416,6 @@ export const ProviderRegistryLive = Layer.effect(
       };
     });
 
-    /**
-     * Project account usage onto a snapshot.
-     *
-     * The store is the single source of truth, because only it can fold the
-     * sparse per-bucket readings that arrive on turn events into a complete
-     * picture. A driver probe that read usage on a connection it already had
-     * open (Codex does this) carries a full reading on its snapshot; seed
-     * that into the store rather than reading it directly, so a later sparse
-     * event merges onto it instead of replacing it.
-     *
-     * Seeding is idempotent: the value written back onto the snapshot is the
-     * store's own, so re-decorating an unchanged snapshot is a no-op and
-     * cannot loop.
-     */
-    const applyProviderUsageLimits = Effect.fn("applyProviderUsageLimits")(function* (
-      provider: ServerProvider,
-    ) {
-      if (provider.usageLimits !== undefined) {
-        yield* usageStore.set(provider.instanceId, provider.usageLimits, "full");
-      }
-      const usageLimits = yield* usageStore.get(provider.instanceId);
-      if (!usageLimits) {
-        const { usageLimits: _usageLimits, ...providerWithoutUsage } = provider;
-        return providerWithoutUsage;
-      }
-      return { ...provider, usageLimits };
-    });
-
-    const decorateProvider = Effect.fn("decorateProvider")(function* (provider: ServerProvider) {
-      return yield* applyProviderUsageLimits(yield* applyProviderUpdateState(provider));
-    });
-
     const upsertProviders = Effect.fn("upsertProviders")(function* (
       nextProviders: ReadonlyArray<ServerProvider>,
       options?: {
@@ -425,9 +424,13 @@ export const ProviderRegistryLive = Layer.effect(
         readonly replace?: boolean;
       },
     ) {
-      const nextProvidersWithUpdateState = yield* Effect.forEach(nextProviders, decorateProvider, {
-        concurrency: "unbounded",
-      });
+      const nextProvidersWithUpdateState = yield* Effect.forEach(
+        nextProviders,
+        applyProviderUpdateState,
+        {
+          concurrency: "unbounded",
+        },
+      );
       const [previousProviders, providers, providersToPersist] = yield* Ref.modify(
         providersRef,
         (previousProviders) => {
@@ -567,14 +570,19 @@ export const ProviderRegistryLive = Layer.effect(
 
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
       "getProviderMaintenanceCapabilitiesForInstance",
-    )(function* (instanceId: ProviderInstanceId, provider: ProviderDriverKind) {
-      const instance = Array.from((yield* Ref.get(liveSubsRef)).values()).find(
-        (candidate) => candidate.instanceId === instanceId,
-      );
-      return (
-        instance?.snapshot.maintenanceCapabilities ??
-        makeManualProviderMaintenanceCapabilities(provider)
-      );
+    )(function* (
+      instanceId: ProviderInstanceId,
+      provider: ProviderDriverKind,
+      options?: { readonly fresh?: boolean },
+    ) {
+      // Read the instance registry, not `liveSubsRef`: the latter trails
+      // reconciliation, and an update must never run a retired instance's
+      // command against a freshly configured executable.
+      const instance = yield* instanceRegistry.getInstance(instanceId);
+      if (!instance || instance.driverKind !== provider) {
+        return makeManualProviderMaintenanceCapabilities(provider);
+      }
+      return yield* instance.snapshot.resolveMaintenance(options);
     });
 
     /**
@@ -733,34 +741,6 @@ export const ProviderRegistryLive = Layer.effect(
         );
       }),
     );
-
-    // Usage readings arrive out of band (turn events, on-demand pulls) and
-    // must reach clients without waiting for the next status probe. Re-run
-    // the affected instance through `upsertProviders` so it picks up the
-    // fresh reading and publishes — without persisting, since a usage
-    // change is not a status change and every turn would otherwise cost a
-    // disk write.
-    //
-    // Subscribed and forked here, ahead of `syncLiveSources`, for two
-    // reasons. `Stream.fromPubSub` defers `PubSub.subscribe` to stream
-    // start, so the subscription is acquired eagerly (same reasoning as
-    // `instanceChanges` below). And forking after `syncLiveSources` would
-    // put this fiber behind the single `Effect.yieldNow` that its
-    // per-instance subscribers rely on to attach, delaying theirs by a
-    // tick and dropping the first snapshot published to them.
-    const usageChanges = yield* usageStore.subscribeChanges;
-    yield* Stream.runForEach(Stream.fromSubscription(usageChanges), (instanceId) =>
-      Ref.get(providersRef).pipe(
-        Effect.flatMap((providers) => {
-          const provider = providers.find(
-            (candidate) => snapshotInstanceKey(candidate) === instanceId,
-          );
-          return provider === undefined
-            ? Effect.void
-            : upsertProviders([provider], { persist: false });
-        }),
-      ),
-    ).pipe(Effect.forkScoped);
 
     // Seed `providersRef` with the boot-time fallback snapshots so
     // consumers calling `getProviders` immediately after layer build see

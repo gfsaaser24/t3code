@@ -1,14 +1,14 @@
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type * as SchemaError from "effect/SchemaError";
 import * as SchemaIssue from "effect/SchemaIssue";
+import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 // Turbo: pure both-directions trim. `SchemaTransformation.trim()` is NOT a drop-in
 // replacement — it trims on decode only, so values built without decoding would newly
 // ship untrimmed. The pure `transform` skips the per-value Effect allocation that
-// `transformOrFail` requires while trimming in both directions exactly as before.
+// `transformEffect` requires while trimming in both directions exactly as before.
 export const TrimmedString = Schema.String.pipe(
   Schema.decodeTo(
     Schema.String,
@@ -88,6 +88,31 @@ export const ForwardCompatibleNullable = <Value extends Schema.Top>(value: Value
   );
 };
 
+/**
+ * A nullable setting whose null is "unset" and never crosses the wire: it
+ * decodes from a missing or unknown key and encodes back to a missing key.
+ * For a field that older clients decode as a required literal, so a null
+ * on the wire would fail their whole settings snapshot.
+ */
+export const OmittedWhenNull = <Value extends Schema.Top>(value: Value) => {
+  const decodeValue = Schema.decodeUnknownOption(value as never);
+  return Schema.optionalKey(Schema.Unknown).pipe(
+    Schema.decodeTo(
+      Schema.NullOr(value),
+      SchemaTransformation.transformOptional<Value["Encoded"] | null, unknown>({
+        decode: (raw) =>
+          Option.some(
+            Option.isSome(raw) && Option.isSome(decodeValue(raw.value))
+              ? (raw.value as Value["Encoded"])
+              : null,
+          ),
+        encode: (raw) =>
+          Option.isSome(raw) && raw.value !== null ? Option.some(raw.value) : Option.none(),
+      }),
+    ),
+  );
+};
+
 export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Element) => {
   // Turbo: decode each element exactly once. The previous shape decoded every element
   // twice — once to test decodability in the filter, once again in the target
@@ -109,15 +134,18 @@ export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Elem
   //    payloads.
   const decodeElement: (value: unknown) => Option.Option<Element["Type"]> =
     Schema.decodeUnknownOption(element as never);
+  // `SchemaParser.encodeUnknownEffect` keeps the failure as a bare
+  // `SchemaIssue.Issue`, which is exactly what the pointer below needs to wrap
+  // (`Schema.encodeUnknownEffect` boxes it in a `SchemaError` first).
   const encodeElement: (
     value: Element["Type"],
-  ) => Effect.Effect<Element["Encoded"], SchemaError.SchemaError> = Schema.encodeUnknownEffect(
+  ) => Effect.Effect<Element["Encoded"], SchemaIssue.Issue> = SchemaParser.encodeUnknownEffect(
     element as never,
   );
   return Schema.Array(Schema.Unknown).pipe(
     Schema.decodeTo(
       Schema.toType(Schema.Array(element)),
-      SchemaTransformation.transformOrFail<ReadonlyArray<Element["Type"]>, ReadonlyArray<unknown>>({
+      SchemaTransformation.transformEffect<ReadonlyArray<Element["Type"]>, ReadonlyArray<unknown>>({
         decode: (values) => {
           const decoded: Array<Element["Type"]> = [];
           let dropped = 0;
@@ -153,7 +181,7 @@ export const ForwardCompatibleArray = <Element extends Schema.Top>(element: Elem
           Effect.forEach(values, (value, index) =>
             Effect.mapError(
               encodeElement(value),
-              (error) => new SchemaIssue.Pointer([index], error.issue),
+              (issue) => new SchemaIssue.Pointer([index], issue),
             ),
           ),
       }),

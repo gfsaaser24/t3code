@@ -22,10 +22,26 @@ fork's change.
   groups.
 - **Optional** `infra/relay/alchemy.run.ts` — provider layers and tracing outputs exist only when
   configured.
-- **Optional** `infra/relay/scripts/deploy.test.ts` — covers deployments without tracing outputs.
-- **Optional** `infra/relay/scripts/deploy.ts` — accepts absent tracing outputs while retaining the
-  relay URL requirement.
-- **Optional** `infra/relay/src/Config.ts` — APNs is a complete optional group.
+- **Tuned** `scripts/lint-restyle-ceiling.ts` — `RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING +
+TURBO_RESTYLE_OVERRIDES` (6 fork className overrides on components/ui exports). On conflict,
+  take upstream's new number into `UPSTREAM_RESTYLE_CEILING` and keep the sum.
+- **Additive** `infra/relay/scripts/apply-external-migrations.ts` (+ test) — applies
+  `infra/relay/migrations/postgres` to the self-hosted Supabase Postgres from `deploy-relay.yml`
+  before `alchemy deploy`, one transaction per folder, ledger table `relay_external_migrations`,
+  `RELAY_EXTERNAL_MIGRATIONS_BASELINE` seeds a schema.sql-bootstrapped database. On conflict, keep
+  the fork files and the workflow step; bump the baseline only if schema.sql is regenerated.
+- **Retired 2026-09-22** `infra/relay/scripts/deploy.ts` + `deploy.test.ts` — upstream deleted the
+  wrapper; `alchemy deploy --stage <stage> --yes --no-input` plus upstream's `PublishClientConfig`
+  action in `alchemy.run.ts` replace it. `deploy-relay.yml` calls alchemy directly and sets
+  `T3CODE_RELAY_CLIENT_CONFIG_ENV`. On conflict, do not resurrect the scripts.
+- **Optional** `infra/relay/alchemy.run.ts` — `PublishClientConfig`'s tracing inputs are gated on
+  `observability.enabled` (with Axiom off there is no `traces` object). Keep the gate.
+- **Optional** `infra/relay/src/Config.ts` — APNs is a complete optional group, and so is FCM
+  (`FCM_SERVICE_ACCOUNT` absent → no FCM queues, no consumer, no-op `FcmDeliveryQueueSender` in
+  `worker.ts`; the APNs-off publisher swap happens only when both APNs and FCM are off).
+- **Tuned** `infra/relay/src/agentActivity/agentActivityAggregate.ts` — three Live Activity title
+  strings say "T3 Turbo" (upstream moved them here from `AgentActivityPublisher.ts`). On conflict,
+  take upstream and re-brand the three sites.
 - **Additive** `infra/relay/src/agentActivity/AgentActivityPublisherApnsDisabled.ts` — an APNs-off
   `AgentActivityPublisher` layer that keeps upstream's row write verbatim and skips the delivery
   prep whose results the disabled delivery layer discards. On conflict, keep the fork file and
@@ -116,47 +132,10 @@ fork's change.
   `synchronous` line, still after `journal_mode`; never change the other two pragmas.
 - **Additive** `apps/server/src/persistence/Layers/SqlitePragmas.test.ts` — asserts the pragma is
   live on fresh in-memory and file-backed connections. On conflict, keep the fork file.
-- **Tuned** `apps/server/src/terminal/Manager.ts` — a terminal session's scrollback is a
-  `TerminalHistoryBuffer` (line list, incremental cap, ~16 ms output batch) instead of
-  `history: string` + `pendingHistoryControlSequence`, so a burst no longer chops and re-glues the
-  whole ~5,000-line buffer per chunk. On conflict, take the upstream Manager and re-apply five
-  things: `historyBuffer` replaces both fields; every scrollback read goes through
-  `readTerminalHistoryBuffer` (it flushes the batch first, which is what keeps snapshots and
-  `persistHistory` byte-identical); the drain loop's output branch only calls
-  `queueTerminalHistoryChunk` + `queueHistoryBatch`; exit and `stopProcess` call
-  `endTerminalHistoryStream` and persist whatever `takeTerminalHistoryToPersist` returns; and
-  `flushPersist` drains `historyBatchWorker` **before** `persistWorker`. Upstream's
-  `sanitizeTerminalHistoryChunk` **and `capHistory`** are also exported so the fork-owned
-  byte-identity test can drive the real sanitizer and the real cap — keep both exports; a frozen
-  copy of `capHistory` in the test would only prove the buffer matches a snapshot of upstream
-  rather than upstream itself. Five invariants are non-negotiable: output events must stay
-  one-per-PTY-chunk with their own `data` and sequence (batching is history-side only — clients and
-  the ordering tests depend on the per-chunk wire shape); the batch must be a
-  `makeKeyedCoalescingWorker` so `drainKey` keeps the repo's "wait on drains, never sleep" test
-  discipline working; the persist decision must read the buffer's `dirtySincePersist` flag via
-  `takeTerminalHistoryToPersist`, never "did this flush append" — any scrollback read flushes the
-  batch, so a racing snapshot would otherwise leave the batch tick with nothing pending and the tail
-  would never reach disk; `historyBatchWorker.process` must **never sleep**, because that worker is
-  a single fiber shared by every session (a sleep there is not a per-session debounce — N busy
-  terminals serialize their sleeps, one noisy key starves the rest through `processKey`'s
-  self-recursion, and `flushPersist`'s `drainKey`, taken under the thread lock, waits behind
-  unrelated sessions) so the debounce belongs on the per-session fiber `queueHistoryBatch` forks
-  into `workerScope`, gated by `session.historyBatchScheduled` and clearing that flag BEFORE the
-  enqueue; and `flushPersist` must enqueue a batch for the session before draining, because with
-  the debounce off the worker there may be a sleep still counting down while the worker holds
-  nothing for the key — that enqueue is what keeps the drain contract identical to the version that
-  enqueued per chunk, and it is free when the scrollback owes nothing.
-- **Additive** `apps/server/src/turbo/terminalHistoryBuffer.ts` — the incremental scrollback buffer
-  itself: raw `split("\n")` lines, a memoized join, and the queued-chunk batch. The cap trim
-  branches on a non-positive `maxLines` before the splice: upstream's `capHistory` degrades to
-  `""`/`"\n"` for such a cap, while an unguarded `lines.splice(0, lineCount - maxLines)` would
-  delete more elements than `lines` has and leave it empty, which breaks this module's "never
-  empty" invariant (the next append then writes `lines[-1]` as a string property). On conflict,
-  keep the fork file.
-- **Additive** `apps/server/src/turbo/terminalHistoryBuffer.test.ts` — replays recorded PTY bursts
-  through upstream's real `capHistory` (imported from the Manager, not copied) and the buffer and
-  asserts byte equality, cap-trim boundaries, non-positive caps and split control sequences
-  included. On conflict, keep the fork file.
+- **Retired 2026-09-22** terminal scrollback batching (`TerminalHistoryBuffer`): upstream's
+  `BoundedTerminalHistory` in `apps/server/src/terminal/Manager.ts` (chunked, incremental line+byte
+  cap, cached value) is the equivalent. Fork files `apps/server/src/turbo/terminalHistoryBuffer.ts`
+  and its test were deleted; Manager.ts now tracks upstream.
 - **Tuned** `apps/web/src/session-logic.ts` — `compareIsoTimestamps` replaces
   `String.prototype.localeCompare` at the timestamp comparison sites (pending approvals, pending
   user inputs, both proposed-plan picks, timeline order, checkpoint turn counts); it now lives in
@@ -288,47 +267,19 @@ fork's change.
 - **Additive** `packages/contracts/src/turbo/baseSchemas.test.ts` — pins both-directions trimming
   (including the encode-without-decode path), per-element drop-on-failure, the failing element's
   index in the encode error path, and the single-decode count. On conflict, keep the fork file.
-- **Tuned** `packages/client-runtime/src/state/terminalSession.ts` — `TerminalBufferState` carries
-  a running `bufferBytes` count, and `applyTerminalAttachStreamEvent` only re-encodes the buffer
-  once the total passes `cap + TERMINAL_BUFFER_TRIM_SLACK_RATIO * cap`, then trims back down **to**
-  the cap. On conflict, take the upstream reducer and re-apply three things: `bufferBytes` must stay
-  a field on the state object (the reducer is handed to `Stream.scan` by reference, so a parameter
-  would silently unbind), the over-threshold branch must trim to the cap rather than dropping a
-  chunk, and `trimBufferToBytes` must keep its continuation-byte safety loop. This file is shared
-  with mobile, so keep it Hermes-safe — the byte count uses a `charCodeAt` loop, not `TextEncoder`.
-- **Tuned** `packages/client-runtime/src/state/terminalSession.test.ts` — adds the byte-budget and
-  slack-threshold cases next to upstream's. On conflict, keep the upstream cases and re-add the
-  fork ones.
-- **Tuned** `apps/web/src/components/ThreadTerminalDrawer.tsx` — the write effect's "nothing
-  changed" gate is `terminalNeedsRedraw(previous, current)` instead of a bare version comparison. A
-  reconnect rebuilds the buffer state from a fresh snapshot with the version restarted at 1, so a
-  reconnect burst delivered as one update can land on the version the screen already drew and skip
-  the redraw — stale until the next byte of output, which on an idle terminal never comes. On
-  conflict, keep upstream's write body and re-swap only the guard; the version must stay part of
-  the test, because `previous.version === 0` is what drives the mount focus.
-- **Additive** `apps/web/src/turbo/terminalDrawerRedraw.test.ts` — pins the reconnect-at-the-same-
-  version case and the version-bump case the mount focus depends on. On conflict, keep the fork
-  file.
-- **Tuned** `apps/web/src/components/ChatMarkdown.tsx` — the `pre` renderer wraps its Shiki subtree
-  in `StreamingCodeBlockFrame` (`apps/web/src/turbo/streamingCodeBlock.tsx`), so a streaming fence
-  shows a line-counted placeholder inside the block frame and is highlighted exactly once, when the
-  message completes. On conflict, take the upstream `pre` body verbatim and re-wrap it: the
-  `RenderErrorBoundary`/`Suspense`/`SuspenseShikiCodeBlock` subtree becomes the `highlighted` prop.
-  The wrapper must stay _inside_ `MarkdownCodeBlock` — the copy button and wrap toggle live on that
-  frame and must keep working on the partial text.
-- **Additive** `apps/web/src/turbo/streamingCodeBlock.tsx` — the placeholder, the incremental line
-  count, and the never-started history repair. Two properties are load-bearing and easy to undo:
-  the placeholder caps its rendered rows at `STREAMING_CODE_MAX_PLACEHOLDER_ROWS` and reserves the
-  rest with one `lh`-sized spacer (a 400-line fence was 400 rows re-reconciled per newline), and it
-  animates with the repo's duty-cycled `animate-skeleton` via the shared `Skeleton`, never
-  Tailwind's per-frame `animate-pulse` — AGENTS.md "Taste" rules out continuously repainting
-  animations. There is deliberately NO "the stream went quiet" fallback: the reducer clears
-  `streaming` on every turn settle, and a fence that closes while the model keeps writing prose is
-  the normal shape, so a quiet-fence verdict fires mid-message and costs the reader three
-  appearance changes. On conflict, keep the fork file.
-- **Additive** `apps/web/src/turbo/streamingCodeBlock.test.tsx` — pins the two guards, the row cap
-  and spacer, the duty-cycled animation, and the equivalence of the incremental line scan with the
-  full one at every prefix. On conflict, keep the fork file.
+- **Retired 2026-09-22** terminal buffer byte budget (`terminalSession.ts` `bufferBytes` +
+  `TERMINAL_BUFFER_TRIM_SLACK_RATIO`) — upstream's `packages/client-runtime/src/state/terminalOutput.ts`
+  (chunked output with a running `retainedBytes`) supersedes it; `terminalSession.ts` now tracks
+  upstream byte-for-byte.
+- **Retired 2026-09-22** terminal drawer redraw gate (`terminalNeedsRedraw` in
+  `ThreadTerminalDrawer.tsx` + `apps/web/src/turbo/terminalDrawerRedraw.test.ts`) — upstream's output
+  cursor (generation + resetVersion) resynchronises a reconnect at the drawn version. The only fork
+  diff left in the drawer is the pane-aware `autoFocus`, which belongs to the chat-panes seam.
+- **Retired 2026-09-22** deferred streaming code blocks (`StreamingCodeBlockFrame` wrap in
+  `ChatMarkdown.tsx`, `apps/web/src/turbo/streamingCodeBlock.tsx` + test) — upstream now highlights
+  streaming fences incrementally (`createIncrementalHighlightedDocument` + `HighlightedCodeLines`),
+  which removes the per-delta re-tokenize the fork placeholder avoided. The `pre` renderer is
+  upstream-verbatim again.
 - **Tuned** `packages/client-runtime/src/rpc/client.ts` — `subscribeToSession` wraps the session's
   RPC stream in `poolWithinFrame`, a 16 ms pool that releases a window's arrivals as one chunk, so
   a burst costs the screen one blip per frame instead of one per item. On conflict, take the
@@ -349,6 +300,12 @@ fork's change.
   distinct facts rather than a cumulative state, so they bypass the pool; never pool them, and add
   any new non-cumulative subscription to that set. It is keyed on the tag rather than passed at the
   call site on purpose: a second subscriber of the same tag cannot forget to opt out.
+- **Narrowed 2026-09-22** — upstream now batches `subscribeThread` (#11302), `subscribeShell`
+  (#10413), and `subscribeServerLifecycle` per socket chunk itself, and its tests assert that chunk
+  boundary, so those three tags bypass the fork pool (`UPSTREAM_BATCHED_SUBSCRIPTION_TAGS`,
+  `isPooled(tag)`). The pool still covers terminal, telemetry, vcs, device, worktree, and clone
+  subscriptions. `streamPoolTestClock.ts` (`awaitPooled`) and the four tuned upstream tests were
+  retired with it; those tests are upstream verbatim again.
 - **Additive** `packages/client-runtime/src/turbo/streamPoolTestClock.ts` — `awaitPooled` steps the
   virtual clock one pool window at a time while a test waits, stops as soon as the wait resolves,
   and dies with a diagnostic after 12 windows rather than hanging. It imports the window from
@@ -485,7 +442,9 @@ adds a bootstrap-only batch path:
   is refreshed exactly once at the end of the batch. With no context (the live path) it refreshes
   immediately, which is what upstream's `ProjectionPipeline.test.ts` shell-update counts assert.
 - One `projectionStateRepository.upsert` per batch, stamped with the batch's last event. Attachment
-  side-effects still run outside the transaction, exactly as upstream does per event.
+  side-effects are collected and discarded during bootstrap, exactly as upstream's
+  `runProjectorForEvent` does: attachment pruning runs once after every projector commits, off
+  upstream's `projection.attachment-cleanup` cursor, never per batch.
 
 This seam was **lost once already**: the 0.0.45 ingest took upstream's per-event pipeline wholesale
 because upstream's `ProjectionPipeline.test.ts` asserts exact shell-update counts and the fork code
@@ -533,8 +492,9 @@ The fix sheds load at four points and changes no product behavior:
   `COMMAND_RESOLUTION_EXPLICIT_PATH_KEY`, storing hits only so a just-written binary is never masked
   by a stale negative; `resolveSpawnExecutableWithNode` memoizes its synchronous scan
   (`spawnExecutableCache`, `scanSpawnExecutableWithNode`, hits only, 30s, keyed on
-  platform + PATH + PATHEXT + command); and `isExecutableFile` is no longer an `Effect.fn`, so one
-  span per resolution replaces tens of thousands per connect.
+  platform + PATH + PATHEXT + command); and `isExecutableFile` carries no per-probe span (upstream now uses
+  `Effect.fnUntraced` for it, which satisfies this; keep whichever upstream ships as long as no span
+  is opened per stat).
 - **`apps/server/src/process/externalLauncher.ts` + `apps/server/src/ws.ts`** -
   `availableEditorsSnapshot` answers from the existing 60s `editorDiscoveryCache` when it is fresh and
   otherwise returns `[]` at once while `warmAvailableEditors` (semaphore-deduped) fills the cache on a

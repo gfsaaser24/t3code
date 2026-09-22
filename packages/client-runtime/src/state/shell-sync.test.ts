@@ -6,6 +6,7 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -22,7 +23,6 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { awaitPooled } from "../turbo/streamPoolTestClock.ts";
 import { makeEnvironmentShellState, ShellSnapshotLoader } from "./shell.ts";
 
 const TARGET = new PrimaryConnectionTarget({
@@ -118,15 +118,9 @@ describe("environment shell synchronization", () => {
         kind: "snapshot",
         snapshot: LIVE_SHELL_SNAPSHOT,
       });
-      // The snapshot item is pooled for one frame before it reaches the state,
-      // so the virtual clock has to cross the pool window while this waits.
-      const synchronizing = yield* awaitPooled(
-        SubscriptionRef.changes(shellState).pipe(
-          Stream.filter(
-            (state) => state.status === "synchronizing" && Option.isSome(state.snapshot),
-          ),
-          Stream.runHead,
-        ),
+      const synchronizing = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter((state) => state.status === "synchronizing" && Option.isSome(state.snapshot)),
+        Stream.runHead,
       );
       expect(Option.getOrThrow(Option.getOrThrow(synchronizing).snapshot)).toEqual(
         LIVE_SHELL_SNAPSHOT,
@@ -156,6 +150,94 @@ describe("environment shell synchronization", () => {
       expect(state.status).toBe("live");
       expect(Option.getOrThrow(state.snapshot)).toEqual(LIVE_SHELL_SNAPSHOT);
     }),
+  );
+
+  it.live.each([
+    { bufferSize: Infinity, expectedSequences: [51] },
+    // RpcClient defaults to a 16-event buffer, which splits larger server chunks.
+    { bufferSize: 16, expectedSequences: [17, 33, 49, 51] },
+  ])("batches live events with a $bufferSize event buffer", ({ bufferSize, expectedSequences }) =>
+    Effect.gen(function* () {
+      const events = yield* Queue.bounded<OrchestrationShellStreamItem>(bufferSize);
+      const client = {
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+      } as unknown as WsRpcProtocolClient;
+      const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+      const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+        Option.some(session(client)),
+      );
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: supervisorState,
+        session: activeSession,
+        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.none()),
+        saveShell: () => Effect.void,
+        loadThread: () => Effect.succeed(Option.none()),
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        Effect.provideService(
+          ShellSnapshotLoader,
+          ShellSnapshotLoader.of({ load: () => Effect.succeed(Option.none()) }),
+        ),
+      );
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* Queue.offer(events, { kind: "snapshot", snapshot: LIVE_SHELL_SNAPSHOT });
+      yield* Queue.offer(events, { kind: "synchronized" });
+      yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter((state) => state.status === "live"),
+        Stream.runHead,
+      );
+
+      // Observe before publishing so no batch can arrive before the subscription.
+      const observed = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.drop(1),
+        Stream.takeUntil(
+          (state) => Option.isSome(state.snapshot) && state.snapshot.value.threads.length === 50,
+        ),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Queue.offerAll(
+        events,
+        Array.from({ length: 50 }, (_, index) => ({
+          kind: "thread-upserted" as const,
+          sequence: 2 + index,
+          thread: { id: `thread-${index}` } as never,
+        })),
+      );
+      const states = yield* Fiber.join(observed);
+      const snapshots = states.map((state) => Option.getOrThrow(state.snapshot));
+      expect(snapshots.map((snapshot) => snapshot.snapshotSequence)).toEqual(expectedSequences);
+      expect(snapshots.at(-1)!.threads.map((thread) => thread.id)).toEqual(
+        Array.from({ length: 50 }, (_, index) => `thread-${index}`),
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.effect("requests a full socket snapshot when the HTTP refresh fails", () =>
@@ -325,20 +407,16 @@ describe("environment shell synchronization", () => {
         Stream.runHead,
       );
 
-      // A newer snapshot arrives on the stream and advances the cursor. The
-      // snapshot is pooled for one frame, so cross the pool window here.
+      // A newer snapshot arrives on the stream and advances the cursor.
       yield* Queue.offer(events, {
         kind: "snapshot",
         snapshot: { ...LIVE_SHELL_SNAPSHOT, snapshotSequence: 40 },
       });
-      yield* awaitPooled(
-        SubscriptionRef.changes(shellState).pipe(
-          Stream.filter(
-            (value) =>
-              Option.isSome(value.snapshot) && value.snapshot.value.snapshotSequence === 40,
-          ),
-          Stream.runHead,
+      yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter(
+          (value) => Option.isSome(value.snapshot) && value.snapshot.value.snapshotSequence === 40,
         ),
+        Stream.runHead,
       );
 
       yield* Queue.offer(wakeups, "application-active");

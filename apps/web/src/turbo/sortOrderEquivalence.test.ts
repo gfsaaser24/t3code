@@ -4,7 +4,9 @@
  * Two speedups shipped together, and both are only allowed to be faster — the
  * emitted order has to stay byte-identical to what shipped before:
  *  - W4 swapped `localeCompare` for code-unit comparison on timestamps.
- *  - W10 turned the sidebar bucket sorts into decorate-sort.
+ *  - W10 turned the sidebar bucket sorts into decorate-sort. The active
+ *    bucket now delegates to upstream's `sortActiveThreadsByOrderKey`, so only
+ *    the settled and snoozed buckets stay pinned here.
  *
  * Each is pinned here against a reference implementation copied verbatim from
  * the pre-change code, so a later edit that shifts an order (including a tie)
@@ -14,10 +16,8 @@ import type { OrchestrationLatestTurn } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 import {
   firstValidTimestampMs,
-  parseTimestampMs,
   sortSettledThreadsForSidebar,
   sortSnoozedThreadsForSidebar,
-  sortThreadsForSidebar,
 } from "../components/Sidebar.logic";
 import { resolveSettledThreadTimestamp as resolveSettledTimestamp } from "../lib/threadSort";
 import { compareIsoTimestamps } from "@t3tools/client-runtime/state/thread-activity-order";
@@ -89,68 +89,6 @@ describe("compareIsoTimestamps (W4)", () => {
       }
     }
     expect(disagreements).toEqual([]);
-  });
-});
-
-describe("sortThreadsForSidebar (W10 active bucket)", () => {
-  type Row = { readonly id: string; readonly createdAt: string };
-
-  /** Pre-decorate implementation: parses both operands on every comparison. */
-  function legacySort(threads: readonly Row[]): Row[] {
-    return [...threads].toSorted(
-      (left, right) =>
-        parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-        left.id.localeCompare(right.id),
-    );
-  }
-
-  function corpus(): Row[][] {
-    const random = makeRandom(0x51ed270b);
-    const stamps = [
-      "2026-03-09T10:00:00.000Z",
-      "2026-03-09T10:00:00.001Z",
-      "2026-03-09T09:00:00.000Z",
-      "2025-12-31T23:59:59.999Z",
-      // Deliberately unparseable: the epoch sink must survive the rewrite.
-      "not-a-timestamp",
-    ];
-    // Ids repeat on purpose so timestamp ties AND id ties both occur.
-    const ids = ["a", "b", "c", "A", "a"];
-    const batches: Row[][] = [];
-    for (let batch = 0; batch < 60; batch += 1) {
-      const size = 2 + Math.floor(random() * 8);
-      const rows: Row[] = [];
-      for (let index = 0; index < size; index += 1) {
-        rows.push({
-          id: ids[Math.floor(random() * ids.length)]!,
-          createdAt: stamps[Math.floor(random() * stamps.length)]!,
-        });
-      }
-      batches.push(rows);
-    }
-    return batches;
-  }
-
-  it("emits the pre-decorate order, ties included", () => {
-    for (const rows of corpus()) {
-      expect(sortThreadsForSidebar(rows)).toEqual(legacySort(rows));
-    }
-  });
-
-  it("keeps input order for rows that tie on both timestamp and id", () => {
-    const first = { id: "same", createdAt: "2026-03-09T10:00:00.000Z", marker: 1 };
-    const second = { id: "same", createdAt: "2026-03-09T10:00:00.000Z", marker: 2 };
-    expect(sortThreadsForSidebar([first, second]).map((row) => row.marker)).toEqual([1, 2]);
-    expect(sortThreadsForSidebar([second, first]).map((row) => row.marker)).toEqual([2, 1]);
-  });
-
-  it("does not mutate the input array", () => {
-    const rows: Row[] = [
-      { id: "old", createdAt: "2026-03-09T09:00:00.000Z" },
-      { id: "new", createdAt: "2026-03-09T10:00:00.000Z" },
-    ];
-    sortThreadsForSidebar(rows);
-    expect(rows.map((row) => row.id)).toEqual(["old", "new"]);
   });
 });
 

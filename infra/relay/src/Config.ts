@@ -24,12 +24,12 @@ const optionalConfig = <A>(config: Config.Config<A>) =>
 
 export const ApnsCredentialsConfig = Config.all({
   environment: optionalConfig(Config.schema(ApnsEnvironment, "APNS_ENVIRONMENT")),
-  teamId: optionalConfig(Config.nonEmptyString("APNS_TEAM_ID")),
-  keyId: optionalConfig(Config.nonEmptyString("APNS_KEY_ID")),
+  teamId: optionalConfig(Config.NonEmptyString("APNS_TEAM_ID")),
+  keyId: optionalConfig(Config.NonEmptyString("APNS_KEY_ID")),
   privateKey: optionalConfig(
-    Config.nonEmptyString("APNS_PRIVATE_KEY").pipe(Config.map(Redacted.make)),
+    Config.NonEmptyString("APNS_PRIVATE_KEY").pipe(Config.map(Redacted.make)),
   ),
-  bundleId: optionalConfig(Config.nonEmptyString("APNS_BUNDLE_ID")),
+  bundleId: optionalConfig(Config.NonEmptyString("APNS_BUNDLE_ID")),
 }).pipe(Config.map((credentials) => Option.getOrNull(Option.all(credentials))));
 
 export class RelayConfiguration extends Context.Service<
@@ -37,6 +37,7 @@ export class RelayConfiguration extends Context.Service<
   {
     readonly relayIssuer: string;
     readonly apns: ApnsCredentials | null;
+    readonly fcmServiceAccount?: Redacted.Redacted<string>;
     readonly clerkSecretKey: Redacted.Redacted<string>;
     readonly clerkPublishableKey: string;
     readonly clerkJwtAudience: string;

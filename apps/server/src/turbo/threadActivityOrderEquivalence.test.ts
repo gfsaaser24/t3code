@@ -171,7 +171,7 @@ function normalize(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layer({ filename: ":memory:" })));
 
 layer("thread activity order — SQL vs TS equivalence", (it) => {
   it("ships each ORDER BY clause verbatim in its source file", () => {

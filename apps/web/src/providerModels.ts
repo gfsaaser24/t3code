@@ -30,19 +30,12 @@ export function getProviderModels(
   return getProviderSnapshot(providers, provider)?.models ?? [];
 }
 
-export function getProviderSnapshot(
+function getProviderSnapshot(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderDriverKind,
 ): ServerProvider | undefined {
   const defaultInstanceId = defaultInstanceIdForDriver(provider);
   return providers.find((candidate) => candidate.instanceId === defaultInstanceId);
-}
-
-export function getProviderInteractionModeToggle(
-  providers: ReadonlyArray<ServerProvider>,
-  provider: ProviderDriverKind,
-): boolean {
-  return getProviderSnapshot(providers, provider)?.showInteractionModeToggle ?? true;
 }
 
 // Resolve an instance selection to the correlated live driver. If the
@@ -111,14 +104,4 @@ export function getDefaultServerModel(
     DEFAULT_MODEL_BY_PROVIDER[provider] ??
     DEFAULT_MODEL
   );
-}
-
-// Turbo: the composer footer names the active provider from its live
-// snapshot (display name) and falls back to the driver label.
-export function getProviderDisplayName(
-  providers: ReadonlyArray<ServerProvider>,
-  provider: ProviderDriverKind,
-): string {
-  const snapshot = getProviderSnapshot(providers, provider);
-  return snapshot?.displayName?.trim() || formatProviderDriverKindLabel(provider);
 }

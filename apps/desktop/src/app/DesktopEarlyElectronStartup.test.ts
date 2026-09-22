@@ -81,7 +81,9 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
       linuxWmClass: "t3-turbo-dev",
+      linuxDesktopEntryName: "com.gabef.t3turbo.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
   });
