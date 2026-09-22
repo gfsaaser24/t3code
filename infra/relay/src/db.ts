@@ -39,11 +39,11 @@ export class RelayTransactions extends Context.Service<
 }
 
 const externalDatabaseConfiguration = Config.all({
-  host: Config.nonEmptyString("DATABASE_HOST"),
-  port: Config.port("DATABASE_PORT").pipe(Config.withDefault(5432)),
-  database: Config.nonEmptyString("DATABASE_NAME"),
-  user: Config.nonEmptyString("DATABASE_USER"),
-  password: Config.nonEmptyString("DATABASE_PASSWORD").pipe(Config.map(Redacted.make)),
+  host: Config.NonEmptyString("DATABASE_HOST"),
+  port: Config.Port("DATABASE_PORT").pipe(Config.withDefault(5432)),
+  database: Config.NonEmptyString("DATABASE_NAME"),
+  user: Config.NonEmptyString("DATABASE_USER"),
+  password: Config.NonEmptyString("DATABASE_PASSWORD").pipe(Config.map(Redacted.make)),
 });
 
 export const ExternalDatabaseConfiguration = externalDatabaseConfiguration.pipe(
@@ -69,8 +69,7 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
           name: "t3coderelay",
           region: { slug: "us-west" },
           clusterSize: "PS_20",
-          migrationsDir: schema.out,
-          migrationsTable: "relay_migrations",
+          migrations: { dir: schema.out, table: "relay_migrations" },
           replicas: 2,
         }).pipe(RemovalPolicy.retain())
       : yield* Planetscale.PostgresDatabase.ref("RelayPostgresDatabase", {
@@ -80,8 +79,7 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
     mode === "stage-branch"
       ? yield* Planetscale.PostgresBranch("RelayPostgresBranch", {
           database,
-          migrationsDir: schema.out,
-          migrationsTable: "relay_migrations",
+          migrations: { dir: schema.out, table: "relay_migrations" },
         })
       : undefined;
 

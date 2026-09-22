@@ -1,11 +1,12 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
-import * as Drizzle from "alchemy/Drizzle";
+import * as Drizzle from "alchemy/Drizzle/Postgres";
 import * as Config from "effect/Config";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as Etag from "effect/unstable/http/Etag";
@@ -22,6 +23,7 @@ import {
   healthApi,
   metadataApi,
   mobileApi,
+  RELAY_HTTP_ROUTER_CONFIG,
   relayClientAuthLayer,
   relayDpopClientAuthLayer,
   relayCors,
@@ -45,7 +47,18 @@ import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
 import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
 import * as LiveActivities from "./agentActivity/LiveActivities.ts";
 import * as RelayDb from "./db.ts";
-import { RelayApnsDeliveryDeadLetterQueue, RelayApnsDeliveryQueue } from "./queues.ts";
+import {
+  RelayApnsDeliveryDeadLetterQueue,
+  RelayApnsDeliveryQueue,
+  RelayFcmDeliveryQueue,
+  RelayFcmDeliveryDeadLetterQueue,
+} from "./queues.ts";
+import * as WebCrypto from "./WebCrypto.ts";
+import * as FcmAssertionSigner from "./agentActivity/FcmAssertionSigner.ts";
+import * as FcmClient from "./agentActivity/FcmClient.ts";
+import * as FcmDeliveryQueueSender from "./agentActivity/FcmDeliveryQueueSender.ts";
+import * as FcmDeliveries from "./agentActivity/FcmDeliveries.ts";
+import * as FcmDeliveryQueueConsumer from "./agentActivity/FcmDeliveryQueueConsumer.ts";
 import * as RelayConfiguration from "./Config.ts";
 import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
 import * as ApnsClient from "./agentActivity/ApnsClient.ts";
@@ -126,6 +139,22 @@ export const ApiLive = Api.make(
           };
     const randomApnsDeliveryJobSigningSecret =
       apns === null ? null : yield* ApnsDeliveryJobSigningSecret;
+    // Android push is the same complete-group decision APNs already makes: with
+    // no service account there is nothing to deliver, so the FCM queues are not
+    // provisioned and a relay without mobile push creates no queues at all.
+    const fcmServiceAccount = Option.getOrUndefined(
+      Option.filter(
+        yield* Config.option(Config.Redacted("FCM_SERVICE_ACCOUNT")),
+        (value) => Redacted.value(value).trim().length > 0,
+      ),
+    );
+    const fcmResources =
+      fcmServiceAccount === undefined
+        ? null
+        : {
+            deliveryQueue: yield* RelayFcmDeliveryQueue,
+            deadLetterQueue: yield* RelayFcmDeliveryDeadLetterQueue,
+          };
     const cloudMintKeyPair = yield* CloudMintKeyPair;
     const relayApiZone = yield* RelayApiZone;
     const managedEndpointZone = yield* ManagedEndpointZone;
@@ -142,10 +171,14 @@ export const ApiLive = Api.make(
       apnsResources === null
         ? null
         : yield* Cloudflare.Queues.WriteQueue(apnsResources.deliveryQueue);
+    const fcmDeliveryQueueSender =
+      fcmResources === null
+        ? null
+        : yield* Cloudflare.Queues.WriteQueue(fcmResources.deliveryQueue);
 
-    const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
-    const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
-    const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
+    const clerkSecretKey = yield* Config.Redacted("CLERK_SECRET_KEY");
+    const clerkPublishableKey = yield* Config.String("CLERK_PUBLISHABLE_KEY");
+    const clerkJwtAudience = yield* Config.String("CLERK_JWT_AUDIENCE");
 
     const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
     const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
@@ -166,6 +199,7 @@ export const ApiLive = Api.make(
     const loadSettings = Effect.gen(function* () {
       return RelayConfiguration.RelayConfiguration.of({
         relayIssuer: relayPublicOrigin,
+        ...(fcmServiceAccount ? { fcmServiceAccount } : {}),
         apns,
         apnsDeliveryJobSigningSecret:
           apnsDeliveryJobSigningSecret === null
@@ -210,6 +244,28 @@ export const ApiLive = Api.make(
             ),
           );
 
+    // Mirrors `apnsRuntimeLayer`: the delivery service always exists because the
+    // publisher resolves Android targets either way, but with no FCM queue its
+    // sender drops jobs instead of writing to a queue that was never created.
+    const fcmRuntimeLayer = FcmDeliveries.layer.pipe(
+      Layer.provide(
+        Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
+          send: (body) =>
+            fcmDeliveryQueueSender === null
+              ? Effect.void
+              : fcmDeliveryQueueSender
+                  .send(body)
+                  .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        }),
+      ),
+      Layer.provideMerge(
+        FcmClient.layer.pipe(
+          Layer.provide(FcmAssertionSigner.layer),
+          Layer.provide(Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle })),
+        ),
+      ),
+    );
+
     const runtimeLayer = Layer.empty.pipe(
       Layer.provideMerge(MobileRegistrations.layer),
       Layer.provideMerge(AgentActivityPublisher.layer),
@@ -225,8 +281,8 @@ export const ApiLive = Api.make(
       ),
       Layer.provideMerge(DpopProofs.layer),
       Layer.provideMerge(apnsRuntimeLayer),
-      Layer.provideMerge(AgentActivityRows.layer),
-      Layer.provideMerge(Devices.layer),
+      Layer.provideMerge(fcmRuntimeLayer),
+      Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer)),
       Layer.provideMerge(EnvironmentCredentials.layer),
       Layer.provideMerge(
         Layer.mergeAll(
@@ -278,6 +334,25 @@ export const ApiLive = Api.make(
       );
     }
 
+    if (fcmResources !== null) {
+      yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
+        fcmResources.deliveryQueue,
+        {
+          batchSize: 10,
+          maxRetries: 5,
+          maxWaitTime: "1 second",
+          retryDelay: "30 seconds",
+          deadLetterQueue: fcmResources.deadLetterQueue.queueName as unknown as string,
+        },
+        (stream) =>
+          stream.pipe(
+            Stream.withSpan("relay.fcm_delivery_queue.process_batch"),
+            Stream.runForEach(FcmDeliveryQueueConsumer.processMessage),
+            Effect.provide(runtimeLayer),
+          ),
+      );
+    }
+
     yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
       DpopProofs.DpopProofReplay.pipe(
         Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
@@ -308,6 +383,7 @@ export const ApiLive = Api.make(
       relayNotFoundRoute,
     ).pipe(
       HttpRouter.toHttpEffect,
+      Effect.provideService(HttpRouter.RouterConfig, RELAY_HTTP_ROUTER_CONFIG),
       withoutCapturedParentSpan,
       Effect.flatMap((httpEffect) => traceRelayHttpRequestWith(httpEffect, relayTraceLayer)),
     );
