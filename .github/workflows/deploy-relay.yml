@@ -13,6 +13,14 @@ on:
       - "infra/relay/**"
       - ".github/workflows/deploy-relay.yml"
   workflow_dispatch:
+    inputs:
+      skip_external_migrations:
+        description: >-
+          Skip the external Postgres migrations step. Use only when the runner cannot reach the
+          database (Supabase host firewalled to Cloudflare) AND every folder under
+          infra/relay/migrations/postgres is already recorded in relay_external_migrations.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -105,7 +113,7 @@ jobs:
       # infra/relay/migrations/postgres to Supabase here, before the Worker that expects
       # them goes live. The baseline marks the folders the schema.sql bootstrap already covered.
       - name: Apply external Postgres migrations
-        if: steps.cloudflare_config.outputs.enabled == 'true' && env.DATABASE_HOST != ''
+        if: steps.cloudflare_config.outputs.enabled == 'true' && env.DATABASE_HOST != '' && inputs.skip_external_migrations != true
         run: node infra/relay/scripts/apply-external-migrations.ts
         env:
           DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
