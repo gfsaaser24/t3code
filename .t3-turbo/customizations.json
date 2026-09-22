@@ -645,51 +645,6 @@
       ]
     },
     {
-      "id": "deferred-streaming-code-blocks",
-      "status": "implemented",
-      "summary": "Streaming code fences render as a row-capped, height-reserving placeholder inside the chat code-block frame and are highlighted exactly once when the message completes; the line count is incremental across deltas, the animation is the repo's duty-cycled skeleton sweep, and a fence that never grows is treated as history whose persisted streaming flag predates the reducer fix.",
-      "checks": [
-        {
-          "path": "apps/web/src/turbo/streamingCodeBlock.tsx",
-          "markers": [
-            "export const STREAMING_CODE_FIRST_DELTA_MS = 500;",
-            "export const STREAMING_CODE_MAX_PLACEHOLDER_ROWS = 24;",
-            "if (input.stall === \"never-started\") return \"highlighted\";",
-            "export function countStreamingCodeLines(code: string): number",
-            "export function advanceStreamingCodeLineCount(",
-            "export function resolveStreamingCodeBlockView(input: {",
-            "export function useStreamingCodeStall(code: string, isStreaming: boolean): StreamingCodeStall",
-            "export function StreamingCodeBlockFrame({",
-            "data-streaming-code-placeholder",
-            "data-streaming-code-spacer",
-            "import { Skeleton } from \"~/components/ui/skeleton\";"
-          ]
-        },
-        {
-          "path": "apps/web/src/components/ChatMarkdown.tsx",
-          "markers": [
-            "import { StreamingCodeBlockFrame } from \"../turbo/streamingCodeBlock\";",
-            "<StreamingCodeBlockFrame",
-            "highlighted={"
-          ]
-        },
-        {
-          "path": "apps/web/src/turbo/streamingCodeBlock.test.tsx",
-          "markers": [
-            "grows one placeholder line per accumulated code line",
-            "caps the rendered rows and reserves the rest with one spacer",
-            "uses the duty-cycled skeleton sweep, not a per-frame pulse",
-            "agrees with the full scan at every prefix of a streamed fence",
-            "colours a fence that never grew, even though the message still claims to stream"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `apps/web/src/components/ChatMarkdown.tsx`"]
-        }
-      ]
-    },
-    {
       "id": "streaming-flag-cleared-on-turn-settle",
       "status": "implemented",
       "summary": "The thread reducer lowers OrchestrationMessage.streaming on the settled turn's messages in the two branches that already settle a turn (thread.session-set leaving \"running\", and thread.turn-interrupt-requested), because upstream only ever lowers it from the final thread.message-sent — which never arrives when a turn dies — and the raised flag is persisted, so isStreaming otherwise lies for the rest of the session and on every later load.",

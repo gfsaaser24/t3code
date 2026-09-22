@@ -60,8 +60,6 @@
       // reports an entire component module when nothing imports it.
       "ignoreIssues": {
         "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"],
-        // A fork seam pins `export function useStreamingCodeStall` verbatim.
-        "src/turbo/streamingCodeBlock.tsx": ["exports"],
       },
     },
     "apps/mobile": {

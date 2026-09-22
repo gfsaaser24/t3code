@@ -275,26 +275,11 @@ TURBO_RESTYLE_OVERRIDES` (6 fork className overrides on components/ui exports). 
   `ThreadTerminalDrawer.tsx` + `apps/web/src/turbo/terminalDrawerRedraw.test.ts`) — upstream's output
   cursor (generation + resetVersion) resynchronises a reconnect at the drawn version. The only fork
   diff left in the drawer is the pane-aware `autoFocus`, which belongs to the chat-panes seam.
-- **Tuned** `apps/web/src/components/ChatMarkdown.tsx` — the `pre` renderer wraps its Shiki subtree
-  in `StreamingCodeBlockFrame` (`apps/web/src/turbo/streamingCodeBlock.tsx`), so a streaming fence
-  shows a line-counted placeholder inside the block frame and is highlighted exactly once, when the
-  message completes. On conflict, take the upstream `pre` body verbatim and re-wrap it: the
-  `RenderErrorBoundary`/`Suspense`/`SuspenseShikiCodeBlock` subtree becomes the `highlighted` prop.
-  The wrapper must stay _inside_ `MarkdownCodeBlock` — the copy button and wrap toggle live on that
-  frame and must keep working on the partial text.
-- **Additive** `apps/web/src/turbo/streamingCodeBlock.tsx` — the placeholder, the incremental line
-  count, and the never-started history repair. Two properties are load-bearing and easy to undo:
-  the placeholder caps its rendered rows at `STREAMING_CODE_MAX_PLACEHOLDER_ROWS` and reserves the
-  rest with one `lh`-sized spacer (a 400-line fence was 400 rows re-reconciled per newline), and it
-  animates with the repo's duty-cycled `animate-skeleton` via the shared `Skeleton`, never
-  Tailwind's per-frame `animate-pulse` — AGENTS.md "Taste" rules out continuously repainting
-  animations. There is deliberately NO "the stream went quiet" fallback: the reducer clears
-  `streaming` on every turn settle, and a fence that closes while the model keeps writing prose is
-  the normal shape, so a quiet-fence verdict fires mid-message and costs the reader three
-  appearance changes. On conflict, keep the fork file.
-- **Additive** `apps/web/src/turbo/streamingCodeBlock.test.tsx` — pins the two guards, the row cap
-  and spacer, the duty-cycled animation, and the equivalence of the incremental line scan with the
-  full one at every prefix. On conflict, keep the fork file.
+- **Retired 2026-09-22** deferred streaming code blocks (`StreamingCodeBlockFrame` wrap in
+  `ChatMarkdown.tsx`, `apps/web/src/turbo/streamingCodeBlock.tsx` + test) — upstream now highlights
+  streaming fences incrementally (`createIncrementalHighlightedDocument` + `HighlightedCodeLines`),
+  which removes the per-delta re-tokenize the fork placeholder avoided. The `pre` renderer is
+  upstream-verbatim again.
 - **Tuned** `packages/client-runtime/src/rpc/client.ts` — `subscribeToSession` wraps the session's
   RPC stream in `poolWithinFrame`, a 16 ms pool that releases a window's arrivals as one chunk, so
   a burst costs the screen one blip per frame instead of one per item. On conflict, take the
