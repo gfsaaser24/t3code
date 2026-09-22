@@ -20,7 +20,7 @@ import { TURBO_BRAND_ASSET_PATHS } from "./lib/turbo-brand-assets.ts";
 
 const checkOnly = process.argv.includes("--check");
 
-class TurboIconRenderError extends Schema.TaggedErrorClass<TurboIconRenderError>()(
+class TurboIconRenderError extends Schema.TaggedError<TurboIconRenderError>()(
   "TurboIconRenderError",
   { cause: Schema.Defect() },
 ) {
@@ -29,7 +29,7 @@ class TurboIconRenderError extends Schema.TaggedErrorClass<TurboIconRenderError>
   }
 }
 
-class TurboIconAssetsStaleError extends Schema.TaggedErrorClass<TurboIconAssetsStaleError>()(
+class TurboIconAssetsStaleError extends Schema.TaggedError<TurboIconAssetsStaleError>()(
   "TurboIconAssetsStaleError",
   { paths: Schema.Array(Schema.String) },
 ) {

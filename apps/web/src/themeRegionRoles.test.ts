@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  createManagedThemeColors,
   createVividThemeColors,
   getDefaultThemeColors,
   getStandardThemeColors,
@@ -68,19 +67,17 @@ describe("region theme roles", () => {
       // solve. Region roles are not among those, so without an explicit
       // re-derivation a generated theme keeps the default theme's menus and
       // composer while every surface around them moves.
-      const managed = createManagedThemeColors(appearance, "#0b3d2e", "#37d67a");
       const vivid = createVividThemeColors(appearance, "#0b3d2e", "#37d67a");
       const defaults = getDefaultThemeColors(appearance);
 
       for (const [role, source] of REGION_ROLE_SOURCES) {
-        expect(managed[role], `managed ${role}`).toBe(managed[source]);
         expect(vivid[role], `vivid ${role}`).toBe(vivid[source]);
       }
 
       // Sanity: the generated palette really is different from the defaults,
       // so the assertions above are not passing by coincidence.
-      expect(managed.canvas).not.toBe(defaults.canvas);
-      expect(managed.menuSurface).not.toBe(defaults.menuSurface);
+      expect(vivid.canvas).not.toBe(defaults.canvas);
+      expect(vivid.menuSurface).not.toBe(defaults.menuSurface);
     });
   }
 

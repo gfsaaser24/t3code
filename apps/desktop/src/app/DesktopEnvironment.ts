@@ -13,8 +13,10 @@ import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
+import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
+import type { OtlpProtocol } from "@t3tools/shared/observability";
 
 export interface MakeDesktopEnvironmentInput {
   readonly dirname: string;
@@ -60,6 +62,8 @@ export class DesktopEnvironment extends Context.Service<
     // extracts on demand (see DesktopWslServerTree).
     readonly serverRoot: string;
     readonly backendEntryPath: string;
+    // Built web client the packaged renderer is served from over t3code://app.
+    readonly clientAssetsDir: string;
     readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
@@ -68,7 +72,11 @@ export class DesktopEnvironment extends Context.Service<
     readonly configuredBackendPort: Option.Option<number>;
     readonly commitHashOverride: Option.Option<string>;
     readonly otlpTracesUrl: Option.Option<string>;
+    readonly otlpMetricsUrl: Option.Option<string>;
+    readonly otlpLogsUrl: Option.Option<string>;
     readonly otlpExportIntervalMs: number;
+    readonly otlpHeaders: Option.Option<Record<string, string>>;
+    readonly otlpProtocol: OtlpProtocol;
     readonly branding: DesktopAppBranding;
     readonly displayName: string;
     readonly appUserModelId: string;
@@ -99,7 +107,7 @@ function resolveDesktopAppStageLabel(input: {
   return isNightlyDesktopVersion(input.appVersion) ? "Nightly" : "Alpha";
 }
 
-function resolveDesktopAppBranding(input: {
+export function resolveDesktopAppBranding(input: {
   readonly isDevelopment: boolean;
   readonly appVersion: string;
 }): DesktopAppBranding {
@@ -107,6 +115,8 @@ function resolveDesktopAppBranding(input: {
   return {
     baseName: APP_BASE_NAME,
     stageLabel,
+    // Turbo ships one product name; only development builds carry a stage
+    // suffix, so an installed app is never "T3 Turbo (Alpha)".
     displayName: input.isDevelopment ? `${APP_BASE_NAME} (${stageLabel})` : APP_BASE_NAME,
     releaseRepository: APP_RELEASE_REPOSITORY,
   };
@@ -212,6 +222,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
     appRoot,
     serverRoot,
     backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
+    clientAssetsDir: path.join(serverRoot, "apps/server/dist/client"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged
@@ -222,13 +233,17 @@ const make = Effect.fn("desktop.environment.make")(function* (
     configuredBackendPort: config.configuredBackendPort,
     commitHashOverride: config.commitHashOverride,
     otlpTracesUrl: config.otlpTracesUrl,
+    otlpMetricsUrl: config.otlpMetricsUrl,
+    otlpLogsUrl: config.otlpLogsUrl,
     otlpExportIntervalMs: config.otlpExportIntervalMs,
+    otlpHeaders: config.otlpHeaders,
+    otlpProtocol: config.otlpProtocol,
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
       isDevelopment ? "com.gabef.t3turbo.dev" : "com.gabef.t3turbo",
     ),
-    linuxDesktopEntryName: isDevelopment ? "t3-turbo-dev.desktop" : "t3-turbo.desktop",
+    linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxWmClass: isDevelopment ? "t3-turbo-dev" : "t3-turbo",
     linuxApplicationsDir,
     appImagePath: config.appImagePath,

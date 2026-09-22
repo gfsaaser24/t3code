@@ -27,7 +27,6 @@ import {
   SelectGroupLabel,
   SelectItem,
   SelectPopup,
-  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
@@ -200,7 +199,7 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
           </SelectGroup>
           {availability && runImport ? (
             <>
-              <SelectSeparator />
+              <div className="mx-2 my-1 h-px bg-border" role="separator" />
               <SelectItem value={IMPORT_OFFICIAL_T3_VALUE}>
                 <span className="inline-flex items-center gap-1.5">
                   <DatabaseIcon className="size-3" />

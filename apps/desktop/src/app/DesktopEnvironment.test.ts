@@ -1,3 +1,4 @@
+import * as NodePath from "@effect/platform-node/NodePath";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -26,16 +27,17 @@ const makeEnvironmentLayer = (
   DesktopEnvironment.layer({
     ...defaultInput,
     ...overrides,
-  }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest(env))));
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(NodeServices.layer, NodePath.layerPosix, DesktopConfig.layerTest(env)),
+    ),
+  );
 
 const makeEnvironment = (
   overrides: Partial<DesktopEnvironment.MakeDesktopEnvironmentInput> = {},
   env: Record<string, string | undefined> = {},
 ) =>
   DesktopEnvironment.DesktopEnvironment.pipe(Effect.provide(makeEnvironmentLayer(overrides, env)));
-
-const portablePath = (value: string) => value.replaceAll("\\", "/").replace(/^[A-Z]:\//u, "/");
-const portablePathOption = Option.map(portablePath);
 
 describe("DesktopEnvironment", () => {
   it.effect("derives state paths and development identity inside Effect", () =>
@@ -49,42 +51,35 @@ describe("DesktopEnvironment", () => {
           VITE_DEV_SERVER_URL: "http://localhost:5173",
           T3CODE_DEV_REMOTE_T3_SERVER_ENTRY_PATH: " /remote/server.mjs ",
           T3CODE_OTLP_TRACES_URL: " http://127.0.0.1:4318/v1/traces ",
+          T3CODE_OTLP_METRICS_URL: " http://127.0.0.1:4318/v1/metrics ",
+          T3CODE_OTLP_LOGS_URL: " http://127.0.0.1:4318/v1/logs ",
           T3CODE_OTLP_EXPORT_INTERVAL_MS: "2500",
+          T3CODE_OTLP_HEADERS: "authorization=Basic%20abc%3D%3D,x-tenant=t3",
+          T3CODE_OTLP_PROTOCOL: "http/protobuf",
         },
       );
 
       assert.equal(environment.isDevelopment, true);
+      assert.equal(environment.appDataDirectory, "/Users/alice/Library/Application Support");
+      assert.equal(environment.baseDir, "/tmp/t3");
+      assert.equal(environment.stateDir, "/tmp/t3/userdata");
+      assert.equal(environment.desktopSettingsPath, "/tmp/t3/userdata/desktop-settings.json");
+      assert.equal(environment.clientSettingsPath, "/tmp/t3/userdata/client-settings.json");
       assert.equal(
-        portablePath(environment.appDataDirectory),
-        "/Users/alice/Library/Application Support",
-      );
-      assert.equal(portablePath(environment.baseDir), "/tmp/t3");
-      assert.equal(portablePath(environment.stateDir), "/tmp/t3/userdata");
-      assert.equal(
-        portablePath(environment.desktopSettingsPath),
-        "/tmp/t3/userdata/desktop-settings.json",
-      );
-      assert.equal(
-        portablePath(environment.clientSettingsPath),
-        "/tmp/t3/userdata/client-settings.json",
-      );
-      assert.equal(
-        portablePath(environment.savedEnvironmentRegistryPath),
+        environment.savedEnvironmentRegistryPath,
         "/tmp/t3/userdata/saved-environments.json",
       );
-      assert.equal(portablePath(environment.serverSettingsPath), "/tmp/t3/userdata/settings.json");
-      assert.equal(portablePath(environment.logDir), "/tmp/t3/userdata/logs");
-      assert.equal(
-        portablePath(environment.browserArtifactsDir),
-        "/tmp/t3/userdata/browser-artifacts",
-      );
-      assert.equal(portablePath(environment.rootDir), "/repo");
-      assert.equal(portablePath(environment.appRoot), "/repo");
-      assert.equal(portablePath(environment.serverRoot), "/repo");
-      assert.equal(portablePath(environment.backendEntryPath), "/repo/apps/server/dist/bin.mjs");
-      assert.equal(portablePath(environment.backendCwd), "/repo");
+      assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
+      assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
+      assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
+      assert.equal(environment.rootDir, "/repo");
+      assert.equal(environment.appRoot, "/repo");
+      assert.equal(environment.serverRoot, "/repo");
+      assert.equal(environment.backendEntryPath, "/repo/apps/server/dist/bin.mjs");
+      assert.equal(environment.backendCwd, "/repo");
       assert.equal(environment.appUserModelId, "com.gabef.t3turbo.dev");
       assert.equal(environment.linuxWmClass, "t3-turbo-dev");
+      assert.equal(environment.linuxDesktopEntryName, "com.gabef.t3turbo.Development.desktop");
       assert.deepEqual(
         Option.map(environment.devServerUrl, (url) => url.href),
         Option.some("http://localhost:5173/"),
@@ -93,7 +88,17 @@ describe("DesktopEnvironment", () => {
       assert.deepEqual(environment.configuredBackendPort, Option.some(4949));
       assert.deepEqual(environment.commitHashOverride, Option.some("0123456789abcdef"));
       assert.deepEqual(environment.otlpTracesUrl, Option.some("http://127.0.0.1:4318/v1/traces"));
+      assert.deepEqual(environment.otlpMetricsUrl, Option.some("http://127.0.0.1:4318/v1/metrics"));
+      assert.deepEqual(environment.otlpLogsUrl, Option.some("http://127.0.0.1:4318/v1/logs"));
       assert.equal(environment.otlpExportIntervalMs, 2500);
+      assert.deepEqual(
+        environment.otlpHeaders,
+        Option.some({
+          authorization: "Basic abc==",
+          "x-tenant": "t3",
+        }),
+      );
+      assert.equal(environment.otlpProtocol, "http/protobuf");
     }),
   );
 
@@ -107,13 +112,11 @@ describe("DesktopEnvironment", () => {
       );
 
       assert.equal(environment.isDevelopment, false);
-      assert.equal(portablePath(environment.stateDir), "/tmp/t3/userdata");
-      assert.equal(portablePath(environment.logDir), "/tmp/t3/userdata/logs");
-      assert.equal(
-        portablePath(environment.browserArtifactsDir),
-        "/tmp/t3/userdata/browser-artifacts",
-      );
-      assert.equal(portablePath(environment.serverSettingsPath), "/tmp/t3/userdata/settings.json");
+      assert.equal(environment.stateDir, "/tmp/t3/userdata");
+      assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
+      assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");
+      assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
+      assert.equal(environment.otlpProtocol, "http/json");
     }),
   );
 
@@ -126,12 +129,29 @@ describe("DesktopEnvironment", () => {
         resourcesPath: "/install/resources",
       });
 
-      assert.equal(portablePath(environment.appRoot), "/install/resources/app.asar");
-      assert.equal(portablePath(environment.serverRoot), "/install/resources/server.asar");
+      assert.equal(environment.appRoot, "/install/resources/app.asar");
+      assert.equal(environment.serverRoot, "/install/resources/server.asar");
       assert.equal(
-        portablePath(environment.backendEntryPath),
+        environment.backendEntryPath,
         "/install/resources/server.asar/apps/server/dist/bin.mjs",
       );
+      assert.equal(
+        environment.clientAssetsDir,
+        "/install/resources/server.asar/apps/server/dist/client",
+      );
+    }),
+  );
+
+  it.effect("uses the stable desktop entry as the packaged Linux portal identity", () =>
+    Effect.gen(function* () {
+      const environment = yield* makeEnvironment({
+        platform: "linux",
+        isPackaged: true,
+        appPath: "/tmp/.mount_t3code/resources/app.asar",
+        resourcesPath: "/tmp/.mount_t3code/resources",
+      });
+
+      assert.equal(environment.linuxDesktopEntryName, "com.gabef.t3turbo.desktop");
     }),
   );
 
@@ -146,14 +166,14 @@ describe("DesktopEnvironment", () => {
         isPackaged: true,
       });
 
-      assert.equal(portablePath(development.baseDir), "/Users/alice/.t3-turbo");
-      assert.equal(portablePath(development.stateDir), "/Users/alice/.t3-turbo/dev");
-      assert.equal(portablePath(production.baseDir), "/Users/alice/.t3-turbo");
-      assert.equal(portablePath(production.stateDir), "/Users/alice/.t3-turbo/userdata");
+      assert.equal(development.baseDir, "/Users/alice/.t3-turbo");
+      assert.equal(development.stateDir, "/Users/alice/.t3-turbo/dev");
+      assert.equal(production.baseDir, "/Users/alice/.t3-turbo");
+      assert.equal(production.stateDir, "/Users/alice/.t3-turbo/userdata");
       assert.equal(production.displayName, "T3 Turbo");
       assert.equal(production.branding.releaseRepository, "gfsaaser24/t3code");
       assert.equal(production.appUserModelId, "com.gabef.t3turbo");
-      assert.equal(production.linuxDesktopEntryName, "t3-turbo.desktop");
+      assert.equal(production.linuxDesktopEntryName, "com.gabef.t3turbo.desktop");
       assert.equal(production.linuxWmClass, "t3-turbo");
       assert.equal(production.userDataDirName, "t3-turbo");
       assert.equal(production.legacyUserDataDirName, "T3-Turbo");
@@ -184,13 +204,11 @@ describe("DesktopEnvironment", () => {
         Option.none(),
       );
       assert.deepEqual(
-        environment.resolvePickFolderDefaultPath({ initialPath: "~" }).pipe(portablePathOption),
+        environment.resolvePickFolderDefaultPath({ initialPath: "~" }),
         Option.some("/Users/alice"),
       );
       assert.deepEqual(
-        environment
-          .resolvePickFolderDefaultPath({ initialPath: "~/project" })
-          .pipe(portablePathOption),
+        environment.resolvePickFolderDefaultPath({ initialPath: "~/project" }),
         Option.some("/Users/alice/project"),
       );
     }),

@@ -8,6 +8,29 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **0.0.53: ingest upstream through v0.0.43-nightly.20260922.2110 and main `f25a8e4b7`
+  (c0ebc882b..f25a8e4b7, 1110 commits; stable v0.0.39, v0.0.40, v0.0.42 included).** Opus 5.5 is
+  added to the Claude catalog, GPT-6-Astra and Fable 5.1 default to medium reasoning, and every
+  provider gets a usage-limits tab. New surfaces: device and tool-version management, SnapShot
+  screen capture, Android push through the relay, installer and update progress, in-app thread
+  notifications, multi-model threads in separate worktrees. Six upstream server migrations (048
+  to 053) land; the fork's next free migration number is 054. Relay gains two Postgres
+  migrations (Android devices, 512-char thread ids) and its old `scripts/deploy.ts` is replaced
+  by upstream's `alchemy.run.ts`. Release workflows were rewritten upstream; the fork's
+  `release-from-turbo-branch` pins (turbo ref, no CLI publish, repo-conditional runners) are
+  re-applied on `release.yml` and the new `release-desktop.yml`,
+  `desktop-macos-preview-publish.yml`, and `windows-tests.yml`. Every fork seam (chat panes,
+  batched projection bootstrap, shell snapshot budget, startup load shedding, durable config
+  resubscribe, T3 Turbo settings, official import, OpenRouter parked) was re-applied by hand on
+  the upstream file. Four fork seams are RETIRED because upstream now ships the equivalent:
+  terminal scrollback batching (`TerminalHistoryBuffer` → upstream `BoundedTerminalHistory`),
+  the client terminal buffer byte budget (→ upstream `terminalOutput.ts`), the terminal drawer
+  redraw gate (→ upstream output cursor), and the fork's own provider usage-limits subsystem (→
+  upstream usage limits and Limits tab). Seam count goes 32 → 29. Effect moves to 4.0.0-rc.115,
+  so fork tagged errors use `Schema.TaggedError` and relay config uses `Config.NonEmptyString`.
+  Only the `turbo` line moves in this entry; fork `main` gets its own merge PR. The nightly sync workflow, disabled by hand on 2026-09-09 after nine conflict failures, is
+  re-enabled after this ingest.
+
 - **0.0.52: ingest upstream through v0.0.39-nightly.20260903.1273 (c0ebc882b), and the sidebar
   shows deletes and settles again.** 189 upstream commits land, including sidebar status leasing by
   visibility (#9052), incremental streaming activity appends (#9152), bounded replay payloads

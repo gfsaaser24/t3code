@@ -5,17 +5,17 @@ import * as Layer from "effect/Layer";
 import * as AgentActivityRows from "./AgentActivityRows.ts";
 import { AgentActivityPublisher } from "./AgentActivityPublisher.ts";
 
-// APNs-off variant of the publisher. Selected by `worker.ts` under exactly the
-// condition that already selects `ApnsDeliveries.layerDisabled`, so when APNs is
-// configured nothing here is ever constructed and the upstream publisher runs
-// unchanged.
+// Push-off variant of the publisher. Selected by `worker.ts` only when BOTH
+// APNs and FCM are unconfigured, so a relay with either delivery path runs the
+// upstream publisher unchanged and nothing here is ever constructed.
 //
 // With the disabled delivery layer every `sendForTarget` /
-// `sendPushNotificationForTarget` call resolves to `null`, so the work upstream
-// does between the row write and that call — listing the environment's delivery
-// users, then per user listing their active rows and Live Activity targets, then
-// building aggregates — is queried, computed and thrown away. Every consumer
-// already sees the empty delivery list this produces.
+// `sendPushNotificationForTarget` call resolves to `null`, and with no FCM queue
+// every `enqueue` drops its job, so the work upstream does between the row write
+// and those calls — listing the environment's delivery users, then per user
+// listing their active rows and Live Activity targets, then building aggregates —
+// is queried, computed and thrown away. Every consumer already sees the empty
+// delivery list this produces.
 //
 // The row write is kept verbatim (the mobile status view in
 // `MobileRegistrations.getAgentActivitySnapshot` reads exactly those rows), as

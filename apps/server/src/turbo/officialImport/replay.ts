@@ -21,7 +21,7 @@ const ProjectionCursorRow = Schema.Struct({
   maxSequence: NonNegativeInt,
 });
 
-export class OfficialImportProjectionVerificationError extends Schema.TaggedErrorClass<OfficialImportProjectionVerificationError>()(
+export class OfficialImportProjectionVerificationError extends Schema.TaggedError<OfficialImportProjectionVerificationError>()(
   "OfficialImportProjectionVerificationError",
   {
     expectedProjectors: Schema.Array(Schema.String),
@@ -34,7 +34,7 @@ export class OfficialImportProjectionVerificationError extends Schema.TaggedErro
   }
 }
 
-export class OfficialImportProjectionReplayError extends Schema.TaggedErrorClass<OfficialImportProjectionReplayError>()(
+export class OfficialImportProjectionReplayError extends Schema.TaggedError<OfficialImportProjectionReplayError>()(
   "OfficialImportProjectionReplayError",
   { reason: Schema.String },
 ) {

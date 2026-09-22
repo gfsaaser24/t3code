@@ -21,7 +21,7 @@ export interface ImportCheckpointRefInput {
   readonly targetRef: string;
 }
 
-export class OfficialImportCheckpointRefError extends Schema.TaggedErrorClass<OfficialImportCheckpointRefError>()(
+export class OfficialImportCheckpointRefError extends Schema.TaggedError<OfficialImportCheckpointRefError>()(
   "OfficialImportCheckpointRefError",
   {
     operation: Schema.String,

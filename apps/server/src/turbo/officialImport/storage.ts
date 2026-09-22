@@ -252,7 +252,7 @@ export interface ImportWorkspace {
   readonly targetActivity: ImportActivityState;
 }
 
-export class OfficialImportStorageError extends Schema.TaggedErrorClass<OfficialImportStorageError>()(
+export class OfficialImportStorageError extends Schema.TaggedError<OfficialImportStorageError>()(
   "OfficialImportStorageError",
   {
     operation: Schema.String,
@@ -265,7 +265,7 @@ export class OfficialImportStorageError extends Schema.TaggedErrorClass<Official
   }
 }
 
-export class OfficialImportSchemaMismatchError extends Schema.TaggedErrorClass<OfficialImportSchemaMismatchError>()(
+export class OfficialImportSchemaMismatchError extends Schema.TaggedError<OfficialImportSchemaMismatchError>()(
   "OfficialImportSchemaMismatchError",
   {
     path: Schema.String,
@@ -277,7 +277,7 @@ export class OfficialImportSchemaMismatchError extends Schema.TaggedErrorClass<O
   }
 }
 
-export class OfficialImportFingerprintMismatchError extends Schema.TaggedErrorClass<OfficialImportFingerprintMismatchError>()(
+export class OfficialImportFingerprintMismatchError extends Schema.TaggedError<OfficialImportFingerprintMismatchError>()(
   "OfficialImportFingerprintMismatchError",
   {
     role: Schema.Literals(["source", "target"]),
@@ -290,7 +290,7 @@ export class OfficialImportFingerprintMismatchError extends Schema.TaggedErrorCl
   }
 }
 
-export class OfficialImportActiveStateError extends Schema.TaggedErrorClass<OfficialImportActiveStateError>()(
+export class OfficialImportActiveStateError extends Schema.TaggedError<OfficialImportActiveStateError>()(
   "OfficialImportActiveStateError",
   {
     role: Schema.Literals(["source", "target"]),
@@ -303,7 +303,7 @@ export class OfficialImportActiveStateError extends Schema.TaggedErrorClass<Offi
   }
 }
 
-export class OfficialImportLiveServerError extends Schema.TaggedErrorClass<OfficialImportLiveServerError>()(
+export class OfficialImportLiveServerError extends Schema.TaggedError<OfficialImportLiveServerError>()(
   "OfficialImportLiveServerError",
   {
     role: Schema.Literals(["source", "target"]),
@@ -316,7 +316,7 @@ export class OfficialImportLiveServerError extends Schema.TaggedErrorClass<Offic
   }
 }
 
-export class OfficialImportConfirmationError extends Schema.TaggedErrorClass<OfficialImportConfirmationError>()(
+export class OfficialImportConfirmationError extends Schema.TaggedError<OfficialImportConfirmationError>()(
   "OfficialImportConfirmationError",
   {
     expected: Schema.String,
@@ -327,7 +327,7 @@ export class OfficialImportConfirmationError extends Schema.TaggedErrorClass<Off
   }
 }
 
-export class OfficialImportLockError extends Schema.TaggedErrorClass<OfficialImportLockError>()(
+export class OfficialImportLockError extends Schema.TaggedError<OfficialImportLockError>()(
   "OfficialImportLockError",
   {
     lockPath: Schema.String,

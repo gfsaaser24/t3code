@@ -44,29 +44,29 @@ const encodeRestoreResult = Schema.encodeEffect(
 const defaultSourceBaseDir = NodePath.join(NodeOS.homedir(), ".t3");
 const defaultTargetBaseDir = NodePath.join(NodeOS.homedir(), ".t3-turbo");
 
-const sourceBaseDirFlag = Flag.string("source-base-dir").pipe(
+const sourceBaseDirFlag = Flag.String("source-base-dir").pipe(
   Flag.withDescription("Official T3 base directory (opened read-only)."),
   Flag.withDefault(defaultSourceBaseDir),
 );
-const targetBaseDirFlag = Flag.string("target-base-dir").pipe(
+const targetBaseDirFlag = Flag.String("target-base-dir").pipe(
   Flag.withDescription("T3 Turbo base directory that receives the verified import."),
   Flag.withDefault(defaultTargetBaseDir),
 );
-const choicesFlag = Flag.string("choices").pipe(
+const choicesFlag = Flag.String("choices").pipe(
   Flag.withDescription(
     "Optional JSON file mapping colliding official thread IDs to skip/replace/clone.",
   ),
   Flag.optional,
 );
-const outputFlag = Flag.string("out").pipe(
+const outputFlag = Flag.String("out").pipe(
   Flag.withDescription("Optional plan/result JSON output path."),
   Flag.optional,
 );
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Print the complete JSON document."),
   Flag.withDefault(false),
 );
-const allowActiveFlag = Flag.boolean("allow-active").pipe(
+const allowActiveFlag = Flag.Boolean("allow-active").pipe(
   Flag.withDescription(
     "Proceed even when a database still records an active session, turn, or approval. Use only when both apps are fully closed — e.g. a stale session left behind by an uninstalled official T3 Code.",
   ),
@@ -199,7 +199,7 @@ const planCommand = Command.make("plan", {
 );
 
 const applyCommand = Command.make("apply", {
-  plan: Flag.string("plan").pipe(Flag.withDescription("Reviewed plan JSON created by `plan`.")),
+  plan: Flag.String("plan").pipe(Flag.withDescription("Reviewed plan JSON created by `plan`.")),
   out: outputFlag,
   json: jsonFlag,
   allowActive: allowActiveFlag,
@@ -266,10 +266,10 @@ const runCommand = Command.make("run", {
 );
 
 const restoreCommand = Command.make("restore", {
-  receipt: Flag.string("receipt").pipe(
+  receipt: Flag.String("receipt").pipe(
     Flag.withDescription("Completed recovery receipt written by an import."),
   ),
-  confirmation: Flag.string("confirm").pipe(
+  confirmation: Flag.String("confirm").pipe(
     Flag.withDescription(`Required exact text: ${RESTORE_CONFIRMATION}`),
   ),
   json: jsonFlag,

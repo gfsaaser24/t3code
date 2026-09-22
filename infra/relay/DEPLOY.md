@@ -13,8 +13,10 @@ The current Alchemy stack supports this deployment without source changes:
   export.
 - An absent/incomplete APNs set disables APNs resources and uses the runtime's disabled delivery
   layer.
+- An absent `FCM_SERVICE_ACCOUNT` disables Android push the same way: no FCM queues are created and
+  the delivery sender drops jobs.
 
-Set the database group completely. Leave all PlanetScale, Axiom, and APNs inputs unset. If the
+Set the database group completely. Leave all PlanetScale, Axiom, APNs, and FCM inputs unset. If the
 database group is incomplete, configuration falls back to the legacy PlanetScale path and deploy
 fails without PlanetScale credentials.
 
@@ -25,9 +27,13 @@ fails without PlanetScale credentials.
 - Deny-by-default Cloudflare Access application and policy for `relay.t3turbo.pro`, with an
   authentication path already proven on every intended client surface.
 - Cloudflare account features used by the locked relay: Workers, Hyperdrive, Secrets Store/Alchemy
-  state, DNS, and Cloudflare Tunnel. Queues are not created when APNs is disabled.
+  state, DNS, and Cloudflare Tunnel. Queues are not created when APNs and Android push are both
+  disabled.
 - A least-privilege `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
 - Healthy self-hosted Supabase PostgreSQL 17 with `schema.sql`, `seed.sql`, and `rls.sql` applied.
+  The external-database path provisions Hyperdrive only; it runs no Drizzle migrations, so every
+  file under `infra/relay/migrations/postgres` has to be applied to Supabase by hand before the
+  Worker that expects it goes live.
 - Dedicated `relay_runtime` database role with `service_role` membership.
 - A TLS database endpoint reachable by Hyperdrive and limited to Cloudflare IP ranges, or an
   approved private-database Tunnel/VPC path.
@@ -133,10 +139,23 @@ Watch the selected run without printing environment values:
 gh run watch <RUN_ID> --exit-status
 ```
 
+The relay deploy command is Alchemy's own CLI:
+
+```sh
+vp run --filter t3code-relay deploy --stage prod --yes --no-input
+```
+
+The former `infra/relay/scripts/deploy.ts` wrapper is gone. Its two jobs moved: `--stage` is now an
+Alchemy flag, and the client `.env` it used to reconcile is written by the `PublishClientConfig`
+action inside `alchemy.run.ts`. That action writes the repo-root `.env` by default; set
+`T3CODE_RELAY_CLIENT_CONFIG_ENV` to a scratch path in CI so a runner never rewrites the checkout.
+With Axiom disabled the tracing assignments are published empty and only `T3CODE_RELAY_URL` carries
+a value.
+
 The workflow deploys Alchemy stage `prod` with `--yes`. Before the first apply, review a local
 deployment plan with the same source and no secret output. The production plan must create the
 Worker and external-database Hyperdrive, must not create PlanetScale or Axiom resources, and must
-not create APNs queues.
+not create APNs or FCM queues.
 
 Required public configuration for the target:
 

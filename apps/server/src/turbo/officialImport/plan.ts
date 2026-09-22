@@ -180,7 +180,7 @@ export interface PlanOfficialImportInput {
   readonly allocateIdentity?: AllocateOfficialImportIdentity;
 }
 
-export class OfficialImportPlanningError extends Schema.TaggedErrorClass<OfficialImportPlanningError>()(
+export class OfficialImportPlanningError extends Schema.TaggedError<OfficialImportPlanningError>()(
   "OfficialImportPlanningError",
   {
     reason: Schema.Literals([
@@ -199,7 +199,7 @@ export interface OfficialImportPlanStaleIssue {
   readonly reason: "missing" | "appeared" | "fingerprint-changed" | "head-changed";
 }
 
-export class OfficialImportPlanStaleError extends Schema.TaggedErrorClass<OfficialImportPlanStaleError>()(
+export class OfficialImportPlanStaleError extends Schema.TaggedError<OfficialImportPlanStaleError>()(
   "OfficialImportPlanStaleError",
   {
     issues: Schema.Array(
@@ -548,6 +548,24 @@ export const transformOfficialImportEvent = (
         ...base,
         payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
       };
+    case "thread.pull-request-linked":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
+    case "thread.pull-request-unlinked":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
+    case "thread.pull-request-synced":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
     case "thread.meta-updated":
       return {
         ...event,
@@ -753,6 +771,9 @@ const visitOfficialImportEventIdentities = (
       case "thread.checkpoint-revert-requested":
       case "thread.reverted":
       case "thread.session-stop-requested":
+      case "thread.pull-request-linked":
+      case "thread.pull-request-unlinked":
+      case "thread.pull-request-synced":
         break;
       case "thread.meta-updated":
         if (event.payload.titleRegeneration) {

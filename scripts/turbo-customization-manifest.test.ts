@@ -168,9 +168,6 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "sqlite-fast-mode-pragma",
     "startup-load-shedding",
     "streaming-flag-cleared-on-turn-settle",
-    "terminal-buffer-byte-budget",
-    "terminal-drawer-redraw-gate",
-    "terminal-scrollback-batching",
     "unified-activity-order",
     "workspace-image-preview",
   ]);

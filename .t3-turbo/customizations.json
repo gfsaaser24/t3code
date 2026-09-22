@@ -218,7 +218,7 @@
         },
         {
           "path": "apps/web/src/rightPanelStore.ts",
-          "markers": ["const fileSurface =", "openFile: (ref, relativePath, line) =>"]
+          "markers": ["const fileSurface =", "openFile: (ref, requestedPath, line) =>"]
         },
         {
           "path": "packages/shared/src/filePreview.test.ts",
@@ -525,55 +525,6 @@
       ]
     },
     {
-      "id": "terminal-scrollback-batching",
-      "status": "implemented",
-      "summary": "A terminal session keeps its scrollback as an incremental line buffer with a ~16 ms output batch instead of a string chopped and re-glued per PTY chunk; the debounce runs on a per-session fiber (never inside the shared worker, which would serialize every session's batch interval and every drain behind one another) and is enqueued once per burst rather than once per chunk, the batch is a keyed coalescing worker that flushPersist enqueues into and drains before the persist worker, every scrollback read flushes it so the string handed to clients stays byte-identical, and a dirtySincePersist flag (not the per-flush result) decides whether a write is still owed so a racing read cannot strand the tail.",
-      "checks": [
-        {
-          "path": "apps/server/src/turbo/terminalHistoryBuffer.ts",
-          "markers": [
-            "export function queueTerminalHistoryChunk",
-            "export function flushTerminalHistoryBuffer",
-            "export function endTerminalHistoryStream",
-            "export function readTerminalHistoryBuffer",
-            "export function takeTerminalHistoryToPersist",
-            "dirtySincePersist"
-          ]
-        },
-        {
-          "path": "apps/server/src/turbo/terminalHistoryBuffer.test.ts",
-          "markers": [
-            "matches upstream across the cap-trim boundary",
-            "matches upstream's graceful degradation for a non-positive cap",
-            "is byte-identical however the recorded stream is chunked and batched",
-            "is byte-identical however the real stream is chunked and batched",
-            "still owes the persist when a read flushed the batch before the batch tick",
-            "import { capHistory, sanitizeTerminalHistoryChunk } from \"../terminal/Manager.ts\";"
-          ]
-        },
-        {
-          "path": "apps/server/src/terminal/Manager.ts",
-          "markers": [
-            "const DEFAULT_HISTORY_BATCH_MS = 16;",
-            "historyBuffer: TerminalHistoryBuffer;",
-            "queueTerminalHistoryChunk(session.historyBuffer, nextEvent.data);",
-            "historyBatchWorker.drainKey(sessionKey);",
-            "readTerminalHistoryBuffer(session.historyBuffer)",
-            "takeTerminalHistoryToPersist(session.historyBuffer)",
-            "export function sanitizeTerminalHistoryChunk",
-            "export function capHistory",
-            "historyBatchScheduled: boolean;",
-            "if (session.historyBatchScheduled) {",
-            "session.historyBatchScheduled = false;"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": ["**Tuned** `apps/server/src/terminal/Manager.ts`"]
-        }
-      ]
-    },
-    {
       "id": "sqlite-fast-mode-pragma",
       "status": "implemented",
       "summary": "The single sqlite setup layer applies the standard WAL companion PRAGMA synchronous = NORMAL to every connection, leaving foreign_keys and journal_mode untouched.",
@@ -610,15 +561,13 @@
             "import { compareIsoTimestamps } from \"@t3tools/client-runtime/state/thread-activity-order\"",
             "compareIsoTimestamps(left.createdAt, right.createdAt)",
             "compareIsoTimestamps(left.updatedAt, right.updatedAt)",
-            "compareIsoTimestamps(a.createdAt, b.createdAt)",
             "compareIsoTimestamps(a.completedAt, b.completedAt)"
           ]
         },
         {
           "path": "apps/web/src/components/Sidebar.logic.ts",
           "markers": [
-            "anchorMs: activeThreadAnchorTimestampMs(thread)",
-            "right.anchorMs - left.anchorMs",
+            "export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from \"@t3tools/client-runtime/state/thread-sort\";",
             "settledAtMs: timestamp === null ? 0 : parseTimestampMs(timestamp)",
             "right.settledAtMs - left.settledAtMs",
             "export function sortSnoozedThreadsForSidebar",
@@ -677,7 +626,7 @@
             "encode: (value) => value.trim(),",
             "Schema.toType(Schema.Array(element))",
             "Effect.logDebug(\"ForwardCompatibleArray dropped undecodable elements\"",
-            "new SchemaIssue.Pointer([index], error.issue)"
+            "new SchemaIssue.Pointer([index], issue)"
           ]
         },
         {
@@ -765,67 +714,6 @@
           "path": "SEAM.md",
           "markers": [
             "**Additive** `packages/client-runtime/src/turbo/threadReducerStreamingSettle.test.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "terminal-buffer-byte-budget",
-      "status": "implemented",
-      "summary": "The client terminal buffer tracks its UTF-8 byte length in the reducer state and only re-encodes to trim once the total passes the cap plus a 25% slack window, then trims back down to the cap while keeping the multi-byte safety loop.",
-      "checks": [
-        {
-          "path": "packages/client-runtime/src/state/terminalSession.ts",
-          "markers": [
-            "readonly bufferBytes: number;",
-            "export const TERMINAL_BUFFER_TRIM_SLACK_RATIO = 0.25;",
-            "function utf8ByteLength(text: string): number",
-            "appendedBytes <= terminalBufferTrimThreshold(maxBufferBytes)",
-            "(byte & 0b1100_0000) !== 0b1000_0000"
-          ]
-        },
-        {
-          "path": "packages/client-runtime/src/state/terminalSession.test.ts",
-          "markers": [
-            "caps retained output by UTF-8 byte length once the slack threshold is crossed",
-            "expect(withinSlack.buffer.startsWith(snapshot.buffer)).toBe(true);"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `packages/client-runtime/src/state/terminalSession.ts`",
-            "**Tuned** `packages/client-runtime/src/state/terminalSession.test.ts`"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "terminal-drawer-redraw-gate",
-      "status": "implemented",
-      "summary": "The terminal drawer decides a redraw from the buffer and error it is about to write, not from a version counter that a reconnect restarts at 1 and a pooled burst can land on twice.",
-      "checks": [
-        {
-          "path": "apps/web/src/components/ThreadTerminalDrawer.tsx",
-          "markers": [
-            "export function terminalNeedsRedraw(",
-            "current.buffer !== previous.buffer ||",
-            "current.error !== previous.error ||",
-            "if (!terminalNeedsRedraw(previous, current)) {"
-          ]
-        },
-        {
-          "path": "apps/web/src/turbo/terminalDrawerRedraw.test.ts",
-          "markers": [
-            "redraws a reconnect that reuses the version number the screen already drew",
-            "still redraws on a version bump, which is what drives the mount focus"
-          ]
-        },
-        {
-          "path": "SEAM.md",
-          "markers": [
-            "**Tuned** `apps/web/src/components/ThreadTerminalDrawer.tsx`",
-            "**Additive** `apps/web/src/turbo/terminalDrawerRedraw.test.ts`"
           ]
         }
       ]
@@ -1160,7 +1048,7 @@
           "markers": [
             "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
             "const orderedActivities = useMemo(",
-            "derivePendingApprovals(orderedActivities)"
+            "derivePendingRequests(orderedActivities)"
           ]
         },
         {
@@ -1174,8 +1062,7 @@
           "path": "apps/web/src/session-logic.test.ts",
           "markers": [
             "import { sortThreadActivities } from \"@t3tools/client-runtime/state/thread-activity-order\";",
-            "derivePendingApprovals(sortThreadActivities(activities))",
-            "derivePendingUserInputs(sortThreadActivities(activities))",
+            "deriveActivePlanState(sortThreadActivities(activities), TurnId.make(\"turn-1\"))",
             "deriveWorkLogEntries(sortThreadActivities(activities))"
           ]
         },
@@ -1336,8 +1223,8 @@
           "markers": ["label: \"OpenRouter\""]
         },
         {
-          "path": "apps/web/src/session-logic.ts",
-          "markers": ["label: \"OpenRouter\""]
+          "path": "apps/web/src/components/chat/providerIconUtils.ts",
+          "markers": ["[ProviderDriverKind.make(\"openrouter\")]: OpenRouterIcon,"]
         }
       ]
     },
@@ -1445,7 +1332,8 @@
           "markers": [
             "holds automatic sweeps until the boot delay elapses",
             "throttles automatic sweeps to the minimum interval",
-            "sweeps on a settings change without waiting out the boot delay"
+            "sweeps on a settings change without waiting out the boot delay",
+            "skips a per-thread event sweep when settlement is disabled"
           ]
         },
         {

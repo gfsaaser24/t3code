@@ -91,7 +91,7 @@ export const OfficialImportApplyResult = Schema.Struct({
 });
 export type OfficialImportApplyResult = typeof OfficialImportApplyResult.Type;
 
-export class OfficialImportDatasetError extends Schema.TaggedErrorClass<OfficialImportDatasetError>()(
+export class OfficialImportDatasetError extends Schema.TaggedError<OfficialImportDatasetError>()(
   "OfficialImportDatasetError",
   {
     aggregateKind: Schema.Literals(["project", "thread"]),
@@ -104,7 +104,7 @@ export class OfficialImportDatasetError extends Schema.TaggedErrorClass<Official
   }
 }
 
-export class OfficialImportUnresolvedCollisionsError extends Schema.TaggedErrorClass<OfficialImportUnresolvedCollisionsError>()(
+export class OfficialImportUnresolvedCollisionsError extends Schema.TaggedError<OfficialImportUnresolvedCollisionsError>()(
   "OfficialImportUnresolvedCollisionsError",
   { threadIds: Schema.Array(ThreadId) },
 ) {
@@ -113,7 +113,7 @@ export class OfficialImportUnresolvedCollisionsError extends Schema.TaggedErrorC
   }
 }
 
-export class OfficialImportAttachmentError extends Schema.TaggedErrorClass<OfficialImportAttachmentError>()(
+export class OfficialImportAttachmentError extends Schema.TaggedError<OfficialImportAttachmentError>()(
   "OfficialImportAttachmentError",
   {
     operation: Schema.String,

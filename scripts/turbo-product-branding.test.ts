@@ -9,6 +9,7 @@ const repositoryRoot = NodeURL.fileURLToPath(new URL("..", import.meta.url));
 const sourceExtensions = new Set([".astro", ".md", ".plist", ".podspec", ".ts", ".tsx"]);
 const intentionalUpstreamAttribution = new Set([
   "apps/marketing/src/lib/tweets.ts",
+  "apps/marketing/src/pages/95.astro",
   "apps/mobile/modules/t3-markdown-text/UPSTREAM.md",
 ]);
 

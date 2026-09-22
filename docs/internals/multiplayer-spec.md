@@ -107,7 +107,7 @@ read-only member list on the environment sheet.
 
 - Build `authenticatedActor` once per socket at `:467`:
   `{ kind: "client", subject: session.subject, displayName: session.displayName ?? subject,
-  sessionId: session.sessionId }`.
+sessionId: session.sessionId }`.
 - `dispatchFromClient` (`:485`) passes `{ origin, actor }`. `OrchestrationEngine.dispatch`
   threads `actor` into `decideOrchestrationCommand`. Contracts add `OrchestrationEventActor`
   and an optional `actor` on `OrchestrationEventMetadata` (`orchestration.ts:1470`) so every
@@ -191,7 +191,7 @@ bootstrap. Do not touch `runProjectorBatch` or `deferredThreadShellSummaryIds`.
 ### 3.3 Persistence
 
 - `048_ProjectionThreadSideThreads.ts`: `projection_threads.side_threads_json TEXT NOT NULL
-  DEFAULT '[]'`, guarded by `PRAGMA table_info`.
+DEFAULT '[]'`, guarded by `PRAGMA table_info`.
 - `049_ProjectionCollaborationIdentity.ts`: `projection_projects.created_by_json TEXT`,
   `projection_threads.created_by_json TEXT`, `projection_thread_messages.author_json TEXT`.
 - Register both in `Migrations.ts`. Campfire's 036 canonicalize migration is not needed; we
@@ -260,12 +260,12 @@ path. No presence typing on mobile.
 
 ## 6. Build order and size
 
-| Phase | Scope | Files (approx) | Size |
-|---|---|---|---|
-| 1 | Identity: Clerk claims, invites, members, server accepts many users, actor on dispatch | relay 8, contracts 3, server 6, web 4, mobile 1 | 2 days |
-| 2 | Presence: contracts, service, ws wiring, client store, avatar stack, typing | contracts 2, server 3, client-runtime 1, web 4, mobile 2 | 1 day |
-| 3 | Side threads: contracts, decider, projector, migrations, reducer, drawer, mobile read | contracts 2, shared 1, server 10, client-runtime 4, web 8, mobile 3 | 3 days |
-| 4 | Inbox, mentions, notifications, docs, seams, release | web 5, relay 1, docs 4 | 1 day |
+| Phase | Scope                                                                                  | Files (approx)                                                      | Size   |
+| ----- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------ |
+| 1     | Identity: Clerk claims, invites, members, server accepts many users, actor on dispatch | relay 8, contracts 3, server 6, web 4, mobile 1                     | 2 days |
+| 2     | Presence: contracts, service, ws wiring, client store, avatar stack, typing            | contracts 2, server 3, client-runtime 1, web 4, mobile 2            | 1 day  |
+| 3     | Side threads: contracts, decider, projector, migrations, reducer, drawer, mobile read  | contracts 2, shared 1, server 10, client-runtime 4, web 8, mobile 3 | 3 days |
+| 4     | Inbox, mentions, notifications, docs, seams, release                                   | web 5, relay 1, docs 4                                              | 1 day  |
 
 Phase 1 and 2 ship together as one installer plus relay deploy. You can see teammates that day.
 Phase 3 and 4 ship as the second installer. Each phase is its own branch off `turbo`, its own
