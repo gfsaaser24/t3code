@@ -15,7 +15,9 @@ per-commit — the ingestion PR entry records the upstream range instead.
   large install the sidebar's authoritative shell snapshot took 7-13s (repository identity
   re-resolved per project behind git polling) and the client cancelled it at 6s on every boot, so
   deletes and settles were applied to a cached list nobody saw. The client now waits 30s for that
-  snapshot and repository identities cache for 12 hours (`shell-snapshot-budget`).
+  snapshot and repository identities cache for 12 hours (`shell-snapshot-budget`). Only the
+  `turbo` line moved in this ingest (PR #92); fork `main` still sits at upstream `b21d87243`
+  (v0.0.38) and owes a merge PR from `c0ebc882b` onward.
 
 - **0.0.51: ingest upstream through v0.0.38 (b21d87243).** The CLI opens projects in the running
   desktop app, host-file previews and video streaming work across clients, and project-switch and
