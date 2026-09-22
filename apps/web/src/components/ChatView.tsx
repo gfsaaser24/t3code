@@ -528,7 +528,6 @@ import {
   supportsServerUpdateThreadContinuation,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
-import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { useChatPaneActions, useCurrentChatPaneId } from "~/turbo/chatPanes/ChatPaneActionsContext";
 import { ComposerThinkingOrb, TimelineOrb, TimelineOrbSlot } from "~/turbo/orbs/TimelineOrb";
 import { chatOrbLabel } from "~/turbo/orbs/chatOrbState";
@@ -10577,13 +10576,5 @@ export function ChatViewContent(props: ChatViewProps) {
         />
       )}
     </div>
-  );
-}
-
-export default function ChatView(props: ChatViewProps) {
-  return (
-    <DiffWorkerPoolProvider>
-      <ChatViewContent {...props} />
-    </DiffWorkerPoolProvider>
   );
 }

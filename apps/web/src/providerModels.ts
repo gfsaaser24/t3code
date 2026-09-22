@@ -105,13 +105,3 @@ export function getDefaultServerModel(
     DEFAULT_MODEL
   );
 }
-
-// Turbo: the composer footer names the active provider from its live
-// snapshot (display name) and falls back to the driver label.
-export function getProviderDisplayName(
-  providers: ReadonlyArray<ServerProvider>,
-  provider: ProviderDriverKind,
-): string {
-  const snapshot = getProviderSnapshot(providers, provider);
-  return snapshot?.displayName?.trim() || formatProviderDriverKindLabel(provider);
-}

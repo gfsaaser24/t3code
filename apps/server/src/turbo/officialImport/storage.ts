@@ -138,14 +138,6 @@ export const ImportProjectRow = Schema.Struct({
 });
 export type ImportProjectRow = typeof ImportProjectRow.Type;
 
-export const ImportThreadRow = Schema.Struct({
-  threadId: ThreadId,
-  projectId: ProjectId,
-  updatedAt: IsoDateTime,
-  deletedAt: Schema.NullOr(Schema.String),
-});
-export type ImportThreadRow = typeof ImportThreadRow.Type;
-
 export const ImportActivityState = Schema.Struct({
   activeProviderSessions: NonNegativeInt,
   activeProjectedSessions: NonNegativeInt,
@@ -758,7 +750,7 @@ const validateDatabase = (
   }
 };
 
-export const validateCompatibleDatabase = Effect.fn("validateCompatibleDatabase")(
+const validateCompatibleDatabase = Effect.fn("validateCompatibleDatabase")(
   (
     path: string,
     options?: { readonly requireCurrent?: boolean },
@@ -1124,20 +1116,6 @@ export const readProjectRows = Effect.fn("readProjectRows")(
         )
         .all();
       return rows.map((row) => decodeSync(ImportProjectRow, row));
-    }),
-);
-
-export const readThreadRows = Effect.fn("readThreadRows")(
-  (path: string): Effect.Effect<ReadonlyArray<ImportThreadRow>, OfficialImportStorageError> =>
-    withDatabase(path, true, "read thread projections", (database) => {
-      const rows: ReadonlyArray<unknown> = database
-        .prepare(
-          `SELECT thread_id AS threadId, project_id AS projectId, updated_at AS updatedAt,
-                  deleted_at AS deletedAt
-           FROM projection_threads ORDER BY thread_id`,
-        )
-        .all();
-      return rows.map((row) => decodeSync(ImportThreadRow, row));
     }),
 );
 
@@ -1963,114 +1941,112 @@ const rollbackPreparedRestore = Effect.fn("rollbackPreparedOfficialImportRestore
   yield* rollbackRestoreAttachmentChanges(receipt.attachmentChanges);
 });
 
-export const restoreImportBackupWithinLock = Effect.fn("restoreImportBackupWithinLock")(
-  function* (input: {
-    readonly receiptPath: string;
-    readonly confirmation: string;
-  }): Effect.fn.Return<
-    { readonly receipt: ImportRestoreReceipt; readonly receiptPath: string },
-    OfficialImportStorageFailure,
-    FileSystem.FileSystem | Path.Path
-  > {
-    if (input.confirmation !== RESTORE_CONFIRMATION) {
-      return yield* new OfficialImportConfirmationError({ expected: RESTORE_CONFIRMATION });
-    }
-    const cutoverReceipt = yield* readCompleteCutoverReceipt(input.receiptPath);
-    const path = yield* Path.Path;
-    if (cutoverReceipt.backupDatabasePath !== null) {
-      yield* validateCompatibleDatabase(cutoverReceipt.backupDatabasePath);
-    }
-    yield* assertNoLiveImportServer("target", cutoverReceipt.targetDatabasePath);
-    const currentActivity = yield* readImportActivityState(cutoverReceipt.targetDatabasePath);
-    yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
-    const currentFingerprint = yield* fingerprintDatabase(cutoverReceipt.targetDatabasePath);
-    if (currentFingerprint !== cutoverReceipt.importedTargetFingerprint) {
-      return yield* new OfficialImportFingerprintMismatchError({
-        role: "target",
-        expected: cutoverReceipt.importedTargetFingerprint,
-        actual: currentFingerprint,
-      });
-    }
+const restoreImportBackupWithinLock = Effect.fn("restoreImportBackupWithinLock")(function* (input: {
+  readonly receiptPath: string;
+  readonly confirmation: string;
+}): Effect.fn.Return<
+  { readonly receipt: ImportRestoreReceipt; readonly receiptPath: string },
+  OfficialImportStorageFailure,
+  FileSystem.FileSystem | Path.Path
+> {
+  if (input.confirmation !== RESTORE_CONFIRMATION) {
+    return yield* new OfficialImportConfirmationError({ expected: RESTORE_CONFIRMATION });
+  }
+  const cutoverReceipt = yield* readCompleteCutoverReceipt(input.receiptPath);
+  const path = yield* Path.Path;
+  if (cutoverReceipt.backupDatabasePath !== null) {
+    yield* validateCompatibleDatabase(cutoverReceipt.backupDatabasePath);
+  }
+  yield* assertNoLiveImportServer("target", cutoverReceipt.targetDatabasePath);
+  const currentActivity = yield* readImportActivityState(cutoverReceipt.targetDatabasePath);
+  yield* failWhenActive("target", cutoverReceipt.targetDatabasePath, currentActivity);
+  const currentFingerprint = yield* fingerprintDatabase(cutoverReceipt.targetDatabasePath);
+  if (currentFingerprint !== cutoverReceipt.importedTargetFingerprint) {
+    return yield* new OfficialImportFingerprintMismatchError({
+      role: "target",
+      expected: cutoverReceipt.importedTargetFingerprint,
+      actual: currentFingerprint,
+    });
+  }
 
-    const createdAt = DateTime.formatIso(yield* DateTime.now);
-    const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
-    const restoredStagingPath = `${cutoverReceipt.targetDatabasePath}.restore-staging-${suffix}`;
-    const displacedDatabasePath = `${cutoverReceipt.targetDatabasePath}.restore-backup-${suffix}`;
-    const restoreReceiptPath = `${cutoverReceipt.targetDatabasePath}.restore-${suffix}.json`;
-    if (cutoverReceipt.backupDatabasePath !== null) {
-      yield* snapshotDatabase(cutoverReceipt.backupDatabasePath, restoredStagingPath);
-      yield* validateCompatibleDatabase(restoredStagingPath);
-    }
-    const restoredFingerprint =
-      cutoverReceipt.backupDatabasePath === null
-        ? null
-        : yield* fingerprintDatabase(restoredStagingPath);
-    const attachmentRoot = path.resolve(
-      path.dirname(cutoverReceipt.targetDatabasePath),
-      "attachments",
-    );
-    for (const change of cutoverReceipt.attachmentChanges) {
-      const relative = path.relative(attachmentRoot, path.resolve(change.targetPath));
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-        return yield* new OfficialImportStorageError({
-          operation: "validate imported attachment receipt",
-          path: change.targetPath,
-          reason: "attachment path is outside the target attachments directory",
-        });
-      }
-    }
-    const attachmentChanges = cutoverReceipt.attachmentChanges.map((change) => ({
-      targetPath: change.targetPath,
-      importedDisplacedPath: `${change.targetPath}.restore-backup-${suffix}`,
-      previousBackupPath: change.backupPath,
-      importedFingerprint: change.importedFingerprint,
-      previousFingerprint: change.previousFingerprint,
-    }));
-    const preparedReceipt: ImportRestoreReceipt = {
-      version: 2,
-      kind: "t3-turbo-official-import-restore",
-      status: "prepared",
-      createdAt,
-      targetDatabasePath: cutoverReceipt.targetDatabasePath,
-      restoredFromDatabasePath: cutoverReceipt.backupDatabasePath,
-      restoredStagingPath: cutoverReceipt.backupDatabasePath === null ? null : restoredStagingPath,
-      displacedDatabasePath,
-      attachmentChanges,
-      displacedAttachmentPaths: attachmentChanges.map((change) => change.importedDisplacedPath),
-      checkpointRefChanges: cutoverReceipt.checkpointRefChanges,
-      importedTargetFingerprint: cutoverReceipt.importedTargetFingerprint,
-      restoredFingerprint,
-    };
-    yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(preparedReceipt)).pipe(
-      Effect.mapError(storageError("persist prepared restore receipt", restoreReceiptPath)),
-    );
-    const result = yield* Effect.result(
-      Effect.gen(function* () {
-        yield* applyRestoreAttachmentChanges(attachmentChanges);
-        yield* rollbackImportCheckpointRefChanges(cutoverReceipt.checkpointRefChanges);
-        yield* moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath);
-        if (cutoverReceipt.backupDatabasePath !== null) {
-          yield* moveDatabaseFiles(restoredStagingPath, cutoverReceipt.targetDatabasePath);
-        }
-        const receipt: ImportRestoreReceipt = { ...preparedReceipt, status: "complete" };
-        yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(receipt)).pipe(
-          Effect.mapError(storageError("persist complete restore receipt", restoreReceiptPath)),
-        );
-        return { receipt, receiptPath: restoreReceiptPath };
-      }),
-    );
-    if (result._tag === "Success") return result.success;
-    const rollback = yield* Effect.result(rollbackPreparedRestore(preparedReceipt));
-    if (rollback._tag === "Failure") {
+  const createdAt = DateTime.formatIso(yield* DateTime.now);
+  const suffix = `${safeTimestamp(createdAt)}-${NodeCrypto.randomUUID().slice(0, 8)}`;
+  const restoredStagingPath = `${cutoverReceipt.targetDatabasePath}.restore-staging-${suffix}`;
+  const displacedDatabasePath = `${cutoverReceipt.targetDatabasePath}.restore-backup-${suffix}`;
+  const restoreReceiptPath = `${cutoverReceipt.targetDatabasePath}.restore-${suffix}.json`;
+  if (cutoverReceipt.backupDatabasePath !== null) {
+    yield* snapshotDatabase(cutoverReceipt.backupDatabasePath, restoredStagingPath);
+    yield* validateCompatibleDatabase(restoredStagingPath);
+  }
+  const restoredFingerprint =
+    cutoverReceipt.backupDatabasePath === null
+      ? null
+      : yield* fingerprintDatabase(restoredStagingPath);
+  const attachmentRoot = path.resolve(
+    path.dirname(cutoverReceipt.targetDatabasePath),
+    "attachments",
+  );
+  for (const change of cutoverReceipt.attachmentChanges) {
+    const relative = path.relative(attachmentRoot, path.resolve(change.targetPath));
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
       return yield* new OfficialImportStorageError({
-        operation: "roll back import restore",
-        path: cutoverReceipt.targetDatabasePath,
-        reason: `${causeMessage(result.failure)}; rollback also failed: ${causeMessage(rollback.failure)}`,
+        operation: "validate imported attachment receipt",
+        path: change.targetPath,
+        reason: "attachment path is outside the target attachments directory",
       });
     }
-    return yield* result.failure;
-  },
-);
+  }
+  const attachmentChanges = cutoverReceipt.attachmentChanges.map((change) => ({
+    targetPath: change.targetPath,
+    importedDisplacedPath: `${change.targetPath}.restore-backup-${suffix}`,
+    previousBackupPath: change.backupPath,
+    importedFingerprint: change.importedFingerprint,
+    previousFingerprint: change.previousFingerprint,
+  }));
+  const preparedReceipt: ImportRestoreReceipt = {
+    version: 2,
+    kind: "t3-turbo-official-import-restore",
+    status: "prepared",
+    createdAt,
+    targetDatabasePath: cutoverReceipt.targetDatabasePath,
+    restoredFromDatabasePath: cutoverReceipt.backupDatabasePath,
+    restoredStagingPath: cutoverReceipt.backupDatabasePath === null ? null : restoredStagingPath,
+    displacedDatabasePath,
+    attachmentChanges,
+    displacedAttachmentPaths: attachmentChanges.map((change) => change.importedDisplacedPath),
+    checkpointRefChanges: cutoverReceipt.checkpointRefChanges,
+    importedTargetFingerprint: cutoverReceipt.importedTargetFingerprint,
+    restoredFingerprint,
+  };
+  yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(preparedReceipt)).pipe(
+    Effect.mapError(storageError("persist prepared restore receipt", restoreReceiptPath)),
+  );
+  const result = yield* Effect.result(
+    Effect.gen(function* () {
+      yield* applyRestoreAttachmentChanges(attachmentChanges);
+      yield* rollbackImportCheckpointRefChanges(cutoverReceipt.checkpointRefChanges);
+      yield* moveDatabaseFiles(cutoverReceipt.targetDatabasePath, displacedDatabasePath);
+      if (cutoverReceipt.backupDatabasePath !== null) {
+        yield* moveDatabaseFiles(restoredStagingPath, cutoverReceipt.targetDatabasePath);
+      }
+      const receipt: ImportRestoreReceipt = { ...preparedReceipt, status: "complete" };
+      yield* writeJsonAtomic(restoreReceiptPath, encodeRestoreReceipt(receipt)).pipe(
+        Effect.mapError(storageError("persist complete restore receipt", restoreReceiptPath)),
+      );
+      return { receipt, receiptPath: restoreReceiptPath };
+    }),
+  );
+  if (result._tag === "Success") return result.success;
+  const rollback = yield* Effect.result(rollbackPreparedRestore(preparedReceipt));
+  if (rollback._tag === "Failure") {
+    return yield* new OfficialImportStorageError({
+      operation: "roll back import restore",
+      path: cutoverReceipt.targetDatabasePath,
+      reason: `${causeMessage(result.failure)}; rollback also failed: ${causeMessage(rollback.failure)}`,
+    });
+  }
+  return yield* result.failure;
+});
 
 export const recoverOfficialImportTransactionsWithinLock = Effect.fn(
   "recoverOfficialImportTransactionsWithinLock",

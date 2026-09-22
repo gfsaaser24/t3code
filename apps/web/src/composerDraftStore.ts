@@ -4118,13 +4118,6 @@ export function clearBackgroundDraftSubmissionByRef(threadRef: ScopedThreadRef):
   });
 }
 
-export function useBackgroundDraftSubmissionPending(threadRef: ScopedThreadRef | null): boolean {
-  const threadKey = threadRef ? scopedThreadKey(threadRef) : null;
-  return useComposerDraftStore(
-    (state) => threadKey !== null && state.backgroundSubmissionThreadKeys[threadKey] === true,
-  );
-}
-
 export function clearComposerDraftsEnvironment(environmentId: EnvironmentId): void {
   useComposerDraftStore.setState((state) => {
     const removedThreadKeys = new Set<string>();

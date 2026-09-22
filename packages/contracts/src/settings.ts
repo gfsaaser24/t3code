@@ -281,8 +281,8 @@ export type TurboChatPaneTarget = typeof TurboChatPaneTarget.Type;
  * express. Restoring normalizes the row, so a partially written or hand-edited
  * set still resolves to usable widths.
  */
-export const MIN_TURBO_CHAT_PANE_WEIGHT = 0.05;
-export const MAX_TURBO_CHAT_PANE_WEIGHT = 20;
+const MIN_TURBO_CHAT_PANE_WEIGHT = 0.05;
+const MAX_TURBO_CHAT_PANE_WEIGHT = 20;
 export const TurboChatPaneWeight = Schema.Number.check(
   Schema.isBetween({
     minimum: MIN_TURBO_CHAT_PANE_WEIGHT,

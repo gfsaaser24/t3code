@@ -865,7 +865,7 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
-export function parseTimestampMs(isoDate: string): number {
+function parseTimestampMs(isoDate: string): number {
   const parsed = Date.parse(isoDate);
   return Number.isNaN(parsed) ? 0 : parsed;
 }

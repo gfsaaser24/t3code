@@ -268,9 +268,8 @@ export const fingerprintOfficialImportEvent = (event: OrchestrationEvent): strin
   return sha256(canonicalJson(stableEvent));
 };
 
-export const fingerprintOfficialImportStream = (
-  events: ReadonlyArray<OrchestrationEvent>,
-): string => sha256(canonicalJson(events.map(fingerprintOfficialImportEvent)));
+const fingerprintOfficialImportStream = (events: ReadonlyArray<OrchestrationEvent>): string =>
+  sha256(canonicalJson(events.map(fingerprintOfficialImportEvent)));
 
 const headFingerprint = (events: ReadonlyArray<OrchestrationEvent>): string | null => {
   const event = events.at(-1);

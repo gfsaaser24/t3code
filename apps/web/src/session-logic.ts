@@ -349,51 +349,6 @@ export function deriveActivePlanState(
   return addPlanStepDurations(plan, matchingActivities.slice(latestClearIndex + 1));
 }
 
-export interface TurnPlanEntry {
-  /** Stable per-turn row id (plans rewrite constantly; the row must not churn). */
-  id: string;
-  /** Anchor timestamp: the turn's FIRST plan activity, so the chip renders where planning began. */
-  createdAt: string;
-  turnId: TurnId | null;
-  plan: ActivePlanState;
-}
-
-/**
- * One inline plan chip per turn that produced plan/todo steps: the latest
- * snapshot for the turn, anchored at the first snapshot's timestamp. Turn-less
- * plan activities collapse into a single chip keyed by thread order.
- */
-export function deriveTurnPlans(
-  ordered: ReadonlyArray<OrchestrationThreadActivity>,
-): TurnPlanEntry[] {
-  const byTurn = new Map<string, TurnPlanEntry>();
-  for (const activity of ordered) {
-    if (activity.kind !== "turn.plan.updated") {
-      continue;
-    }
-    const plan = planStateFromActivity(activity);
-    const key = activity.turnId ?? "no-turn";
-    if (!plan) {
-      // A later snapshot with no steps clears the turn's plan; keeping the
-      // stale entry would freeze the chip on a withdrawn plan.
-      byTurn.delete(key);
-      continue;
-    }
-    const existing = byTurn.get(key);
-    if (existing) {
-      existing.plan = plan;
-    } else {
-      byTurn.set(key, {
-        id: `turn-plan:${key}`,
-        createdAt: activity.createdAt,
-        turnId: activity.turnId,
-        plan,
-      });
-    }
-  }
-  return [...byTurn.values()];
-}
-
 /** The order both proposed-plan picks used to sort by: updatedAt, then id.
     The id tiebreak stays on `localeCompare` — ids are not fixed width. */
 function compareProposedPlanOrder(left: ProposedPlan, right: ProposedPlan): number {

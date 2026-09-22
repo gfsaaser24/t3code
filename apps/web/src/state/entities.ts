@@ -26,9 +26,6 @@ const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
 );
-const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
-  Atom.withLabel("web-thread-refs:empty"),
-);
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("web-thread-shell:empty"),
 );
@@ -54,16 +51,6 @@ export function setActiveEnvironmentId(environmentId: EnvironmentId | null): voi
 
 export function useThreadRefs(): ReadonlyArray<ScopedThreadRef> {
   return useAtomValue(environmentThreadShells.threadRefsAtom);
-}
-
-export function useEnvironmentThreadRefs(
-  environmentId: EnvironmentId | null,
-): ReadonlyArray<ScopedThreadRef> {
-  return useAtomValue(
-    environmentId === null
-      ? EMPTY_THREAD_REFS_ATOM
-      : environmentThreadShells.environmentThreadRefsAtom(environmentId),
-  );
 }
 
 export function useProjects(): ReadonlyArray<EnvironmentProject> {

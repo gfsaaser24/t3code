@@ -29,6 +29,9 @@
       // Keep the transitive Effect runtime pinned for standalone npm installs.
       // The Vite+ web build prerequisite.
       "ignoreDependencies": ["@effect/platform-node-shared", "@t3tools/web"],
+      // The `shell-snapshot-budget` seam pins these two TTLs as exported
+      // constants (.t3-turbo/customizations.json), so they stay exported.
+      "ignoreIssues": { "src/project/RepositoryIdentityResolver.ts": ["exports"] },
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.
@@ -55,7 +58,11 @@
       // UI component modules are copied and adapted as cohesive sets. Keep their
       // named subcomponents even before they have callers; the file audit still
       // reports an entire component module when nothing imports it.
-      "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
+      "ignoreIssues": {
+        "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"],
+        // A fork seam pins `export function useStreamingCodeStall` verbatim.
+        "src/turbo/streamingCodeBlock.tsx": ["exports"],
+      },
     },
     "apps/mobile": {
       // Expo loads plugins by string; Metro embeds the browser entry in the native WebView.
@@ -82,6 +89,15 @@
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
+    },
+    "packages/client-runtime": {
+      "includeEntryExports": true,
+      // Fork seams pin both the exported timeout constant and the
+      // `compareThreadActivities`/`threadActivityOrder` name pair.
+      "ignoreIssues": {
+        "src/state/shellSnapshotHttp.ts": ["exports"],
+        "src/state/threadActivityOrder.ts": ["duplicates"],
+      },
     },
     "packages/effect-acp": {
       "includeEntryExports": true,
