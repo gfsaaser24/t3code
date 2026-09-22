@@ -35,7 +35,12 @@ fails without PlanetScale credentials.
   against it. `deploy-relay.yml` therefore runs `infra/relay/scripts/apply-external-migrations.ts`
   before `alchemy deploy`: each folder under `infra/relay/migrations/postgres` is applied once and
   recorded in `relay_external_migrations`; `RELAY_EXTERNAL_MIGRATIONS_BASELINE` marks the folders
-  the original `schema.sql` bootstrap already covered.
+  the original `schema.sql` bootstrap already covered. The Supabase host only admits Cloudflare
+  ranges, so from a GitHub runner this step times out; until the database is reachable from CI,
+  apply the pending folders on the host (`docker exec supabase-db psql -U postgres -d postgres
+-v ON_ERROR_STOP=1 -f <file>` with the same statements and ledger inserts the script would run)
+  and dispatch `deploy-relay.yml` with `skip_external_migrations: true`. The 2026-09-22 deploy
+  did exactly this for `20260906042516_android_devices` and `20260918175607_long_thread_ids`.
 - Dedicated `relay_runtime` database role with `service_role` membership.
 - A TLS database endpoint reachable by Hyperdrive and limited to Cloudflare IP ranges, or an
   approved private-database Tunnel/VPC path.
