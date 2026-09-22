@@ -108,11 +108,11 @@ describe("electron development launcher", () => {
 
     assert.equal(
       values.NSScreenCaptureUsageDescription,
-      "T3 Code captures the active window when you use the snapshot shortcut.",
+      "T3 Turbo captures the active window when you use the snapshot shortcut.",
     );
     assert.equal(
       values.NSDocumentsFolderUsageDescription,
-      "T3 Code reads project files you open in the desktop app.",
+      "T3 Turbo reads project files you open in the desktop app.",
     );
   });
 
