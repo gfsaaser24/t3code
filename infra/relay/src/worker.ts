@@ -13,7 +13,6 @@ import * as Etag from "effect/unstable/http/Etag";
 import * as HttpPlatform from "effect/unstable/http/HttpPlatform";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
-import * as HttpApiScalar from "effect/unstable/httpapi/HttpApiScalar";
 
 import { RelayApi } from "@t3tools/contracts/relay";
 
@@ -27,7 +26,6 @@ import {
   relayClientAuthLayer,
   relayDpopClientAuthLayer,
   relayCors,
-  relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
   serverApi,
@@ -385,11 +383,9 @@ export const ApiLive = Api.make(
 
     const fetch = Layer.merge(
       Layer.mergeAll(
-        HttpApiBuilder.layer(RelayApi, { openapiPath: "/openapi.json" }).pipe(
-          Layer.provide(appLayer),
-        ),
-        HttpApiScalar.layer(RelayApi, { path: "/docs" }),
-        relayDocsRedirectRoute,
+        // T3 Turbo: no public API reference. The self-hosted relay serves no /docs, /openapi.json,
+        // or `/` redirect; those paths fall through to relayNotFoundRoute.
+        HttpApiBuilder.layer(RelayApi).pipe(Layer.provide(appLayer)),
       ).pipe(Layer.provide([Etag.layerWeak, httpPlatformNotSupportedLayer, relayCors])),
       relayNotFoundRoute,
     ).pipe(

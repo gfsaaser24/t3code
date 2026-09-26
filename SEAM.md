@@ -64,6 +64,10 @@ TURBO_RESTYLE_OVERRIDES` (6 fork className overrides on components/ui exports). 
   `AgentActivityPublisherApnsDisabled.layer` over `AgentActivityPublisher.layer`. On conflict, take
   upstream's `runtimeLayer` and re-swap only that one `Layer.provideMerge` argument for
   `agentActivityPublisherLayer`.
+- **Removed** relay public API reference in `infra/relay/src/worker.ts` — the self-hosted relay
+  mounts `HttpApiBuilder.layer(RelayApi)` without `openapiPath` and drops `HttpApiScalar` and
+  `relayDocsRedirectRoute`, so `/docs`, `/openapi.json`, and `/` return 404. On conflict, keep
+  upstream's layer list and re-drop only those three entries.
 - **Tuned** `infra/relay/src/environments/EnvironmentConnector.ts` —
   `ENVIRONMENT_MINT_REQUEST_TIMEOUT_MS` is 7s so the mint budget can actually expire inside the
   relay's 9s `RELAY_REQUEST_DEADLINE_MS`; upstream's 10s never fires. On conflict, keep the

@@ -159,6 +159,7 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "relay-apns-off-publish-skip",
     "relay-auth-and-link-memos",
     "relay-external-migrations",
+    "relay-no-public-api-docs",
     "relay-policy",
     "relay-request-budget-and-clerk-client",
     "release-from-turbo-branch",
