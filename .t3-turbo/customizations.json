@@ -871,9 +871,7 @@
         },
         {
           "path": "SEAM.md",
-          "markers": [
-            "**Removed** relay public API reference in `infra/relay/src/worker.ts`"
-          ]
+          "markers": ["**Removed** relay public API reference in `infra/relay/src/worker.ts`"]
         }
       ]
     },
