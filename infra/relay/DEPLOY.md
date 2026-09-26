@@ -191,12 +191,13 @@ reconciliation; Actions and Alchemy output must never print it.
 
 ## Post-deploy verification
 
-### Public readiness and documentation
+### Public readiness
 
 ```sh
 cloudflared access curl https://relay.t3turbo.pro/health
-cloudflared access curl https://relay.t3turbo.pro/openapi.json >/dev/null
-cloudflared access curl https://relay.t3turbo.pro/docs >/dev/null
+# The fork serves no API reference; both must return 404.
+curl -s -o /dev/null -w "%{http_code}\n" https://relay.t3turbo.pro/docs
+curl -s -o /dev/null -w "%{http_code}\n" https://relay.t3turbo.pro/openapi.json
 ```
 
 Expected health response:

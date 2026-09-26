@@ -8,6 +8,9 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **Relay: no public API reference.** `relay.t3turbo.pro/docs`, `/openapi.json`, and the `/`
+  redirect now return 404 (new seam `relay-no-public-api-docs`). Relay-only change; ships with
+  the next `deploy-relay.yml` run.
 - **0.0.53: ingest upstream through v0.0.43-nightly.20260922.2110 and main `f25a8e4b7`
   (c0ebc882b..f25a8e4b7, 1110 commits; stable v0.0.39, v0.0.40, v0.0.42 included).** Opus 5.5 is
   added to the Claude catalog, GPT-6-Astra and Fable 5.1 default to medium reasoning, and every

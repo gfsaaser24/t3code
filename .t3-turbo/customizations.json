@@ -858,6 +858,26 @@
       ]
     },
     {
+      "id": "relay-no-public-api-docs",
+      "status": "implemented",
+      "summary": "The self-hosted relay publishes no API reference: /docs, /openapi.json and the / redirect are not mounted and fall through to 404.",
+      "checks": [
+        {
+          "path": "infra/relay/src/worker.ts",
+          "markers": [
+            "// T3 Turbo: no public API reference.",
+            "HttpApiBuilder.layer(RelayApi).pipe(Layer.provide(appLayer)),"
+          ]
+        },
+        {
+          "path": "SEAM.md",
+          "markers": [
+            "**Removed** relay public API reference in `infra/relay/src/worker.ts`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "relay-policy",
       "status": "policy",
       "summary": "Relay, portal, tunnel, and self-host infrastructure retain separate ownership and credential boundaries.",
