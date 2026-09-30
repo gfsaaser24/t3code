@@ -603,7 +603,7 @@ describe("buildCodexAdditionalContext", () => {
     const context = buildCodexAdditionalContext(runtime);
 
     NodeAssert.equal(context.t3_code_runtime?.kind, "application");
-    NodeAssert.match(runtimeValue(context), /running in T3 Turbo/);
+    NodeAssert.match(runtimeValue(context), /running in T3 Code/);
     NodeAssert.match(
       runtimeValue(context),
       /<runtime_info>.*Codex harness, as gpt-5\.3-codex with high reasoning effort.*embed images and videos.*Markdown.*<\/runtime_info>/,
