@@ -517,6 +517,12 @@ export const transformOfficialImportEvent = (
         ...base,
         payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
       };
+    case "thread.auto-settle-set":
+      return {
+        ...event,
+        ...base,
+        payload: { ...event.payload, threadId: remap(idMap.threadIds, event.payload.threadId) },
+      };
     case "thread.runtime-mode-set":
       return {
         ...event,
@@ -765,6 +771,7 @@ const visitOfficialImportEventIdentities = (
       case "thread.unsettled":
       case "thread.snoozed":
       case "thread.unsnoozed":
+      case "thread.auto-settle-set":
       case "thread.runtime-mode-set":
       case "thread.interaction-mode-set":
       case "thread.checkpoint-revert-requested":

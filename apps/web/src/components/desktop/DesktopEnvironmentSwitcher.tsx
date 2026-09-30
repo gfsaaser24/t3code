@@ -176,15 +176,14 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
         onValueChange={handleValueChange}
         items={options.map((option) => ({ value: option.environmentId, label: option.label }))}
       >
-        <SelectTrigger
-          variant="ghost"
-          size="xs"
-          className="max-w-36 font-medium"
-          aria-label="Environment"
-        >
-          <EnvironmentIcon kind={selected.kind} />
-          <SelectValue />
-        </SelectTrigger>
+        {/* The trigger owns its typography; the medium label weight inherits from this
+            layout-neutral wrapper. */}
+        <span className="contents font-medium">
+          <SelectTrigger variant="ghost" size="xs" className="max-w-36" aria-label="Environment">
+            <EnvironmentIcon kind={selected.kind} />
+            <SelectValue />
+          </SelectTrigger>
+        </span>
         <SelectPopup>
           <SelectGroup>
             <SelectGroupLabel>Environment</SelectGroupLabel>
@@ -226,7 +225,7 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
               again. It never connects to or runs a second T3 instance.
             </DialogDescription>
           </DialogHeader>
-          <DialogPanel className="space-y-4">
+          <DialogPanel>
             {result?.status === "needs-collision-choices" ? (
               <div className="space-y-3">
                 <p className="text-sm text-muted-foreground">{result.message}</p>
@@ -269,7 +268,7 @@ export const DesktopEnvironmentSwitcher = memo(function DesktopEnvironmentSwitch
                 </div>
               </div>
             ) : result?.status === "imported" ? (
-              <div className="space-y-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
+              <div className="space-y-2 rounded-md border border-success/30 bg-success/5 p-3 text-sm">
                 <p>
                   Imported {result.importedEventCount} events and {result.copiedAttachmentCount}{" "}
                   attachments. Turbo has restarted with the merged database.

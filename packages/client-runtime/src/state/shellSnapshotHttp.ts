@@ -12,14 +12,18 @@ import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { executeAuthenticatedEnvironmentHttpRequest } from "./environmentHttpAuth.ts";
 
-// Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
-// fallback for long. The cached shell renders while this runs.
+// Long enough for a slow but alive server to finish. On timeout the socket asks
+// the same server for the same full snapshot, so a short deadline only throws
+// the first build away. The socket fallback is for setups where /api fails but
+// /ws works, such as a proxy that blocks /api. A dead server is caught by the
+// socket ping, which drops the session and interrupts this load. The cached
+// shell renders while this runs.
 //
-// Turbo (shell-snapshot-budget): upstream gives this 6s. On a large install
+// Turbo (shell-snapshot-budget): upstream gives this 20s. On a large install
 // (30 projects, 130+ worktrees) the snapshot spent 7-13s resolving repository
-// identities behind git polling and was cancelled every time, so the sidebar
-// stayed on its cached list and deletes/settles never showed. 30s keeps the
-// authoritative list reachable; the cached shell still renders meanwhile.
+// identities behind git polling, and a busier event loop pushes that further.
+// 30s keeps the authoritative list reachable; the cached shell still renders
+// meanwhile.
 export const DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS = 30_000;
 
 /**

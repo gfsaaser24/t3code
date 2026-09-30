@@ -32,7 +32,7 @@ export function ChatPaneControl() {
               type="button"
               size="xs"
               variant="outline"
-              className="w-7 px-0 sm:w-6 @3xl/header-actions:w-auto! @3xl/header-actions:px-[calc(--spacing(2)-1px)]"
+              className="w-7 sm:w-6 @3xl/header-actions:w-auto!"
               aria-label="Start a new chat"
               // The tooltip wrapper replaces data-slot="button", so themed
               // toolbar styling needs its own hook.

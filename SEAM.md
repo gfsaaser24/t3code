@@ -22,9 +22,10 @@ fork's change.
   groups.
 - **Optional** `infra/relay/alchemy.run.ts` — provider layers and tracing outputs exist only when
   configured.
-- **Tuned** `scripts/lint-restyle-ceiling.ts` — `RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING +
-TURBO_RESTYLE_OVERRIDES` (6 fork className overrides on components/ui exports). On conflict,
-  take upstream's new number into `UPSTREAM_RESTYLE_CEILING` and keep the sum.
+- **Retired 2026-09-29** `scripts/lint-restyle-ceiling.ts` (seam `restyle-ceiling-fork-delta`) —
+  upstream #13210 deleted the ceiling gate and made `shadcn/no-restyle` a lint error in
+  `vite.config.ts`. There is no ceiling left to tune; fork UI must use variants/sizes like upstream
+  code. On conflict, do not resurrect the script.
 - **Additive** `infra/relay/scripts/apply-external-migrations.ts` (+ test) — applies
   `infra/relay/migrations/postgres` to the self-hosted Supabase Postgres from `deploy-relay.yml`
   before `alchemy deploy`, one transaction per folder, ledger table `relay_external_migrations`,
@@ -536,7 +537,7 @@ settles "do nothing".
 Two fork-owned constants, no product behavior change:
 
 - **`packages/client-runtime/src/state/shellSnapshotHttp.ts`** - `DEFAULT_SHELL_SNAPSHOT_TIMEOUT_MS`
-  is 30s (upstream: 6s) and exported. The cached shell still renders while the request runs.
+  is 30s (upstream: 6s, raised to 20s and made private in the 2026-09-30 ingest) and exported. The cached shell still renders while the request runs.
 - **`apps/server/src/project/RepositoryIdentityResolver.ts`** - `DEFAULT_POSITIVE_CACHE_TTL` is 12h
   and `DEFAULT_NEGATIVE_CACHE_TTL` is 10min (upstream: 1min each), both exported. A repository's
   remote does not change minute to minute, the identity is cosmetic (PR links, icons), and a

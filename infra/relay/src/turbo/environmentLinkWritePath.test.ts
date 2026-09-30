@@ -79,8 +79,9 @@ function unlinkLayer(
       ManagedEndpointProvider.ManagedEndpointProvider,
       ManagedEndpointProvider.ManagedEndpointProvider.of({
         provision: () => Effect.die("unused provision"),
+        reconcileOrigin: () => Effect.die("unused reconcileOrigin"),
         prepareDeprovision: () => Effect.succeed(null),
-        deprovision: () => Effect.void,
+        deprovision: () => Effect.succeed(true),
         release: () => Effect.die("unused release"),
       }),
     ),

@@ -1207,21 +1207,6 @@
       ]
     },
     {
-      "id": "restyle-ceiling-fork-delta",
-      "status": "implemented",
-      "summary": "Upstream's shadcn no-restyle ceiling counts upstream code only; the fork's own UI adds a fixed number of className overrides, expressed as UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES so upstream changes to the ceiling merge cleanly.",
-      "checks": [
-        {
-          "path": "scripts/lint-restyle-ceiling.ts",
-          "markers": [
-            "export const UPSTREAM_RESTYLE_CEILING = ",
-            "export const TURBO_RESTYLE_OVERRIDES = 6;",
-            "export const RESTYLE_CEILING = UPSTREAM_RESTYLE_CEILING + TURBO_RESTYLE_OVERRIDES;"
-          ]
-        }
-      ]
-    },
-    {
       "id": "release-from-turbo-branch",
       "status": "policy",
       "summary": "Scheduled and dispatched releases build, tag, and finalize from the fork's turbo mainline instead of the main branch that only tracks upstream, so published installers carry the fork's code and version.",

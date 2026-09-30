@@ -247,7 +247,7 @@ export function ChatPaneWorkspace({ fallback }: { readonly fallback: ReactNode }
 
   return (
     <DiffWorkerPoolProvider>
-      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
+      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none md:h-dvh">
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden" data-chat-pane-workspace="">
           {layout.panes.map((pane, index) => {
             const isFocused = pane.id === layout.focusedPaneId;
