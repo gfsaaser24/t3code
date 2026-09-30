@@ -592,13 +592,13 @@ export const make = Effect.gen(function* () {
         const demandCwds = yield* Ref.get(demandCwdsRef);
         const shouldRun =
           needsInitialRefresh ||
-          (yield* Effect.all(
-            [...demandCwds.keys()].map((demandCwd) =>
+          (yield* Effect.forEach(
+            [...demandCwds.keys()],
+            (demandCwd) =>
               backgroundPolicy.shouldRunScopeWork({
                 type: "vcs-status",
                 cwd: demandCwd,
               }),
-            ),
             { concurrency: REMOTE_STATUS_REFRESH_CONCURRENCY },
           )).some(Boolean);
         if (!shouldRun) {

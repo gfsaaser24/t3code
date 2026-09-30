@@ -19,7 +19,7 @@ import {
   sortSettledThreadsForSidebar,
   sortSnoozedThreadsForSidebar,
 } from "../components/Sidebar.logic";
-import { resolveSettledThreadTimestamp as resolveSettledTimestamp } from "../lib/threadSort";
+import { resolveSettledThreadTimestamp as resolveSettledTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import { compareIsoTimestamps } from "@t3tools/client-runtime/state/thread-activity-order";
 
 /** Deterministic LCG: the corpora must be identical on every machine.

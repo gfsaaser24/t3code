@@ -8,6 +8,24 @@ per-commit — the ingestion PR entry records the upstream range instead.
 
 ## Unreleased — on `turbo`, not yet in a shipped build
 
+- **0.0.54: ingest upstream main `0fcd5f906` (f25a8e4b7..0fcd5f906, 243 commits, past
+  v0.0.44 and v0.0.44-nightly.20260929.2456).** Codex plan types are now free strings, so
+  ChatGPT Pro Max and self-serve business plans no longer mark Codex "Unavailable" (#14304), with
+  Codex 0.159 protocol bindings (#14311) and managed ChatGPT authentication (#14290); the local
+  `codex-planfix` wrapper on the PC and T3 Cloud can be removed once this build is installed.
+  Also: Claude Sonnet 5.5, per-thread auto-settle switch (new `thread.auto-settle-set` event —
+  the fork's official-import planner now remaps it), chat width setting, run shell commands from
+  chat, background thread sync on desktop, Linux `.deb` that updates itself, idle-wakeup and
+  thread-list perf batch, background git fetches no longer fill the disk. Relay: tunnels are
+  removed after hosts go offline (#9386) with one new Postgres migration,
+  `20260919015455_managed_endpoint_recovery` — apply it on the Supabase host before the relay
+  deploy — and a new `RELAY_TUNNEL_CLEANUP_MODE` variable (unset = off). Seam changes: RETIRED
+  `restyle-ceiling-fork-delta` (upstream #13210 deleted the ceiling script and made the shadcn
+  restyle rules hard errors; the fork's chat panes, environment switcher, and OpenRouter icon now
+  conform — one scoped inline disable remains on the OpenRouter icon); `shell-snapshot-budget`
+  kept (upstream raised its timeout from 6 s to 20 s, fork keeps 30 s and the 12 h identity
+  cache); settled-thread sort marked as a retire candidate (upstream #13759 does the same).
+  Seams 30 / 179 checks. Fork `main` gets its own merge PR.
 - **Relay: no public API reference.** `relay.t3turbo.pro/docs`, `/openapi.json`, and the `/`
   redirect now return 404 (new seam `relay-no-public-api-docs`). Relay-only change; ships with
   the next `deploy-relay.yml` run.

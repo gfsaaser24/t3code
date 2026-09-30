@@ -163,7 +163,6 @@ it("verifies the checked-in Turbo manifest and tracks the implemented multi-chat
     "relay-policy",
     "relay-request-budget-and-clerk-client",
     "release-from-turbo-branch",
-    "restyle-ceiling-fork-delta",
     "settled-lifecycle-sticky-pin",
     "shared-sha256-base64url",
     "shell-snapshot-budget",
