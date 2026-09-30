@@ -3,9 +3,17 @@ name: Deploy T3 Connect relay
 # T3 Turbo: production relay deploys run from the fork's product mainline (`turbo`), where the
 # relay source actually changes. This branch has diverged from it, so a push-triggered deploy here
 # would ship stale relay code over the live one — it is how the speed-plan relay work stayed out of
-# production. Manual dispatch only.
+# production. No push trigger here, and the job below only runs on `turbo`.
 on:
+  # Alchemy does not redeploy the Worker when only a Config value read in its
+  # Init changes (alchemy-run/alchemy#1831), so a changed repository variable
+  # needs a forced deploy to reach production.
   workflow_dispatch:
+    inputs:
+      force:
+        description: Redeploy every resource, including ones with no detected changes
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -19,6 +27,9 @@ concurrency:
 jobs:
   deploy_relay:
     name: Deploy production relay
+    # A manual run from another branch would deploy that branch to production. The fork's
+    # production branch is `turbo`, so a run from this branch never deploys.
+    if: github.ref == 'refs/heads/turbo'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
@@ -36,6 +47,7 @@ jobs:
       RELAY_DOMAIN: ${{ vars.RELAY_DOMAIN }}
       RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
       RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
+      RELAY_TUNNEL_CLEANUP_MODE: ${{ vars.RELAY_TUNNEL_CLEANUP_MODE }}
       CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
       # Optional iOS push; an incomplete APNS_* set disables the APNs resources and runtime.
@@ -95,7 +107,7 @@ jobs:
 
       - name: Deploy production relay stage
         if: steps.cloudflare_config.outputs.enabled == 'true'
-        run: vp run --filter t3code-relay deploy --stage prod --yes --no-input
+        run: vp run --filter t3code-relay deploy --stage prod --yes --no-input ${{ inputs.force && '--force' || '' }}
         env:
           # The PublishClientConfig action writes the client env here instead
           # of the repo-root .env; nothing on the runner reads it.
