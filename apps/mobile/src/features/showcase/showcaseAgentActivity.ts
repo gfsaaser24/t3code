@@ -8,6 +8,7 @@ import type {
   AgentActivityProps,
   AgentActivityRowProps,
 } from "../../widgets/AgentActivity";
+import { MOBILE_PRODUCT_NAME } from "../../lib/mobileBranding";
 
 /**
  * Agent work shown by the agent-activity scene. The rows point at
@@ -74,7 +75,7 @@ export function buildShowcaseAgentActivity(
     });
   }
   return {
-    title: "T3 Code",
+    title: MOBILE_PRODUCT_NAME,
     subtitle: "Agent work in progress",
     activeCount: rows.filter((row) => ACTIVE_PHASES.has(row.phase)).length,
     updatedAt: new Date(now).toISOString(),
