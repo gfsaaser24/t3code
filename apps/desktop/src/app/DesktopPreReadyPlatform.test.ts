@@ -49,6 +49,7 @@ vi.mock("node:fs", () => ({
   copyFileSync: copyFileSyncMock,
 }));
 
+import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 
 describe("DesktopPreReadyPlatform", () => {
@@ -89,11 +90,12 @@ describe("DesktopPreReadyPlatform", () => {
         vi.stubEnv("XDG_DATA_HOME", "/xdg");
         vi.stubEnv("APPIMAGE", "/Applications/current.AppImage");
         getSwitchValueMock.mockReturnValue("");
+        const expectedIconPath = `/xdg/icons/${resolveLinuxDesktopEntryName(false)}.png`;
         let desktopName = "t3code.desktop";
         let desktopEntry = previousEntry;
         let iconInstalled = false;
         copyFileSyncMock.mockImplementation((_source: string, destination: string) => {
-          iconInstalled = destination === "/xdg/icons/com.t3tools.T3Code.desktop.png";
+          iconInstalled = destination === expectedIconPath;
         });
         setDesktopNameMock.mockImplementation((name: string) => {
           desktopName = name;
@@ -119,10 +121,7 @@ describe("DesktopPreReadyPlatform", () => {
             assert.include(identity.desktopEntry ?? "", 'Exec="/Applications/current.AppImage" %U');
             assert.include(identity.desktopEntry ?? "", "Name=T3 Turbo");
             assert.include(identity.desktopEntry ?? "", "MimeType=x-scheme-handler/t3code;");
-            assert.include(
-              identity.desktopEntry ?? "",
-              "Icon=/xdg/icons/com.t3tools.T3Code.desktop.png",
-            );
+            assert.include(identity.desktopEntry ?? "", `Icon=${expectedIconPath}`);
             assert.isTrue(identity.iconInstalled);
           }),
         ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
