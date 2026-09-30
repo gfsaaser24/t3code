@@ -368,6 +368,9 @@ Built to survive orchestrator v2 (pingdotgg/t3code#2829):
   `components/chat/providerIconUtils.ts`, `components/settings/providerDriverMeta.ts`,
   `session-logic.ts` (picker option), `composerDraftStore.ts` (provider option keys), and
   `lib/contextWindow.ts` (display name).
+- **Additive** `apps/server/src/provider/model-manifest.json` — an `openrouter` bundled
+  compatibility policy mirroring `claudeAgent` (the driver probes the same `claude` binary), so
+  every built-in harness has a bundled policy.
 - **Additive, V1-shim (retires at v2 cutover)** `Drivers/OpenRouterDriver.ts` — the
   `ProviderDriver` registration. v2's `ClaudeAdapterV2` already imports the same
   `makeClaudeEnvironment`/`mergeProviderInstanceEnvironment` plumbing and accepts per-instance
@@ -377,7 +380,8 @@ Built to survive orchestrator v2 (pingdotgg/t3code#2829):
   driver identity on events and sessions, keeping the churn-heavy file merge-clean.
 
 On a nightly-sync conflict: everything here is additive except `builtInDrivers.ts`,
-`settings.ts`/`model.ts` map entries, and the six web wiring files above — re-add the fork lines
+`settings.ts`/`model.ts` map entries, the `model-manifest.json` policy entry, and the six web
+wiring files above — re-add the fork lines
 after upstream's. If upstream ships its own OpenRouter or the ACP registry (#6071) covers it,
 prefer upstream and retire the shim first.
 

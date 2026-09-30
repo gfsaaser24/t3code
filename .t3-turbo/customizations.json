@@ -1175,6 +1175,10 @@
         {
           "path": "apps/web/src/components/chat/providerIconUtils.ts",
           "markers": ["[ProviderDriverKind.make(\"openrouter\")]: OpenRouterIcon,"]
+        },
+        {
+          "path": "apps/server/src/provider/model-manifest.json",
+          "markers": ["\"driver\": \"openrouter\""]
         }
       ]
     },
