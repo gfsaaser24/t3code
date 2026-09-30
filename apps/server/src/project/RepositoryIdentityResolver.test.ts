@@ -163,7 +163,7 @@ it.layer(NodeServices.layer)("RepositoryIdentityResolverLive", (it) => {
       expect(yield* resolver.resolve("/repo/packages/web")).toBeNull();
       expect(yield* resolver.resolve("/repo/packages/web")).toBeNull();
 
-      yield* TestClock.adjust(Duration.minutes(1));
+      yield* TestClock.adjust(RepositoryIdentityResolver.DEFAULT_NEGATIVE_CACHE_TTL);
       const recovered = yield* resolver.resolve("/repo/packages/web");
       expect(recovered?.rootPath).toBe("/repo");
       expect(calls).toEqual([
