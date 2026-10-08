@@ -9,7 +9,17 @@ name: Deploy relay2 (upstream main relay, self-hosted)
 #     `main-*.t3turbo.pro`; production's are `...-prod-*` / `prod-*`.
 #   - Tunnel cleanup is OFF for both reapers, so this relay never deletes a tunnel.
 # Manual only. It never deploys stage `prod`.
+#
+# GitHub only dispatches workflows that exist on the default branch, so until this
+# workflow has run once, start it by pushing a change to `.github/relay2-deploy`
+# on this branch (nothing else triggers it). After the first run,
+# `gh workflow run deploy-relay-main.yml --ref infra/relay-main` also works.
 on:
+  push:
+    branches:
+      - infra/relay-main
+    paths:
+      - .github/relay2-deploy
   workflow_dispatch:
     inputs:
       run_external_migrations:
