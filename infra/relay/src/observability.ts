@@ -2,13 +2,29 @@ import * as Alchemy from "alchemy";
 import * as Axiom from "alchemy/Axiom";
 import * as Output from "alchemy/Output";
 import * as Cause from "effect/Cause";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Tracer from "effect/Tracer";
 
 import { relayResourceNameForStage } from "./deploymentConfig.ts";
+
+const axiomConfiguration = Config.all({
+  orgId: Config.NonEmptyString("AXIOM_ORG_ID"),
+  token: Config.NonEmptyString("AXIOM_TOKEN").pipe(Config.map(Redacted.make)),
+});
+
+/**
+ * Self-hosting: Axiom is optional. Without the complete `AXIOM_ORG_ID` and
+ * `AXIOM_TOKEN` pair the relay provisions no Axiom resources and exports no traces.
+ */
+export const AxiomConfiguration = axiomConfiguration.pipe(
+  Config.map(Option.some),
+  Config.orElse(() => Config.succeed(Option.none<Config.Success<typeof axiomConfiguration>>())),
+);
 
 const relayRecentSpansQuery = (dataset: string) =>
   [
@@ -22,6 +38,10 @@ const relayRecentSpansQuery = (dataset: string) =>
   ].join("\n");
 
 export const RelayObservability = Effect.gen(function* () {
+  if (Option.isNone(yield* AxiomConfiguration)) {
+    return { enabled: false as const };
+  }
+
   const { stage } = yield* Alchemy.Stack;
   const traces = yield* Axiom.Dataset("RelayTracesDataset", {
     name: relayResourceNameForStage("t3-code-relay-traces", stage),
@@ -62,7 +82,13 @@ export const RelayObservability = Effect.gen(function* () {
     aplQuery: Output.map(traces.name, relayRecentSpansQuery),
   });
 
-  return { traces, workerIngestToken, mobileIngestToken, clientIngestToken } as const;
+  return {
+    enabled: true as const,
+    traces,
+    workerIngestToken,
+    mobileIngestToken,
+    clientIngestToken,
+  };
 });
 
 export const withSpanAttributes =

@@ -5,9 +5,12 @@ import * as Planetscale from "alchemy/Planetscale";
 import * as Alchemy from "alchemy";
 import * as RemovalPolicy from "alchemy/RemovalPolicy";
 import type { EffectPgDatabase } from "drizzle-orm/effect-postgres";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 
 import { relayDatabaseMode } from "./dbConfig.ts";
 
@@ -34,6 +37,26 @@ export class RelayTransactions extends Context.Service<
     }),
   );
 }
+
+const externalDatabaseConfiguration = Config.all({
+  host: Config.NonEmptyString("DATABASE_HOST"),
+  port: Config.Port("DATABASE_PORT").pipe(Config.withDefault(5432)),
+  database: Config.NonEmptyString("DATABASE_NAME"),
+  user: Config.NonEmptyString("DATABASE_USER"),
+  password: Config.NonEmptyString("DATABASE_PASSWORD").pipe(Config.map(Redacted.make)),
+});
+
+/**
+ * Self-hosting: a complete `DATABASE_HOST/PORT/NAME/USER/PASSWORD` set selects an
+ * external Postgres reached through Hyperdrive. Anything less (GitHub exposes unset
+ * variables as empty strings) keeps the managed PlanetScale path.
+ */
+export const ExternalDatabaseConfiguration = externalDatabaseConfiguration.pipe(
+  Config.map(Option.some),
+  Config.orElse(() =>
+    Config.succeed(Option.none<Config.Success<typeof externalDatabaseConfiguration>>()),
+  ),
+);
 
 export const PlanetscaleDatabase = Effect.gen(function* () {
   const { stage } = yield* Alchemy.Stack;
@@ -73,13 +96,45 @@ export const PlanetscaleDatabase = Effect.gen(function* () {
   return { branch, database, runtimeRole };
 });
 
-export const RelayHyperdrive = Effect.gen(function* () {
-  const { runtimeRole } = yield* PlanetscaleDatabase;
-  return yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
+/**
+ * The relay database and its Hyperdrive connection. Alchemy runs no Drizzle
+ * migrations against an external database; `scripts/apply-external-migrations.ts`
+ * applies `migrations/postgres` to it before deploy.
+ */
+export const RelayDatabase = Effect.gen(function* () {
+  const external = yield* ExternalDatabaseConfiguration;
+  if (Option.isSome(external)) {
+    const hyperdrive = yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
+      origin: {
+        scheme: "postgres",
+        ...external.value,
+      },
+      mtls: { sslmode: "require" },
+      caching: {
+        disabled: true,
+      },
+      originConnectionLimit: 20,
+    });
+    return {
+      databaseName: external.value.database,
+      databaseBranchName: "external",
+      hyperdrive,
+    } as const;
+  }
+
+  const { database, branch, runtimeRole } = yield* PlanetscaleDatabase;
+  const hyperdrive = yield* Cloudflare.Hyperdrive.Connection("RelayHyperdrive", {
     origin: runtimeRole.origin,
     caching: {
       disabled: true,
     },
     originConnectionLimit: 40,
   });
+  return {
+    databaseName: database.name,
+    databaseBranchName: branch?.name ?? "main",
+    hyperdrive,
+  } as const;
 });
+
+export const RelayHyperdrive = RelayDatabase.pipe(Effect.map(({ hyperdrive }) => hyperdrive));

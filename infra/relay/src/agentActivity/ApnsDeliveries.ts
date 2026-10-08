@@ -1197,3 +1197,30 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ApnsDeliveries, make);
+
+const apnsDisabledResult = (deviceId: string, kind: RelayDeliveryKind): RelayDeliveryResult => ({
+  deviceId,
+  kind,
+  ok: true,
+  apnsStatus: null,
+  apnsReason: "APNs disabled.",
+  apnsId: null,
+});
+
+/**
+ * Self-hosting: used when APNs is not configured. Nothing is enqueued or sent;
+ * every iOS delivery resolves without contacting Apple.
+ */
+export const layerDisabled = Layer.succeed(
+  ApnsDeliveries,
+  ApnsDeliveries.of({
+    sendForTarget: () => Effect.succeed(null),
+    sendPushNotificationForTarget: () => Effect.succeed(null),
+    sendLiveActivity: (input) =>
+      Effect.succeed(apnsDisabledResult(input.target.device_id, input.kind)),
+    sendPushNotification: (input) =>
+      Effect.succeed(apnsDisabledResult(input.target.device_id, "push_notification")),
+    processSignedJob: () =>
+      Effect.succeed(apnsDisabledResult("apns-disabled", "push_notification")),
+  }),
+);

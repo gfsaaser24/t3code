@@ -2,6 +2,7 @@ import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
@@ -54,6 +55,32 @@ export interface ApnsCredentials {
   readonly bundleId: string;
   readonly environment: ApnsEnvironment;
 }
+
+const optionalConfig = <A>(config: Config.Config<A>) =>
+  config.pipe(
+    Config.map(Option.some),
+    Config.orElse(() => Config.succeed(Option.none<A>())),
+  );
+
+/**
+ * Self-hosting: APNs is optional. An incomplete `APNS_*` set (or
+ * `APNS_ENABLED=false`) yields `null`, which provisions no APNs queues and runs
+ * the disabled delivery layer.
+ */
+export const ApnsCredentialsConfig = Config.all({
+  enabled: Config.Boolean("APNS_ENABLED").pipe(Config.withDefault(true)),
+  environment: optionalConfig(Config.schema(ApnsEnvironment, "APNS_ENVIRONMENT")),
+  teamId: optionalConfig(Config.NonEmptyString("APNS_TEAM_ID")),
+  keyId: optionalConfig(Config.NonEmptyString("APNS_KEY_ID")),
+  privateKey: optionalConfig(
+    Config.NonEmptyString("APNS_PRIVATE_KEY").pipe(Config.map(Redacted.make)),
+  ),
+  bundleId: optionalConfig(Config.NonEmptyString("APNS_BUNDLE_ID")),
+}).pipe(
+  Config.map(({ enabled, ...credentials }): ApnsCredentials | null =>
+    enabled ? Option.getOrNull(Option.all(credentials)) : null,
+  ),
+);
 
 export class RelayConfiguration extends Context.Service<
   RelayConfiguration,
