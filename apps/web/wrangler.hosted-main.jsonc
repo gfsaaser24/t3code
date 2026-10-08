@@ -1,0 +1,21 @@
+// Hosted static app for app2.t3turbo.pro, built from a STABLE upstream T3 Code tag
+// (fork equivalent of latest.app.t3.codes). Deployed by .github/workflows/deploy-hosted-web-main.yml.
+// Deploy: npx wrangler deploy --config wrangler.hosted-main.jsonc  (from apps/web, after building)
+//
+// Parity with upstream apps/web/vercel.ts: it sets no custom headers, only an SPA rewrite
+// ("/(.*)" -> "/index.html"), which maps to not_found_handling below. Its channel-router routes
+// only apply to the app.t3.codes router host and are intentionally not replicated.
+{
+  "name": "t3main-hosted-app",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application",
+  },
+  "routes": [
+    {
+      "pattern": "app2.t3turbo.pro",
+      "custom_domain": true,
+    },
+  ],
+}

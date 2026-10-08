@@ -1,0 +1,93 @@
+name: Deploy hosted web (stable, app2.t3turbo.pro)
+
+# Manual only. Builds apps/web from a stable upstream tag so the hosted app matches the
+# stable `t3` server version, bakes in OUR relay + Clerk config, and deploys it as the
+# Cloudflare Worker t3main-hosted-app at https://app2.t3turbo.pro.
+# To upgrade: dispatch with a new `ref` (e.g. v0.0.46).
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "pingdotgg/t3code tag or SHA to build (stable release, match the t3 server version)"
+        required: true
+        default: v0.0.45
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-hosted-web-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_T3CODE_RELAY_URL: https://relay2.t3turbo.pro
+      VITE_HOSTED_APP_URL: https://app2.t3turbo.pro
+      VITE_HOSTED_APP_CHANNEL: latest
+      VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      VITE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      VITE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Checkout infra config (this branch)
+        uses: actions/checkout@v6
+        with:
+          path: _infra
+          sparse-checkout: apps/web/wrangler.hosted-main.jsonc
+
+      - name: Checkout upstream source
+        uses: actions/checkout@v6
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.ref }}
+          path: src
+
+      - name: Check required config
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in VITE_CLERK_PUBLISHABLE_KEY VITE_CLERK_JWT_TEMPLATE VITE_CLERK_CLI_OAUTH_CLIENT_ID CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN; do
+            if [[ -z "${!v:-}" ]]; then echo "Missing $v" >&2; exit 1; fi
+          done
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: src/package.json
+          cache: true
+          working-directory: src
+          run-install: |
+            cwd: src
+            args:
+              - --ignore-scripts
+              - --filter=@t3tools/scripts...
+              - --filter=@t3tools/web...
+
+      - name: Build web
+        working-directory: src
+        run: |
+          vp run --filter @t3tools/web build
+          cd apps/web
+          node ../../scripts/apply-web-brand-assets.ts --channel latest
+
+      - name: Verify relay and Clerk config are baked into dist
+        shell: bash
+        working-directory: src/apps/web/dist
+        run: |
+          set -euo pipefail
+          grep -rlF "relay2.t3turbo.pro" assets || { echo "relay URL missing from build" >&2; exit 1; }
+          grep -rlF "$VITE_CLERK_PUBLISHABLE_KEY" assets || { echo "Clerk publishable key missing from build" >&2; exit 1; }
+          grep -rlF "app2.t3turbo.pro" assets || { echo "hosted app URL missing from build" >&2; exit 1; }
+          test -f index.html
+
+      - name: Deploy Worker
+        working-directory: src/apps/web
+        run: |
+          cp ../../../_infra/apps/web/wrangler.hosted-main.jsonc ./wrangler.hosted-main.jsonc
+          npx --yes wrangler@4 deploy --config wrangler.hosted-main.jsonc
