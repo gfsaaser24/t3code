@@ -1,0 +1,104 @@
+name: Deploy relay2 (upstream main relay, self-hosted)
+
+# Deploys this branch's relay (upstream main + self-hosting changes) as a SECOND
+# relay next to production:
+#   - Alchemy stage `main` (production is stage `prod`), so every Alchemy resource
+#     (Worker, Hyperdrive, Durable Objects, keys, state) is separate.
+#   - https://relay2.t3turbo.pro (production is relay.t3turbo.pro).
+#   - Managed tunnels are named `t3coderelay-managedendpoint-main-*` and served at
+#     `main-*.t3turbo.pro`; production's are `...-prod-*` / `prod-*`.
+#   - Tunnel cleanup is OFF for both reapers, so this relay never deletes a tunnel.
+# Manual only. It never deploys stage `prod`.
+on:
+  workflow_dispatch:
+    inputs:
+      run_external_migrations:
+        description: >-
+          Apply infra/relay/migrations/postgres to the external database first. Leave off:
+          the database already has every migration, and the runner cannot reach it.
+        type: boolean
+        default: false
+      force:
+        description: Redeploy every resource, including ones with no detected changes
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relay2-main
+  cancel-in-progress: false
+
+jobs:
+  deploy_relay2:
+    name: Deploy relay2 (stage main)
+    if: github.ref == 'refs/heads/infra/relay-main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RELAY_STAGE: main
+      RELAY_DOMAIN: relay2.t3turbo.pro
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      RELAY_API_ZONE_NAME: ${{ vars.RELAY_API_ZONE_NAME }}
+      RELAY_TUNNEL_ZONE_NAME: ${{ vars.RELAY_TUNNEL_ZONE_NAME }}
+      # Never delete tunnels from this relay.
+      RELAY_TUNNEL_CLEANUP_MODE: "off"
+      RELAY_LEGACY_TUNNEL_CLEANUP_MODE: "off"
+      DATABASE_HOST: ${{ vars.DATABASE_HOST }}
+      DATABASE_PORT: ${{ vars.DATABASE_PORT }}
+      DATABASE_NAME: ${{ vars.DATABASE_NAME }}
+      DATABASE_USER: ${{ vars.DATABASE_USER }}
+      CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      CLERK_JWT_AUDIENCE: ${{ vars.CLERK_JWT_AUDIENCE }}
+      # No APNs, FCM, Axiom or PlanetScale: those paths stay disabled.
+      APNS_ENABLED: "false"
+      ALCHEMY_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check isolation from production
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$RELAY_STAGE" == "prod" || "$RELAY_DOMAIN" == "${{ vars.RELAY_DOMAIN }}" ]]; then
+            echo "::error::Refusing to deploy: stage or domain matches production."
+            exit 1
+          fi
+          for name in CLOUDFLARE_ACCOUNT_ID RELAY_API_ZONE_NAME RELAY_TUNNEL_ZONE_NAME DATABASE_HOST DATABASE_NAME DATABASE_USER CLERK_PUBLISHABLE_KEY CLERK_JWT_AUDIENCE; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::Repository variable $name is empty."
+              exit 1
+            fi
+          done
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=t3code-relay...
+
+      - name: Apply external Postgres migrations
+        if: inputs.run_external_migrations
+        run: node infra/relay/scripts/apply-external-migrations.ts
+        env:
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
+
+      - name: Deploy relay stage main
+        run: vp run --filter t3code-relay deploy --stage "$RELAY_STAGE" --yes --no-input ${{ inputs.force && '--force' || '' }}
+        env:
+          # The PublishClientConfig action writes the client env here instead
+          # of the repo-root .env; nothing on the runner reads it.
+          T3CODE_RELAY_CLIENT_CONFIG_ENV: ${{ runner.temp }}/relay-client-config.env
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          DATABASE_PASSWORD: ${{ secrets.DATABASE_PASSWORD }}
