@@ -1,4 +1,4 @@
-name: Deploy hosted web (stable, app2.t3turbo.pro)
+name: Deploy hosted web (app2.t3turbo.pro)
 
 # Manual only. Builds apps/web from a stable upstream tag so the hosted app matches the
 # stable `t3` server version, bakes in OUR relay + Clerk config, and deploys it as the
@@ -14,9 +14,15 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: "pingdotgg/t3code tag or SHA to build (stable release, match the t3 server version)"
+        description: "pingdotgg/t3code tag or SHA to build (must match the t3 server version on the T3CodeBox)"
         required: true
         default: v0.0.45
+      channel:
+        description: "Hosted app channel label: latest (stable builds) or nightly (nightly builds)"
+        required: true
+        default: latest
+        type: choice
+        options: [latest, nightly]
 
 permissions:
   contents: read
@@ -33,7 +39,7 @@ jobs:
     env:
       VITE_T3CODE_RELAY_URL: https://relay2.t3turbo.pro
       VITE_HOSTED_APP_URL: https://app2.t3turbo.pro
-      VITE_HOSTED_APP_CHANNEL: latest
+      VITE_HOSTED_APP_CHANNEL: ${{ inputs.channel || 'latest' }}
       VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
       VITE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
       VITE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
@@ -78,7 +84,7 @@ jobs:
         run: |
           vp run --filter @t3tools/web build
           cd apps/web
-          node ../../scripts/apply-web-brand-assets.ts --channel latest
+          node ../../scripts/apply-web-brand-assets.ts --channel "$VITE_HOSTED_APP_CHANNEL"
 
       - name: Verify relay and Clerk config are baked into dist
         shell: bash
