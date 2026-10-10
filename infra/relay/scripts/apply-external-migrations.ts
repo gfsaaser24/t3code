@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - node:path only resolves argv[1] for the run-when-executed-directly check.
 /**
  * Self-hosting: apply `infra/relay/migrations/postgres` to an external Postgres.
  *
