@@ -101,3 +101,84 @@ jobs:
         run: |
           cp ../../../_infra/apps/web/wrangler.hosted-main.jsonc ./wrangler.hosted-main.jsonc
           npx --yes wrangler@4 deploy --config wrangler.hosted-main.jsonc
+
+  # The web client the T3CodeBox server itself serves (/opt/t3/client). Upstream's CLI release
+  # bakes upstream's Clerk + relay into it at build time and the server cannot override that at
+  # runtime, so the box mounts this build over /opt/t3/client instead (Coolify volume).
+  # Same as upstream's release client (apps/web/dist, no source maps, channel brand assets),
+  # but with OUR relay + Clerk, and no hosted-app settings.
+  box-client:
+    name: Build the T3CodeBox web client
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VITE_T3CODE_RELAY_URL: https://relay2.t3turbo.pro
+      VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+      VITE_CLERK_JWT_TEMPLATE: ${{ vars.CLERK_JWT_TEMPLATE }}
+      VITE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ vars.CLERK_CLI_OAUTH_CLIENT_ID }}
+      CHANNEL: ${{ inputs.channel || 'latest' }}
+      REF: ${{ inputs.ref || 'v0.0.45' }}
+    steps:
+      - name: Checkout upstream source
+        uses: actions/checkout@v6
+        with:
+          repository: pingdotgg/t3code
+          ref: ${{ inputs.ref || 'v0.0.45' }}
+          path: src
+
+      - name: Check required config
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in VITE_CLERK_PUBLISHABLE_KEY VITE_CLERK_JWT_TEMPLATE VITE_CLERK_CLI_OAUTH_CLIENT_ID; do
+            if [[ -z "${!v:-}" ]]; then echo "Missing $v" >&2; exit 1; fi
+          done
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: src/package.json
+          cache: true
+          run-install: |
+            cwd: src
+            args:
+              - --ignore-scripts
+              - --filter=@t3tools/scripts...
+              - --filter=@t3tools/web...
+
+      - name: Build web client
+        working-directory: src
+        run: |
+          vp run --filter @t3tools/web build
+          cd apps/web
+          node ../../scripts/apply-web-brand-assets.ts --channel "$CHANNEL"
+          find dist -name '*.map' -delete
+
+      - name: Verify our relay and Clerk are baked in, and no hosted-app settings
+        shell: bash
+        working-directory: src/apps/web/dist
+        run: |
+          set -euo pipefail
+          test -f index.html
+          grep -rlF "relay2.t3turbo.pro" assets >/dev/null || { echo "relay URL missing from build" >&2; exit 1; }
+          grep -rlF "$VITE_CLERK_PUBLISHABLE_KEY" assets >/dev/null || { echo "Clerk publishable key missing from build" >&2; exit 1; }
+          if grep -rlF "app2.t3turbo.pro" assets >/dev/null; then echo "hosted app URL leaked into the box client" >&2; exit 1; fi
+          # base64 of "clerk.t3.codes$", the frontend host inside upstream's publishable key
+          if grep -rlF "Y2xlcmsudDMuY29kZX" assets >/dev/null; then echo "upstream Clerk key found in the box client" >&2; exit 1; fi
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${REF#v}"
+          tar -C src/apps/web/dist -czf "t3-box-client-$V.tar.gz" .
+          sha256sum "t3-box-client-$V.tar.gz" | tee "t3-box-client-$V.tar.gz.sha256"
+          echo "V=$V" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: t3-box-client-${{ env.V }}
+          path: |
+            t3-box-client-${{ env.V }}.tar.gz
+            t3-box-client-${{ env.V }}.tar.gz.sha256
+          retention-days: 90
