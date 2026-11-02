@@ -104,65 +104,58 @@ export interface MigrationSqlClient<E = never> {
  * Creates the ledger, seeds the baseline, then runs each pending folder in its own transaction.
  * Every action logs one line so the deploy log records what the database actually got.
  */
-export const applyMigrations = <E>(input: {
+export const applyMigrations = Effect.fn("applyMigrations")(function* <E>(input: {
   readonly sql: MigrationSqlClient<E>;
   readonly migrationsDir: string;
   readonly baselineTag?: string | undefined;
-}) =>
-  Effect.gen(function* () {
-    const { migrationsDir, sql } = input;
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
+}) {
+  const { migrationsDir, sql } = input;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
 
-    yield* sql.unsafe(
-      `CREATE TABLE IF NOT EXISTS "${MIGRATIONS_LEDGER_TABLE}" ("tag" text PRIMARY KEY, "applied_at" timestamptz NOT NULL DEFAULT now())`,
+  yield* sql.unsafe(
+    `CREATE TABLE IF NOT EXISTS "${MIGRATIONS_LEDGER_TABLE}" ("tag" text PRIMARY KEY, "applied_at" timestamptz NOT NULL DEFAULT now())`,
+  );
+  const ledger = yield* sql.unsafe(`SELECT "tag" FROM "${MIGRATIONS_LEDGER_TABLE}"`);
+  const applied = ledger.map((row) => String(row.tag));
+
+  const entries = yield* fileSystem.readDirectory(migrationsDir);
+  const tags: Array<string> = [];
+  for (const entry of entries.sort()) {
+    const hasMigration = yield* fileSystem.exists(path.join(migrationsDir, entry, "migration.sql"));
+    if (hasMigration) tags.push(entry);
+  }
+  const plan = planMigrations({ tags, applied, baselineTag: input.baselineTag });
+
+  for (const tag of plan.seed) {
+    yield* sql.unsafe(`INSERT INTO "${MIGRATIONS_LEDGER_TABLE}" ("tag") VALUES ($1)`, [tag]);
+    yield* Effect.log(`seeded ${tag} as already applied (baseline)`);
+  }
+  for (const tag of plan.run) {
+    const source = yield* fileSystem.readFileString(path.join(migrationsDir, tag, "migration.sql"));
+    const statements = splitMigrationStatements(source);
+    yield* sql
+      .withTransaction(
+        Effect.gen(function* () {
+          for (const statement of statements) {
+            yield* sql.unsafe(statement);
+          }
+          yield* sql.unsafe(`INSERT INTO "${MIGRATIONS_LEDGER_TABLE}" ("tag") VALUES ($1)`, [tag]);
+        }),
+      )
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.fail(new MigrationRolledBackError({ tag, reason: Cause.pretty(cause) })),
+        ),
+      );
+    yield* Effect.log(
+      `applied ${tag} (${statements.length} statement${statements.length === 1 ? "" : "s"})`,
     );
-    const ledger = yield* sql.unsafe(`SELECT "tag" FROM "${MIGRATIONS_LEDGER_TABLE}"`);
-    const applied = ledger.map((row) => String(row.tag));
-
-    const entries = yield* fileSystem.readDirectory(migrationsDir);
-    const tags: Array<string> = [];
-    for (const entry of entries.sort()) {
-      const hasMigration = yield* fileSystem.exists(
-        path.join(migrationsDir, entry, "migration.sql"),
-      );
-      if (hasMigration) tags.push(entry);
-    }
-    const plan = planMigrations({ tags, applied, baselineTag: input.baselineTag });
-
-    for (const tag of plan.seed) {
-      yield* sql.unsafe(`INSERT INTO "${MIGRATIONS_LEDGER_TABLE}" ("tag") VALUES ($1)`, [tag]);
-      yield* Effect.log(`seeded ${tag} as already applied (baseline)`);
-    }
-    for (const tag of plan.run) {
-      const source = yield* fileSystem.readFileString(
-        path.join(migrationsDir, tag, "migration.sql"),
-      );
-      const statements = splitMigrationStatements(source);
-      yield* sql
-        .withTransaction(
-          Effect.gen(function* () {
-            for (const statement of statements) {
-              yield* sql.unsafe(statement);
-            }
-            yield* sql.unsafe(`INSERT INTO "${MIGRATIONS_LEDGER_TABLE}" ("tag") VALUES ($1)`, [
-              tag,
-            ]);
-          }),
-        )
-        .pipe(
-          Effect.catchCause((cause) =>
-            Effect.fail(new MigrationRolledBackError({ tag, reason: Cause.pretty(cause) })),
-          ),
-        );
-      yield* Effect.log(
-        `applied ${tag} (${statements.length} statement${statements.length === 1 ? "" : "s"})`,
-      );
-    }
-    if (plan.seed.length === 0 && plan.run.length === 0) {
-      yield* Effect.log("no pending migrations");
-    }
-  });
+  }
+  if (plan.seed.length === 0 && plan.run.length === 0) {
+    yield* Effect.log("no pending migrations");
+  }
+});
 
 const optionalString = (name: string) =>
   Config.String(name).pipe(
